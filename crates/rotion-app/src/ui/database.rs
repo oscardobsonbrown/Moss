@@ -29,6 +29,9 @@ pub fn view(s: &State, t: Theme) -> El {
                     Color::TRANSPARENT
                 })
                 .on_press_tx(move |s: &mut State, tx| {
+                    if !s.finish_cell(false) || !s.close_peek() {
+                        return;
+                    }
                     if let Some(tab) = s.tabs.get_mut(s.active) {
                         tab.view = i;
                         tab.offset = 0;
@@ -78,12 +81,12 @@ pub fn view(s: &State, t: Theme) -> El {
         );
     let kind = db.views.get(tab.view).map(|v| v.kind);
     let body = match kind {
-        Some(ViewKind::Table) => table(tab, db, t),
-        Some(ViewKind::Board) => board(tab, db, t),
+        Some(ViewKind::Table) => table(s, tab, db, t),
+        Some(ViewKind::Board) => board(s, tab, db, t),
         Some(ViewKind::Calendar) => calendar(tab, db, t),
-        Some(ViewKind::Timeline) => timeline(tab, db, t),
-        Some(ViewKind::Gallery) => gallery(tab, db, t),
-        Some(ViewKind::List) => list(tab, db, t),
+        Some(ViewKind::Timeline) => timeline(s, tab, db, t),
+        Some(ViewKind::Gallery) => gallery(s, tab, db, t),
+        Some(ViewKind::List) => list(s, tab, db, t),
         Some(other) => col().padding(20.).child(t.label(
             format!("{} view is not available yet.", other.label()),
             14.,
@@ -181,10 +184,68 @@ fn cell_text(record: &Record, prop: &Property) -> String {
         .map(display_value)
         .unwrap_or_default()
 }
-fn cell(index: usize, property: Option<String>, text: String, width: f32, t: Theme) -> El {
-    let key = format!("cell-{index}-{}", property.as_deref().unwrap_or("title"));
+fn active(s: &State, record: &Record, property: Option<&str>) -> bool {
+    s.editing_cell.as_ref().is_some_and(|target| {
+        target.record_id == record.id && target.property_id.as_deref() == property
+    })
+}
+
+fn editor(s: &State, width: f32, t: Theme) -> El {
+    text_input(
+        &s.cell,
+        TextStyle::new(13. * t.text_scale, 400.).family(t.family),
+    )
+    .key("database-cell-editor")
+    .placeholder("Untitled", t.faint)
+    .single_line()
+    .w(width)
+    .h(34.)
+    .border(1., t.blue)
+    .px(8.)
+    .color(t.text)
+    .on_edit(|s: &mut State| &mut s.cell)
+    .on_input_change(|s: &mut State, tx| {
+        s.save_cell();
+        tx.instant();
+    })
+    .on_submit(|s: &mut State, tx| {
+        s.finish_cell(true);
+        tx.instant();
+    })
+    .on_input_key(|s: &mut State, event, tx| {
+        if event.key == Key::Escape {
+            s.finish_cell(false);
+            tx.instant();
+            return true;
+        }
+        false
+    })
+}
+
+fn cell(
+    s: &State,
+    index: usize,
+    record: &Record,
+    property: Option<String>,
+    text: String,
+    width: f32,
+    t: Theme,
+) -> El {
+    if active(s, record, property.as_deref()) {
+        return editor(s, width, t);
+    }
+    let title = property.is_none();
+    let text = if title && text.is_empty() {
+        "Untitled".into()
+    } else {
+        text
+    };
     row()
-        .key(key)
+        .hover_group()
+        .key(format!(
+            "cell-{index}-{}",
+            property.as_deref().unwrap_or("title")
+        ))
         .role("button")
         .label(&text)
         .focusable(true)
@@ -194,12 +255,21 @@ fn cell(index: usize, property: Option<String>, text: String, width: f32, t: The
         .center_y()
         .border(0.5, t.line)
         .hover(t.hover)
-        .child(t.label(text, 13., t.text))
-        .on_press_tx(move |s: &mut State, _| {
+        .child(t.label(text, 13., t.text).grow(1.).truncate())
+        .children(title.then(|| {
+            button(format!("table-open-{index}"), "Open", t)
+                .group_opacity(0., 1.)
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.open_record(index);
+                    tx.instant();
+                })
+        }))
+        .on_press_tx(move |s: &mut State, tx| {
             s.edit_record(index, property.clone());
+            tx.instant();
         })
 }
-fn table(tab: &Tab, db: &Database, t: Theme) -> El {
+fn table(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let mut head = row().child(
         row()
             .w(220.)
@@ -222,10 +292,12 @@ fn table(tab: &Tab, db: &Database, t: Theme) -> El {
     }
     let mut content = col().child(head);
     for (i, record) in tab.records.iter().enumerate() {
-        let mut line = row().child(cell(i, None, record.title.clone(), 220., t));
+        let mut line = row().child(cell(s, i, record, None, record.title.clone(), 220., t));
         for prop in properties(db) {
             line = line.child(cell(
+                s,
                 i,
+                record,
                 Some(prop.id.clone()),
                 cell_text(record, prop),
                 160.,
@@ -235,13 +307,31 @@ fn table(tab: &Tab, db: &Database, t: Theme) -> El {
         content = content.child(line);
     }
     content.child(
-        button("table-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
-            s.add_record();
+        button("table-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+            s.create_inline(BTreeMap::new(), false);
+            tx.instant();
         }),
     )
 }
-fn card(index: usize, record: &Record, db: &Database, t: Theme) -> El {
-    let mut content = col().gap(5.).child(t.label(&record.title, 14., t.text));
+fn card(s: &State, index: usize, record: &Record, db: &Database, t: Theme) -> El {
+    if active(s, record, None) {
+        return col()
+            .w(210.)
+            .padding(12.)
+            .radius(6.)
+            .border(1., t.line)
+            .fill(t.bg)
+            .child(editor(s, 185., t));
+    }
+    let mut content = col().gap(5.).child(t.label(
+        if record.title.is_empty() {
+            "Untitled"
+        } else {
+            &record.title
+        },
+        14.,
+        t.text,
+    ));
     for prop in properties(db) {
         let value = cell_text(record, prop);
         if !value.is_empty() {
@@ -260,13 +350,18 @@ fn card(index: usize, record: &Record, db: &Database, t: Theme) -> El {
         .fill(t.bg)
         .hover(t.hover)
         .child(content)
-        .on_press_tx(move |s: &mut State, _| {
-            s.edit_record(index, None);
+        .on_press_tx(move |s: &mut State, tx| {
+            s.open_record(index);
+            tx.instant();
         })
 }
-fn list(tab: &Tab, db: &Database, t: Theme) -> El {
+fn list(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let mut content = col().w_full();
     for (i, record) in tab.records.iter().enumerate() {
+        if active(s, record, None) {
+            content = content.child(editor(s, 300., t));
+            continue;
+        }
         let mut line = row()
             .w_full()
             .h(38.)
@@ -274,7 +369,15 @@ fn list(tab: &Tab, db: &Database, t: Theme) -> El {
             .px(10.)
             .center_y()
             .border(0.5, t.line)
-            .child(t.label(&record.title, 14., t.text));
+            .child(t.label(
+                if record.title.is_empty() {
+                    "Untitled"
+                } else {
+                    &record.title
+                },
+                14.,
+                t.text,
+            ));
         for prop in properties(db) {
             let v = cell_text(record, prop);
             if !v.is_empty() {
@@ -287,34 +390,36 @@ fn list(tab: &Tab, db: &Database, t: Theme) -> El {
                 .label(&record.title)
                 .focusable(true)
                 .hover(t.hover)
-                .on_press_tx(move |s: &mut State, _| {
-                    s.edit_record(i, None);
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.open_record(i);
+                    tx.instant();
                 }),
         );
     }
     content.child(
-        button("list-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
-            s.add_record();
+        button("list-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+            s.create_inline(BTreeMap::new(), false);
+            tx.instant();
         }),
     )
 }
-fn gallery(tab: &Tab, db: &Database, t: Theme) -> El {
+fn gallery(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let mut content = col().gap(12.);
-    for chunk in tab.records.chunks(3).enumerate() {
-        let (group, records) = chunk;
+    for (group, records) in tab.records.chunks(3).enumerate() {
         let mut line = row().gap(12.);
         for (j, record) in records.iter().enumerate() {
-            line = line.child(card(group * 3 + j, record, db, t));
+            line = line.child(card(s, group * 3 + j, record, db, t));
         }
         content = content.child(line);
     }
     content.child(
-        button("gallery-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
-            s.add_record();
+        button("gallery-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+            s.create_peek(BTreeMap::new());
+            tx.instant();
         }),
     )
 }
-fn board(tab: &Tab, db: &Database, t: Theme) -> El {
+fn board(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let Some(status) = db
         .properties
         .iter()
@@ -370,8 +475,27 @@ fn board(tab: &Tab, db: &Database, t: Theme) -> El {
             .radius(6.)
             .child(t.label(format!("{}  {}", name, matches.len()), 13., t.muted));
         for (i, record) in matches {
-            column = column.child(card(i, record, db, t));
+            column = column.child(card(s, i, record, db, t));
         }
+        let id = status.id.clone();
+        let value = group.clone();
+        column = column.child(
+            button(format!("board-new-{group}"), "+ New page", t).on_press_tx(
+                move |s: &mut State, tx| {
+                    let mut values = BTreeMap::new();
+                    values.insert(
+                        id.clone(),
+                        if value.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::Value::String(value.clone())
+                        },
+                    );
+                    s.create_inline(values, true);
+                    tx.instant();
+                },
+            ),
+        );
         columns = columns.child(column);
     }
     columns
@@ -394,85 +518,100 @@ fn calendar(tab: &Tab, db: &Database, t: Theme) -> El {
             t.muted,
         ));
     };
-    let mut months: BTreeMap<(i32, u32), Vec<(usize, NaiveDate)>> = BTreeMap::new();
-    let mut undated = Vec::new();
-    for (i, record) in tab.records.iter().enumerate() {
-        if let Some(date) = record_date(record, prop) {
-            months
-                .entry((date.year(), date.month()))
-                .or_default()
-                .push((i, date));
-        } else {
-            undated.push(i);
-        }
-    }
-    let mut content = col().gap(14.);
-    for ((year, month), entries) in months {
-        let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
-            continue;
-        };
-        let Some(next) = first.checked_add_months(chrono::Months::new(1)) else {
-            continue;
-        };
-        let count = next.signed_duration_since(first).num_days() as u32;
-        let start = first.weekday().num_days_from_sunday();
-        content = content.child(t.label(first.format("%B %Y").to_string(), 16., t.text));
-        let mut weekdays = row();
-        for name in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] {
-            weekdays = weekdays.child(
-                row()
-                    .w(130.)
-                    .h(25.)
-                    .px(6.)
-                    .child(t.label(name, 12., t.muted)),
-            );
-        }
-        content = content.child(weekdays);
-        let weeks = (start + count).div_ceil(7);
-        for week in 0..weeks {
-            let mut line = row();
-            for day in 0..7 {
-                let slot = week * 7 + day;
-                let mut box_ = col()
-                    .w(130.)
-                    .min_h(75.)
-                    .padding(6.)
-                    .border(0.5, t.line)
-                    .gap(3.);
-                if slot >= start && slot - start < count {
-                    let number = slot - start + 1;
-                    box_ = box_.child(t.label(number.to_string(), 12., t.muted));
-                    for (i, date) in &entries {
-                        if date.day() == number {
-                            let i = *i;
-                            let r = &tab.records[i];
-                            box_ = box_.child(
-                                button(format!("calendar-{i}"), &r.title, t).on_press_tx(
-                                    move |s: &mut State, _| {
-                                        s.edit_record(i, None);
-                                    },
-                                ),
-                            );
+    let Some(first) = tab.calendar_month.with_day(1) else {
+        return col();
+    };
+    let Some(next) = first.checked_add_months(chrono::Months::new(1)) else {
+        return col();
+    };
+    let count = next.signed_duration_since(first).num_days() as u32;
+    let start = first.weekday().num_days_from_sunday();
+    let mut content = col().gap(4.).child(
+        row()
+            .gap(8.)
+            .center_y()
+            .child(
+                button("calendar-prev", "‹", t).on_press_tx(|s: &mut State, tx| {
+                    if let Some(tab) = s.tabs.get_mut(s.active) {
+                        if let Some(date) = tab
+                            .calendar_month
+                            .checked_sub_months(chrono::Months::new(1))
+                        {
+                            tab.calendar_month = date;
                         }
                     }
+                    tx.instant();
+                }),
+            )
+            .child(t.label(first.format("%B %Y").to_string(), 16., t.text))
+            .child(
+                button("calendar-next", "›", t).on_press_tx(|s: &mut State, tx| {
+                    if let Some(tab) = s.tabs.get_mut(s.active) {
+                        if let Some(date) = tab
+                            .calendar_month
+                            .checked_add_months(chrono::Months::new(1))
+                        {
+                            tab.calendar_month = date;
+                        }
+                    }
+                    tx.instant();
+                }),
+            ),
+    );
+    let mut weekdays = row();
+    for name in ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] {
+        weekdays = weekdays.child(
+            row()
+                .w(130.)
+                .h(25.)
+                .px(6.)
+                .child(t.label(name, 12., t.muted)),
+        );
+    }
+    content = content.child(weekdays);
+    for week in 0..(start + count).div_ceil(7) {
+        let mut line = row();
+        for day in 0..7 {
+            let slot = week * 7 + day;
+            let mut box_ = col()
+                .w(130.)
+                .min_h(75.)
+                .padding(6.)
+                .border(0.5, t.line)
+                .gap(3.);
+            if slot >= start && slot - start < count {
+                let number = slot - start + 1;
+                let date = first.with_day(number).unwrap();
+                let id = prop.id.clone();
+                box_ = box_
+                    .key(format!("calendar-day-{date}"))
+                    .on_double_press_tx(move |s: &mut State, tx| {
+                        let mut values = BTreeMap::new();
+                        values.insert(id.clone(), serde_json::Value::String(date.to_string()));
+                        s.create_peek(values);
+                        tx.instant();
+                    })
+                    .child(t.label(number.to_string(), 12., t.muted));
+                for (i, record) in tab.records.iter().enumerate() {
+                    if record_date(record, prop) == Some(date) {
+                        box_ = box_.child(
+                            button(format!("calendar-{i}"), &record.title, t).on_press_tx(
+                                move |s: &mut State, tx| {
+                                    s.open_record(i);
+                                    tx.instant();
+                                },
+                            ),
+                        );
+                    }
                 }
-                line = line.child(box_);
             }
-            content = content.child(line);
+            line = line.child(box_);
         }
-    }
-    if !undated.is_empty() {
-        content = content.child(t.label("No date", 13., t.muted));
-        for i in undated {
-            content = content.child(card(i, &tab.records[i], db, t));
-        }
-    }
-    if tab.records.is_empty() {
-        content = content.child(t.label("No records on this page.", 14., t.muted));
+        content = content.child(line);
     }
     content
 }
-fn timeline(tab: &Tab, db: &Database, t: Theme) -> El {
+fn timeline(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let Some(prop) = date_property(db) else {
         return col().padding(16.).child(t.label(
             "Add a date property to use Timeline.",
@@ -480,82 +619,163 @@ fn timeline(tab: &Tab, db: &Database, t: Theme) -> El {
             t.muted,
         ));
     };
-    let mut records: Vec<_> = tab
-        .records
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let start = record_date(r, prop);
-            let end = r
-                .values
-                .get(&prop.id)
-                .and_then(|v| v.get("end"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.get(..10))
-                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-            (
-                i,
-                start,
-                end.filter(|end| start.is_some_and(|start| *end >= start))
-                    .or(start),
-            )
-        })
-        .collect();
-    records.sort_by_key(|(_, start, _)| (start.is_none(), *start));
-    let first = records.iter().filter_map(|(_, start, _)| *start).min();
-    let last = records.iter().filter_map(|(_, _, end)| *end).max();
-    let scale = first
-        .zip(last)
-        .map(|(first, last)| {
-            (900. / (last.signed_duration_since(first).num_days() + 1) as f32).min(28.)
-        })
-        .unwrap_or(28.);
-    let mut content =
-        col()
-            .gap(4.)
-            .child(t.label(format!("Timeline by {}", prop.name), 14., t.muted));
-    if let (Some(first), Some(last)) = (first, last) {
-        content = content.child(t.label(format!("{} — {}", first, last), 12., t.muted));
-    }
-    for (i, start, end) in records {
-        let record = &tab.records[i];
-        let mut line = row().gap(8.).center_y().h(38.).border(0.5, t.line).child(
-            row()
-                .w(150.)
-                .px(8.)
-                .child(t.label(&record.title, 13., t.text)),
-        );
-        if let (Some(first), Some(start), Some(end)) = (first, start, end) {
-            let offset = start.signed_duration_since(first).num_days() as f32 * scale;
-            let width = ((end.signed_duration_since(start).num_days() + 1) as f32 * scale).max(8.);
-            line = line
-                .child(el().w(offset))
-                .child(row().w(width).h(18.).radius(4.).fill(t.blue));
-            line = line.child(t.label(
-                if start == end {
-                    start.to_string()
-                } else {
-                    format!("{} – {}", start, end)
-                },
-                12.,
+    let first = tab.timeline_start;
+    let scale = 28.;
+    let days = 30;
+    let mut header = row().child(row().w(180.).child(t.label("Name", 13., t.muted)));
+    for day in 0..days {
+        if let Some(date) = first.checked_add_signed(chrono::Duration::days(day)) {
+            header = header.child(row().w(scale).child(t.label(
+                date.day().to_string(),
+                11.,
                 t.muted,
-            ));
+            )));
+        }
+    }
+    let controls = row()
+        .gap(8.)
+        .center_y()
+        .child(
+            button("timeline-prev", "‹", t).on_press_tx(|s: &mut State, tx| {
+                if let Some(tab) = s.tabs.get_mut(s.active) {
+                    if let Some(date) = tab
+                        .timeline_start
+                        .checked_sub_signed(chrono::Duration::days(30))
+                    {
+                        tab.timeline_start = date;
+                    }
+                }
+                tx.instant();
+            }),
+        )
+        .child(t.label(first.format("%d %b %Y").to_string(), 13., t.muted))
+        .child(
+            button("timeline-next", "›", t).on_press_tx(|s: &mut State, tx| {
+                if let Some(tab) = s.tabs.get_mut(s.active) {
+                    if let Some(date) = tab
+                        .timeline_start
+                        .checked_add_signed(chrono::Duration::days(30))
+                    {
+                        tab.timeline_start = date;
+                    }
+                }
+                tx.instant();
+            }),
+        );
+    let mut content = col().gap(4.).child(controls).child(header);
+    for (i, record) in tab.records.iter().enumerate() {
+        let start = record_date(record, prop);
+        let end = record
+            .values
+            .get(&prop.id)
+            .and_then(|v| v.get("end"))
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.get(..10))
+            .and_then(|v| NaiveDate::parse_from_str(v, "%Y-%m-%d").ok())
+            .or(start);
+        let dated_inline = start.is_some() && active(s, record, None);
+        let title = if active(s, record, None) && !dated_inline {
+            editor(s, 180., t)
+        } else {
+            button(format!("timeline-open-{i}"), &record.title, t)
+                .w(180.)
+                .on_press_tx(move |s: &mut State, tx| {
+                    s.open_record(i);
+                    tx.instant();
+                })
+        };
+        let mut line = row().h(38.).center_y().border(0.5, t.line).child(title);
+        if let (Some(start), Some(end)) = (start, end) {
+            let left = start
+                .signed_duration_since(first)
+                .num_days()
+                .max(0)
+                .min(days) as f32;
+            let right = (end.signed_duration_since(first).num_days() + 1)
+                .max(0)
+                .min(days) as f32;
+            if right > left {
+                let bar = row()
+                    .w((right - left) * scale)
+                    .h(30.)
+                    .radius(4.)
+                    .fill(t.blue.alpha(0.2))
+                    .center_y();
+                let bar = if dated_inline {
+                    bar.child(editor(s, 180., t).fill(t.bg))
+                } else {
+                    bar.px(5.)
+                        .role("button")
+                        .label(&record.title)
+                        .focusable(true)
+                        .child(
+                            t.label(
+                                if record.title.is_empty() {
+                                    "Untitled"
+                                } else {
+                                    &record.title
+                                },
+                                13.,
+                                t.text,
+                            )
+                            .truncate(),
+                        )
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.open_record(i);
+                            tx.instant();
+                        })
+                };
+                line = line.child(el().w(left * scale)).child(bar);
+            }
         } else {
             line = line.child(t.label("No date", 12., t.muted));
         }
-        content = content.child(
-            line.key(format!("timeline-{i}"))
-                .role("button")
-                .label(&record.title)
-                .focusable(true)
-                .hover(t.hover)
-                .on_press_tx(move |s: &mut State, _| {
-                    s.edit_record(i, None);
-                }),
-        );
+        content = content.child(line);
     }
-    if tab.records.is_empty() {
-        content = content.child(t.label("No records on this page.", 14., t.muted));
+    let id = prop.id.clone();
+    let mut track = row()
+        .key("timeline-create-track")
+        .w(days as f32 * scale)
+        .h(38.)
+        .border(0.5, t.line);
+    if let Some((start, end)) = s.timeline_drag {
+        let offset = start.signed_duration_since(first).num_days() as f32 * scale;
+        let width = (end.signed_duration_since(start).num_days() + 1) as f32 * scale;
+        track = track
+            .child(el().w(offset))
+            .child(el().w(width).h(24.).fill(t.blue.alpha(0.5)).radius(4.));
     }
-    content
+    let track = track.on_drag(move |s: &mut State, drag, tx| {
+        if drag.cancelled() {
+            s.timeline_drag = None;
+            tx.instant();
+            return;
+        }
+        let a = (drag.start_x / scale).floor().clamp(0., days as f32 - 1.) as i64;
+        let b = (drag.x / scale).floor().clamp(0., days as f32 - 1.) as i64;
+        if let (Some(start), Some(end)) = (
+            first.checked_add_signed(chrono::Duration::days(a.min(b))),
+            first.checked_add_signed(chrono::Duration::days(a.max(b))),
+        ) {
+            if drag.phase == Phase::Up {
+                s.timeline_drag = None;
+                let mut values = BTreeMap::new();
+                values.insert(
+                    id.clone(),
+                    serde_json::json!({"start":start.to_string(), "end":end.to_string()}),
+                );
+                s.create_inline(values, false);
+            } else {
+                s.timeline_drag = Some((start, end));
+            }
+            tx.instant();
+        }
+    });
+    content = content.child(row().child(el().w(180.)).child(track));
+    content.child(
+        button("timeline-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+            s.create_inline(BTreeMap::new(), false);
+            tx.instant();
+        }),
+    )
 }

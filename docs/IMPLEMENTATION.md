@@ -9,7 +9,7 @@ Date: 2026-11-07. This is a working development build. It is not the complete v1
 - Bundled Geist Sans UI, Geist Mono code, and per-page Default/Serif/Mono, Small text, and Full width in the Appearance & layout submenu. These settings survive reopen and archive restore.
 - Page titles, rich inline text, text/heading/list/to-do/quote/callout/code/divider blocks, block conversion, duplicate and delete.
 - Page creation, nested-page ownership, Trash and restore. Expired Trash is removed when the store opens.
-- Database creation, record creation, title and simple-property editing, title search, and 100-record pages.
+- Database creation with view-specific inline and page-peek paths, live titles and page bodies, linked record pages, simple-property editing, title search, and 100-record pages. See [Database creation](DATABASE-CREATION.md).
 - Table, board, calendar, timeline, gallery and list layouts use saved records. These are initial layouts; full controls and behavior remain to be implemented.
 - Existing local workspaces have separate windows. Closing a window keeps the process alive; Quit exits. The last workspace and its tabs are restored at launch.
 - Formula evaluation, rollups, in-memory query helpers and date-dependency calculations have tests. Formula properties and relation/rollup editors are not connected to the app yet.
@@ -20,7 +20,7 @@ Date: 2026-11-07. This is a working development build. It is not the complete v1
 
 The workspace test suite covers create/edit/format/search/reopen through the Rune runtime, exact rich-text serialization, selection splitting, tab close behavior, empty and structured cells, persistence, filtered paging, workspace boundaries, Trash, archive round trips, invalid archives, formulas, rollups and date dependencies.
 
-The storage probe has run with 100,000 pages and 1,000,000 records. Read [the measurements and failures](PERFORMANCE-RESULTS.md). It labels warm-cache storage results separately from UI and uncached disk requirements. The 28 tests pass. The earlier theme capture did not refresh. Native captures now show live font changes in the Appearance & layout menu; dark and light renderer snapshots also cover the layout. A local app bundle has been opened and used to create a database and record through the native UI.
+The storage probe has run with 100,000 pages and 1,000,000 records. Read [the measurements and failures](PERFORMANCE-RESULTS.md). It labels warm-cache storage results separately from UI and uncached disk requirements. The 38 tests pass. The earlier theme capture did not refresh. Native captures now show live font changes in the Appearance & layout menu; dark and light renderer snapshots also cover the layout. A local app bundle has been opened and used to create a database and record through the native UI. Native checks also confirm Table inline creation and Gallery centre-peek creation with editable saved page content.
 
 ## Required work before v1
 

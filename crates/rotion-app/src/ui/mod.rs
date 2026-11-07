@@ -3,6 +3,7 @@ mod editor;
 mod icons;
 mod overlays;
 mod page_settings;
+mod record_peek;
 mod shell;
 mod theme;
 use crate::state::State;
@@ -31,7 +32,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .grow(1.)
                 .min_h(0.)
                 .child(shell::sidebar(s, t))
-                .child(shell::content(s, t)),
+                .child(shell::content(s, t))
+                .children(record_peek::side(s, t)),
         )
+        .children(record_peek::center(s, t))
         .children(overlays::overlay(s, t))
 }

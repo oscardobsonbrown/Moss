@@ -106,6 +106,10 @@ The observed Notion 7.34.0 chooser lists these views:
 
 A view label is not a complete feature specification. The state library must cover controls, setup, empty content, populated content, edits, keyboard input, dismissal, errors, and failures where applicable.
 
+## Database creation requirements
+
+Follow the per-view creation paths in [Database creation](DATABASE-CREATION.md). Table footer creation must focus the new title cell in place. Do not open a generic Edit record dialog. Keep the toolbar New action separate from inline footer and group creation. New database pages support a title, properties, and page content with automatic saving.
+
 ## Design and motion requirements
 
 - Use exact reference pixels and behavior for retained features.

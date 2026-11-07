@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use rotion_core::*;
 use rune::TextEdit;
 use serde::{Deserialize, Serialize};
@@ -16,8 +17,29 @@ pub struct Tab {
     pub records: Vec<Record>,
     pub view: usize,
     pub offset: u64,
+    pub calendar_month: chrono::NaiveDate,
+    pub timeline_start: chrono::NaiveDate,
     dirty_title: bool,
     dirty_blocks: bool,
+}
+pub struct CellTarget {
+    pub record_id: String,
+    pub property_id: Option<String>,
+    pub repeat_values: Option<BTreeMap<String, Value>>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PeekMode {
+    Side,
+    Center,
+}
+pub struct RecordPeek {
+    pub record: Record,
+    pub page: Page,
+    pub title: TextEdit,
+    pub blocks: Vec<EditableBlock>,
+    pub mode: PeekMode,
+    pub dirty_title: bool,
+    pub dirty_blocks: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Modal {
@@ -29,7 +51,6 @@ pub enum Modal {
     Workspace,
     Block(usize),
     Views,
-    Record(usize),
     NewPage,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -59,7 +80,9 @@ pub struct State {
     pub error: Option<String>,
     loading: bool,
     pub cell: TextEdit,
-    pub editing_property: Option<String>,
+    pub editing_cell: Option<CellTarget>,
+    pub record_peek: Option<RecordPeek>,
+    pub timeline_drag: Option<(chrono::NaiveDate, chrono::NaiveDate)>,
     pub handles: std::sync::Arc<std::sync::Mutex<BTreeMap<String, rune::AppHandle<State>>>>,
 }
 impl State {
@@ -132,11 +155,16 @@ impl State {
             error: None,
             loading: true,
             cell: TextEdit::new(""),
-            editing_property: None,
+            editing_cell: None,
+            record_peek: None,
+            timeline_drag: None,
             handles: Default::default(),
         };
         for id in restore {
-            if s.pages.iter().any(|p| p.id == id) {
+            if s.store
+                .get_page(&id)?
+                .is_some_and(|p| p.workspace_id == s.workspace.id && p.deleted_at.is_none())
+            {
                 s.open_page(&id, true);
             }
         }
@@ -253,6 +281,8 @@ impl State {
                 records,
                 view: 0,
                 offset: 0,
+                calendar_month: chrono::Local::now().date_naive().with_day(1).unwrap(),
+                timeline_start: chrono::Local::now().date_naive(),
                 dirty_title: false,
                 dirty_blocks: false,
             })
@@ -285,6 +315,9 @@ impl State {
         self.save_preferences();
     }
     pub fn flush_current(&mut self) -> bool {
+        if !self.finish_cell(false) || !self.close_peek() {
+            return false;
+        }
         let Some(tab) = self.tab() else {
             return true;
         };
@@ -310,12 +343,36 @@ impl State {
         tab.dirty_title = true;
         tab.page.title = tab.title.text.clone();
         tab.page.updated_at = now();
-        match self.store.update_page(&tab.page) {
-            Ok(()) => tab.dirty_title = false,
-            Err(e) => self.error = Some(format!("Title is not saved: {e}")),
-        }
+        let result = if tab.page.kind == PageKind::Record {
+            match self.store.get_record_by_page(&tab.page.id) {
+                Ok(Some(record)) => self
+                    .store
+                    .rename_record(&record.id, &tab.title.text)
+                    .map(Some),
+                Ok(None) => {
+                    self.error = Some("The linked record is missing.".into());
+                    return;
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            self.store.update_page(&tab.page).map(|_| None)
+        };
+        let saved = match result {
+            Ok(record) => {
+                tab.dirty_title = false;
+                record
+            }
+            Err(e) => {
+                self.error = Some(format!("Title is not saved: {e}"));
+                None
+            }
+        };
         if let Some(page) = self.pages.iter_mut().find(|p| p.id == tab.page.id) {
             *page = tab.page.clone();
+        }
+        if let Some(record) = saved {
+            self.sync_record(&record);
         }
     }
     pub fn save_blocks(&mut self) {
@@ -505,152 +562,6 @@ impl State {
         }
         self.refresh_pages();
         self.open_trash();
-    }
-    pub fn query_records(&mut self) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        let Some(db) = &tab.database else { return };
-        let mut q = db
-            .views
-            .get(tab.view)
-            .map(|v| v.query.clone())
-            .unwrap_or_default();
-        q.offset = tab.offset;
-        q.limit = 100;
-        if !self.filter.text.is_empty() {
-            q.filter = Some(FilterExpr::Rule(FilterRule {
-                property_id: db
-                    .properties
-                    .iter()
-                    .find(|p| p.kind == PropertyKind::Title)
-                    .map(|p| p.id.clone())
-                    .unwrap_or_default(),
-                op: FilterOp::Contains,
-                value: json!(self.filter.text),
-            }));
-        }
-        match self.store.query_records(&db.id, &q) {
-            Ok(r) => tab.records = r,
-            Err(e) => self.error = Some(e.to_string()),
-        }
-    }
-    pub fn add_record(&mut self) {
-        let Some(tab) = self.tabs.get_mut(self.active) else {
-            return;
-        };
-        let Some(db) = &tab.database else { return };
-        let t = now();
-        let r = Record {
-            id: new_id(),
-            database_id: db.id.clone(),
-            page_id: None,
-            title: "Untitled".into(),
-            values: BTreeMap::new(),
-            created_at: t.clone(),
-            updated_at: t,
-            deleted_at: None,
-        };
-        match self.store.save_record(&r) {
-            Ok(()) => {
-                tab.records.insert(0, r);
-                self.modal = Some(Modal::Record(0));
-                self.cell = TextEdit::new("Untitled");
-                self.cell.focused = true;
-                self.editing_property = None;
-            }
-            Err(e) => self.error = Some(e.to_string()),
-        }
-    }
-    pub fn edit_record(&mut self, i: usize, prop: Option<String>) {
-        let tab = &self.tabs[self.active];
-        let Some(r) = tab.records.get(i) else {
-            return;
-        };
-        if let Some(id) = &prop {
-            let kind = tab
-                .database
-                .as_ref()
-                .and_then(|db| db.properties.iter().find(|p| &p.id == id))
-                .map(|p| p.kind);
-            if !matches!(
-                kind,
-                Some(
-                    PropertyKind::Title
-                        | PropertyKind::Text
-                        | PropertyKind::Number
-                        | PropertyKind::Select
-                        | PropertyKind::Status
-                        | PropertyKind::Date
-                        | PropertyKind::Checkbox
-                        | PropertyKind::Url
-                        | PropertyKind::Email
-                        | PropertyKind::Phone
-                )
-            ) {
-                self.error =
-                    Some("This property is read-only until its editor is available.".into());
-                return;
-            }
-            if r.values
-                .get(id)
-                .is_some_and(|v| v.is_array() || v.is_object())
-            {
-                self.error = Some("This value needs a structured property editor.".into());
-                return;
-            }
-        }
-        self.error = None;
-        self.cell = TextEdit::new(match &prop {
-            None => r.title.clone(),
-            Some(p) => r.values.get(p).map(display_value).unwrap_or_default(),
-        });
-        self.cell.focused = true;
-        self.editing_property = prop;
-        self.modal = Some(Modal::Record(i));
-    }
-    pub fn save_record(&mut self) {
-        let Some(Modal::Record(i)) = self.modal else {
-            return;
-        };
-        let tab = &mut self.tabs[self.active];
-        let r = &mut tab.records[i];
-        if let Some(p) = &self.editing_property {
-            let kind = tab
-                .database
-                .as_ref()
-                .and_then(|d| d.properties.iter().find(|x| &x.id == p))
-                .map(|p| p.kind);
-            let value = match kind {
-                Some(PropertyKind::Number) => match self.cell.text.parse::<f64>() {
-                    Ok(n) => json!(n),
-                    Err(_) => {
-                        self.error = Some("Enter a number.".into());
-                        return;
-                    }
-                },
-                Some(PropertyKind::Checkbox) => json!(self.cell.text == "true"),
-                Some(PropertyKind::Date) if !self.cell.text.is_empty() => {
-                    if chrono::NaiveDate::parse_from_str(&self.cell.text, "%Y-%m-%d").is_err() {
-                        self.error = Some("Use a date in YYYY-MM-DD format.".into());
-                        return;
-                    }
-                    json!(self.cell.text)
-                }
-                _ => json!(self.cell.text),
-            };
-            r.values.insert(p.clone(), value);
-        } else {
-            r.title = self.cell.text.clone();
-        }
-        r.updated_at = now();
-        match self.store.save_record(r) {
-            Ok(()) => {
-                self.modal = None;
-                self.query_records();
-            }
-            Err(e) => self.error = Some(e.to_string()),
-        }
     }
     pub fn switch_workspace(&mut self, id: &str) {
         if id == self.workspace.id {

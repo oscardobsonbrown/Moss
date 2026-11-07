@@ -1,4 +1,5 @@
 mod fonts;
+mod records;
 mod rich_text;
 mod state;
 mod ui;
@@ -42,6 +43,17 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
             _ => {}
         }
     }
+    if event.key == Key::Escape && s.modal.is_none() {
+        tx.instant();
+        if s.editing_cell.is_some() {
+            s.finish_cell(false);
+            return true;
+        }
+        if s.record_peek.is_some() {
+            s.close_peek();
+            return true;
+        }
+    }
     if event.key == Key::Escape && s.modal.is_some() {
         tx.instant();
         s.modal = None;
@@ -53,6 +65,7 @@ fn spec() -> AppSpec<State> {
     AppSpec {
         min_size: Some((850., 600.)),
         on_key: Some(key),
+        poll: Some(records::poll),
         fonts: fonts::FONTS,
         families: fonts::FAMILIES,
         ..AppSpec::new("Rotion", (1440., 900.), init, ui::view)

@@ -1,4 +1,4 @@
-use super::theme::{Theme, button, icon_button, label, primary_button};
+use super::theme::{Theme, button, icon_button, label};
 use crate::state::{Modal, State};
 use rotion_core::BlockKind;
 use rune::*;
@@ -16,7 +16,6 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
         Modal::Workspace => ("Workspaces", 360., workspaces(s, t)),
         Modal::Block(i) => ("Block actions", 340., block_menu(s, i, t)),
         Modal::Views => ("Database views", 350., views(s, t)),
-        Modal::Record(i) => ("Edit record", 500., record(s, i, t)),
         Modal::NewPage => ("New page", 440., new_page(s, t)),
     };
     Some(
@@ -323,38 +322,6 @@ fn views(s: &State, t: Theme) -> El {
                     s.query_records();
                 })
         }))
-}
-fn record(s: &State, i: usize, t: Theme) -> El {
-    let r = &s.tabs[s.active].records[i];
-    col()
-        .w_full()
-        .gap(12.)
-        .child(label(&r.title, 14., t.muted))
-        .child(
-            field(&s.cell, "record-input", "Value", t)
-                .on_edit(|s: &mut State| &mut s.cell)
-                .on_submit(|s: &mut State, tx| {
-                    tx.instant();
-                    s.save_record();
-                }),
-        )
-        .child(
-            row()
-                .w_full()
-                .justify_end()
-                .gap(6.)
-                .child(
-                    button("cancel-record", "Cancel", t).on_press(|s: &mut State| s.modal = None),
-                )
-                .child(
-                    primary_button("save-record", "Save", t)
-                        .default_button()
-                        .on_press_tx(|s: &mut State, tx| {
-                            tx.instant();
-                            s.save_record();
-                        }),
-                ),
-        )
 }
 fn new_page(s: &State, t: Theme) -> El {
     col()
