@@ -40,6 +40,7 @@ fn page(id: String, title: String, kind: PageKind) -> Page {
         created_at: TIME.into(),
         updated_at: TIME.into(),
         deleted_at: None,
+        settings: Default::default(),
     }
 }
 fn insert_page(tx: &rusqlite::Transaction<'_>, p: &Page) -> Result<(), Box<dyn Error>> {

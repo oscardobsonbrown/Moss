@@ -99,6 +99,7 @@ impl Store {
             created_at: t.clone(),
             updated_at: t,
             deleted_at: None,
+            settings: Default::default(),
         };
         self.validate_page(&page, false)?;
         let tx = self.conn.transaction()?;

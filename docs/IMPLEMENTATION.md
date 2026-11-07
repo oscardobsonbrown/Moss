@@ -6,6 +6,7 @@ Date: 2026-11-07. This is a working development build. It is not the complete v1
 
 - Native Rune window with a quiet sidebar, page tabs, and system/light/dark appearance.
 - SQLite WAL storage with automatic saves, page/block CRUD, workspace-scoped FTS search, and paged database queries.
+- Bundled Geist Sans UI, Geist Mono code, and per-page Default/Serif/Mono, Small text, and Full width in the Appearance & layout submenu. These settings survive reopen and archive restore.
 - Page titles, rich inline text, text/heading/list/to-do/quote/callout/code/divider blocks, block conversion, duplicate and delete.
 - Page creation, nested-page ownership, Trash and restore. Expired Trash is removed when the store opens.
 - Database creation, record creation, title and simple-property editing, title search, and 100-record pages.
@@ -19,7 +20,7 @@ Date: 2026-11-07. This is a working development build. It is not the complete v1
 
 The workspace test suite covers create/edit/format/search/reopen through the Rune runtime, exact rich-text serialization, selection splitting, tab close behavior, empty and structured cells, persistence, filtered paging, workspace boundaries, Trash, archive round trips, invalid archives, formulas, rollups and date dependencies.
 
-The storage probe has run with 100,000 pages and 1,000,000 records. Read [the measurements and failures](PERFORMANCE-RESULTS.md). It labels warm-cache storage results separately from UI and uncached disk requirements. The 25 tests pass. Native screen capture stopped refreshing during the theme check; resolve capture versus presentation state before release. A direct renderer snapshot confirms light-theme colors and layout. A local app bundle has been opened and used to create a database and record through the native UI.
+The storage probe has run with 100,000 pages and 1,000,000 records. Read [the measurements and failures](PERFORMANCE-RESULTS.md). It labels warm-cache storage results separately from UI and uncached disk requirements. The 28 tests pass. The earlier theme capture did not refresh. Native captures now show live font changes in the Appearance & layout menu; dark and light renderer snapshots also cover the layout. A local app bundle has been opened and used to create a database and record through the native UI.
 
 ## Required work before v1
 

@@ -23,6 +23,8 @@ pub struct Tab {
 pub enum Modal {
     Search,
     Settings,
+    PageActions,
+    Appearance,
     Trash,
     Workspace,
     Block(usize),
@@ -191,6 +193,23 @@ impl State {
             }
         }
         self.save_preferences();
+    }
+    pub fn set_page_settings(&mut self, settings: PageSettings) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let mut page = tab.page.clone();
+        page.settings = settings;
+        page.updated_at = now();
+        match self.store.update_page(&page) {
+            Ok(()) => {
+                self.tabs[self.active].page = page.clone();
+                if let Some(p) = self.pages.iter_mut().find(|p| p.id == page.id) {
+                    *p = page;
+                }
+            }
+            Err(e) => self.error = Some(format!("Page settings are not saved: {e}")),
+        }
     }
     pub fn open_page(&mut self, id: &str, new_tab: bool) {
         if !self.loading && !self.flush_current() {

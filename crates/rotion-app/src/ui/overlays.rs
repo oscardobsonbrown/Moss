@@ -5,7 +5,11 @@ use rune::*;
 
 pub fn overlay(s: &State, t: Theme) -> Option<El> {
     let modal = s.modal?;
+    if matches!(modal, Modal::PageActions | Modal::Appearance) {
+        return Some(super::page_settings::overlay(s, t));
+    }
     let (name, width, body) = match modal {
+        Modal::PageActions | Modal::Appearance => unreachable!(),
         Modal::Search => ("Search", 650., search(s, t)),
         Modal::Settings => ("Settings", 520., settings(s, t)),
         Modal::Trash => ("Trash", 600., trash(s, t)),

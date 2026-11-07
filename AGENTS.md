@@ -12,6 +12,7 @@ Read `docs/DECISIONS.md`, `docs/PRD.md`, and `docs/OPEN-QUESTIONS.md` before imp
 - V1 is local-only, with no account or sync. Use an app-managed local database and attachment folder, with import and export.
 - Use the new Notion desktop tab model: one workspace per window, with a stable sidebar and per-tab scroll and selection. Multiple workspaces can stay open in separate windows.
 - Run scheduled automations in every local workspace while Rotion's service runs, even if no window is open for that workspace. Explicit Quit stops all work. Skip missed occurrences.
+- Use bundled Geist Sans for UI and Geist Mono for code. Page appearance uses Geist Sans, Geist Serif, or Geist Mono, with Small text and Full width stored per page. Keep menus and app chrome in Geist Sans.
 - Match exact Notion pixels and behavior for retained features. Record deliberate differences, including removed product surfaces and almost no motion.
 - Animate pointer-triggered menus, dialogs, and tabs. Keep keyboard-triggered actions and all database view switches instant. Scrolling, dragging, and standard caret feedback remain allowed. Read the PRD for timing decisions; do not infer them from a default preset.
 - For clicked tabs, show content immediately and animate only the active-tab indicator. Keyboard tab switches are fully instant.

@@ -195,3 +195,11 @@ fn expired_trash_is_removed_on_reopen() {
     let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
     let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
 }
+
+#[test]
+fn old_pages_without_settings_keep_their_archive_encoding() {
+    let old = json!({"id":"p","workspace_id":"w","parent_id":null,"title":"Old page","icon":"","kind":"document","created_at":"2026-01-01","updated_at":"2026-01-01","deleted_at":null});
+    let page: Page = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(page.settings, PageSettings::default());
+    assert_eq!(serde_json::to_value(page).unwrap(), old);
+}

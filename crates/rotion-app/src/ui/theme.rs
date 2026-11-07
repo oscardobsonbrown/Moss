@@ -2,6 +2,9 @@ use rune::*;
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub bg: Color,
+    pub menu: Color,
+    pub family: Family,
+    pub text_scale: f32,
     pub sidebar: Color,
     pub text: Color,
     pub muted: Color,
@@ -20,10 +23,19 @@ fn hex(v: u32) -> Color {
     }
 }
 impl Theme {
+    pub fn label(self, s: impl Into<String>, size: f32, color: Color) -> El {
+        text(s)
+            .font(TextStyle::new(size * self.text_scale, 400.).family(self.family))
+            .color(color)
+    }
+
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
                 bg: hex(0x191919),
+                menu: hex(0x252525),
+                family: Family::Sans,
+                text_scale: 1.,
                 sidebar: hex(0x202020),
                 text: hex(0xD4D4D4),
                 muted: hex(0x9B9B9B),
@@ -36,6 +48,9 @@ impl Theme {
         } else {
             Self {
                 bg: Color::WHITE,
+                menu: Color::WHITE,
+                family: Family::Sans,
+                text_scale: 1.,
                 sidebar: hex(0xF7F7F5),
                 text: hex(0x37352F),
                 muted: hex(0x787774),
@@ -64,7 +79,7 @@ pub fn button(key: impl Into<String>, title: impl Into<String>, t: Theme) -> El 
         .hover(t.hover)
         .press(t.selected)
         .center_y()
-        .child(label(title, 14., t.text))
+        .child(t.label(title, 14., t.text))
 }
 pub fn icon_button(key: impl Into<String>, title: &str, icon: &str, t: Theme) -> El {
     row()

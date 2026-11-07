@@ -28,6 +28,28 @@ pub enum PageKind {
     Record,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PageFont {
+    #[default]
+    Default,
+    Serif,
+    Mono,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PageSettings {
+    pub font: PageFont,
+    pub small_text: bool,
+    pub full_width: bool,
+}
+impl PageSettings {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Page {
     pub id: String,
@@ -39,6 +61,9 @@ pub struct Page {
     pub created_at: String,
     pub updated_at: String,
     pub deleted_at: Option<String>,
+    // Omit defaults so archives made before page settings keep their checksum.
+    #[serde(default, skip_serializing_if = "PageSettings::is_default")]
+    pub settings: PageSettings,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

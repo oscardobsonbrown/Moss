@@ -230,3 +230,84 @@ fn all_six_views_show_the_same_saved_record_on_the_first_frame() {
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn page_appearance_is_immediate_independent_and_survives_reopen() {
+    let (s, path) = fixture();
+    let first = s.tab().unwrap().page.id.clone();
+    let mut rt = Runtime::with_text(
+        s,
+        ui::view,
+        (1440., 900.),
+        Env {
+            system_dark: false,
+            scale: 1.,
+        },
+        rune::text::TextSystem::new(fonts::FONTS, fonts::FAMILIES),
+    );
+    rt.frame(0.);
+    let width = |rt: &Runtime<State>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(&format!("document-{first}")))
+            .unwrap()
+            .target[2]
+    };
+    let normal = width(&rt);
+    click(&mut rt, "page-actions");
+    for _ in 0..30 {
+        rt.frame(1. / 120.);
+    }
+    click(&mut rt, "appearance-menu-item");
+    for _ in 0..30 {
+        rt.frame(1. / 120.);
+    }
+    click(&mut rt, "font-serif");
+    assert_eq!(rt.state.tab().unwrap().page.settings.font, PageFont::Serif);
+    assert!(rt.state.modal == Some(state::Modal::Appearance));
+    click(&mut rt, "page-full-width");
+    assert!(width(&rt) > normal + 200.);
+    click(&mut rt, "page-small-text");
+    let expected = PageSettings {
+        font: PageFont::Serif,
+        full_width: true,
+        small_text: true,
+    };
+    assert_eq!(
+        rt.state.store.get_page(&first).unwrap().unwrap().settings,
+        expected
+    );
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.modal == Some(state::Modal::PageActions));
+    press(&mut rt, Key::Escape);
+    assert!(rt.state.modal.is_none());
+    rt.state.new_name.replace_text("Another page");
+    rt.state.new_page(false, None);
+    assert_eq!(
+        rt.state.tab().unwrap().page.settings,
+        PageSettings::default()
+    );
+    rt.state.open_page(&first, false);
+    assert_eq!(rt.state.tab().unwrap().page.settings, expected);
+    drop(rt);
+    let reopened = State::open(path.clone(), None).unwrap();
+    assert_eq!(
+        reopened.store.get_page(&first).unwrap().unwrap().settings,
+        expected
+    );
+    let archive = reopened
+        .store
+        .export_workspace(&reopened.workspace.id)
+        .unwrap();
+    drop(reopened);
+    let mut imported = Store::in_memory().unwrap();
+    let workspace = imported.import_workspace(&archive).unwrap();
+    assert!(
+        imported
+            .list_pages(&workspace.id)
+            .unwrap()
+            .iter()
+            .any(|p| p.settings == expected)
+    );
+    std::fs::remove_dir_all(path).unwrap();
+}

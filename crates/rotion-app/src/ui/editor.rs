@@ -5,15 +5,19 @@ use rune::*;
 
 pub fn view(s: &State, t: Theme) -> El {
     let tab = s.tab().unwrap();
-    let title = text_input(&tab.title, TextStyle::new(40., 700.).lh(48.))
-        .key(format!("title-{}", tab.page.id))
-        .single_line()
-        .w_full()
-        .color(t.text)
-        .placeholder("Untitled", t.faint)
-        .label("Page title")
-        .on_edit(|s: &mut State| &mut s.tabs[s.active].title)
-        .on_input_change(|s: &mut State, _| s.save_title());
+    let title = text_input(
+        &tab.title,
+        crate::fonts::page_style(tab.page.settings, 40., 700.)
+            .lh(48. * crate::fonts::scale(tab.page.settings)),
+    )
+    .key(format!("title-{}", tab.page.id))
+    .single_line()
+    .w_full()
+    .color(t.text)
+    .placeholder("Untitled", t.faint)
+    .label("Page title")
+    .on_edit(|s: &mut State| &mut s.tabs[s.active].title)
+    .on_input_change(|s: &mut State, _| s.save_title());
     let blocks = tab.blocks.iter().enumerate().map(|(i, b)| {
         let kind = b.block.kind;
         if kind == BlockKind::Divider {
@@ -36,14 +40,17 @@ pub fn view(s: &State, t: Theme) -> El {
             _ => (16., 400., 26.),
         };
         let style = if kind == BlockKind::Code {
-            TextStyle::new(size, weight).lh(line).mono()
+            crate::fonts::page_style(tab.page.settings, size, weight)
+                .lh(line * crate::fonts::scale(tab.page.settings))
+                .mono()
         } else {
-            TextStyle::new(size, weight).lh(line)
+            crate::fonts::page_style(tab.page.settings, size, weight)
+                .lh(line * crate::fonts::scale(tab.page.settings))
         };
         let input = text_input(&b.edit, style)
             .key(format!("block-input-{}", b.block.id))
             .w_full()
-            .min_h(line)
+            .min_h(line * crate::fonts::scale(tab.page.settings))
             .color(if b.block.checked { t.faint } else { t.text })
             .placeholder(if i == 0 { "Type / for commands" } else { "" }, t.faint)
             .label("Block text")
@@ -139,15 +146,27 @@ pub fn view(s: &State, t: Theme) -> El {
             .key(format!("block-{}", b.block.id))
             .hover_group()
             .w_full()
-            .min_h(30.)
+            .min_h(30. * crate::fonts::scale(tab.page.settings))
             .gap(6.)
             .child(
                 icon_button(format!("block-menu-{i}"), "Block actions", "⠿", t)
                     .size(24., 26.)
+                    .absolute(-30., 0.)
                     .group_opacity(0., 1.)
                     .on_press(move |s: &mut State| s.modal = Some(Modal::Block(i))),
             )
-            .child(marker)
+            .children(
+                matches!(
+                    kind,
+                    BlockKind::Todo
+                        | BlockKind::BulletedList
+                        | BlockKind::NumberedList
+                        | BlockKind::Quote
+                        | BlockKind::Callout
+                        | BlockKind::Toggle
+                )
+                .then_some(marker),
+            )
             .child(input);
         if matches!(kind, BlockKind::Code | BlockKind::Callout) {
             row.padding(14.).radius(4.).fill(t.sidebar)
@@ -155,6 +174,17 @@ pub fn view(s: &State, t: Theme) -> El {
             row
         }
     });
+    let mut content = col()
+        .key(format!("document-{}", tab.page.id))
+        .w_full()
+        .self_center()
+        .px(70.)
+        .pt(54.)
+        .pb(220.)
+        .gap(4.);
+    if !tab.page.settings.full_width {
+        content = content.max_w(860.);
+    }
     col()
         .key(format!("document-scroll-{}", tab.page.id))
         .grow(1.)
@@ -164,15 +194,7 @@ pub fn view(s: &State, t: Theme) -> El {
             stick_bottom: false,
         })
         .child(
-            col()
-                .key(format!("document-{}", tab.page.id))
-                .w_full()
-                .max_w(860.)
-                .self_center()
-                .px(70.)
-                .pt(54.)
-                .pb(220.)
-                .gap(4.)
+            content
                 .child(label(&tab.page.icon, 64., t.text).h(84.))
                 .child(title)
                 .child(el().h(24.))

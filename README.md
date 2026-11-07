@@ -20,6 +20,12 @@ ROTION_DATA_DIR=/tmp/rotion-demo ROTION_DEMO=1 cargo run -p rotion
 
 Build a local macOS app bundle with `scripts/package-macos.sh`. It uses an ad hoc signature; it is not a signed or notarized public release.
 
+## Typography
+
+Geist Sans is bundled for the UI. Geist Mono is bundled for code, including inline code. Use the page’s **… → Appearance & layout** menu to select Default (Geist Sans), Serif (Geist Serif), or Mono (Geist Mono). Small text and Full width are also saved per page. These settings survive reopen and archive restore. No font download is needed at runtime.
+
+The fonts retain their SIL Open Font License. See [font sources and notices](crates/rotion-app/assets/fonts/README.md).
+
 ## Check
 
 ```sh

@@ -14,7 +14,7 @@ The app must support a full personal workspace. A documents-only first release d
 
 Build Rotion as a macOS desktop app with AnomalyCo's Rune UI framework. Keep the workspace in an app-managed local database with a folder for attachments. V1 needs no account or sync. Background network fetches are allowed, but they must never block local work.
 
-Include pages and the full database engine: retained database views, properties, formulas, relations, rollups, linked databases, filters, sorting, and templates. The user later excluded Form views from v1. Match exact Notion pixels and behavior for retained features. Record product exclusions and the motion policy as deliberate differences.
+Include pages and the full database engine: retained database views, properties, formulas, relations, rollups, linked databases, filters, sorting, and templates. The user later excluded Form views from v1. Match exact Notion pixels and behavior for retained features. Record product exclusions, the motion policy, and the Geist font system as deliberate differences. Geist Sans is the UI font. Code uses Geist Mono. Page appearance offers Geist Sans, Geist Serif, or Geist Mono, with Small text and Full width stored per page. Fonts must work without a network connection.
 
 ## Audience and distribution
 

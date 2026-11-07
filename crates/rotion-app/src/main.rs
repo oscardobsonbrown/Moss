@@ -1,3 +1,4 @@
+mod fonts;
 mod rich_text;
 mod state;
 mod ui;
@@ -52,6 +53,8 @@ fn spec() -> AppSpec<State> {
     AppSpec {
         min_size: Some((850., 600.)),
         on_key: Some(key),
+        fonts: fonts::FONTS,
+        families: fonts::FAMILIES,
         ..AppSpec::new("Rotion", (1440., 900.), init, ui::view)
     }
 }

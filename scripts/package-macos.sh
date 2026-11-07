@@ -10,6 +10,8 @@ fi
 app="dist/Rotion.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/rotion" "$app/Contents/MacOS/Rotion"
+cp crates/rotion-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
+cp crates/rotion-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

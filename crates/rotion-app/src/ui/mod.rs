@@ -2,6 +2,7 @@ mod database;
 mod editor;
 mod icons;
 mod overlays;
+mod page_settings;
 mod shell;
 mod theme;
 use crate::state::State;

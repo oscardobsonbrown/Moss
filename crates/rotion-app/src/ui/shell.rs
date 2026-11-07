@@ -264,12 +264,8 @@ pub fn content(s: &State, t: Theme) -> El {
         }))
         .child(el().grow(1.))
         .children(s.tab().map(|_| {
-            icon_button("delete-page", "Move page to Trash", "⌫", t).on_press_tx(
-                |s: &mut State, tx| {
-                    tx.instant();
-                    s.trash_page();
-                },
-            )
+            icon_button("page-actions", "Actions", "…", t)
+                .on_press(|s: &mut State| s.modal = Some(Modal::PageActions))
         }));
     let body = match s.tab() {
         Some(tab) if tab.database.is_some() => super::database::view(s, t),

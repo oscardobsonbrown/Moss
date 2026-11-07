@@ -62,6 +62,7 @@ Date: 2026-11-07. Source: user interview.
 | D56 | Publish the full source code on GitHub with versioned downloadable app releases. Keep private Notion reference material local. | Confirmed; license and release details remain open |
 | D57 | License Rotion's source code under MIT. | Confirmed |
 | D58 | Start implementation now from the agreed requirements. Defer release-detail questions and resolve routine technical choices during the build. | Explicit user direction |
+| D59 | Use Geist Sans for the UI and Geist Mono for code. Page appearance offers Default, Geist Serif, and Geist Mono, with Small text and Full width. Save these per page. Follow Notion’s Appearance & layout menu behavior. Bundle fonts for offline use. | Explicit user direction; deliberate font difference from Notion |
 
 ## Performance intent
 
