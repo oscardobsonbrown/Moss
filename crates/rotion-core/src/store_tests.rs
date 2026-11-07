@@ -213,6 +213,11 @@ fn record_page_is_created_once_hidden_and_renamed_atomically() {
     let mut record = store.create_record(&db.id, "Original", &values).unwrap();
     let page = store.ensure_record_page(&record.id).unwrap();
     assert_eq!(store.ensure_record_page(&record.id).unwrap().id, page.id);
+    assert_eq!(
+        store.get_record_by_page(&page.id).unwrap().unwrap().id,
+        record.id
+    );
+    assert!(store.get_record_by_page(&db.page_id).unwrap().is_none());
     assert_eq!(page.kind, PageKind::Record);
     assert_eq!(page.parent_id.as_deref(), Some(db.page_id.as_str()));
     assert!(
@@ -442,4 +447,26 @@ fn archive_preserves_record_trash_roots() {
         .unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].title, "Deleted with database");
+}
+
+#[test]
+fn record_page_lookup_reports_duplicate_legacy_links() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Duplicates", "").unwrap();
+    let db = database(&mut store, &workspace.id);
+    let first = store
+        .create_record(&db.id, "First", &BTreeMap::new())
+        .unwrap();
+    let second = store
+        .create_record(&db.id, "Second", &BTreeMap::new())
+        .unwrap();
+    let page = store.ensure_record_page(&first.id).unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE records SET page_id=?1 WHERE id=?2",
+            rusqlite::params![page.id, second.id],
+        )
+        .unwrap();
+    assert!(store.get_record_by_page(&page.id).is_err());
 }

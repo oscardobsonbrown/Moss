@@ -12,6 +12,7 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS databases(id TEXT PRIMARY KEY, page_id TEXT NOT NULL UNIQUE REFERENCES pages(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)));
         CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, database_id TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE, page_id TEXT REFERENCES pages(id) ON DELETE CASCADE, title TEXT NOT NULL, values_json TEXT NOT NULL CHECK(json_valid(values_json)), deleted_at TEXT, data TEXT NOT NULL CHECK(json_valid(data)));
         CREATE TABLE IF NOT EXISTS record_trash_roots(record_id TEXT PRIMARY KEY REFERENCES records(id) ON DELETE CASCADE, root_id TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS records_page_lookup ON records(page_id) WHERE page_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS records_database ON records(database_id, deleted_at, id);
         CREATE INDEX IF NOT EXISTS records_database_title ON records(database_id, deleted_at, title, id);
         CREATE INDEX IF NOT EXISTS records_expired_trash ON records(deleted_at) WHERE deleted_at IS NOT NULL;

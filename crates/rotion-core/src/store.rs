@@ -354,6 +354,19 @@ impl Store {
         ));
         collect_json(&mut self.conn.prepare(&sql)?, params_from_iter(args))
     }
+    /// Find the record linked to a page. Duplicate links are reported as invalid data.
+    pub fn get_record_by_page(&self, page_id: &str) -> Result<Option<Record>> {
+        let mut records: Vec<Record> = collect_json(
+            &mut self
+                .conn
+                .prepare("SELECT data FROM records WHERE page_id=?1 LIMIT 2")?,
+            [page_id],
+        )?;
+        if records.len() > 1 {
+            return Err(invalid("multiple records linked to page"));
+        }
+        Ok(records.pop())
+    }
     pub fn get_record(&self, id: &str) -> Result<Option<Record>> {
         let raw: Option<String> = self
             .conn

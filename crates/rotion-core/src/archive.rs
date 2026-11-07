@@ -548,6 +548,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn empty_trash_metadata_is_omitted_from_v1_checksum() {
+        let mut store = Store::in_memory().unwrap();
+        let workspace = store.create_workspace("Legacy", "").unwrap();
+        let text = store.export_workspace(&workspace.id).unwrap();
+        let json: Value = serde_json::from_str(&text).unwrap();
+        assert!(json["payload"].get("record_trash_roots").is_none());
+        let parsed: Envelope = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed.checksum_sha256, checksum(&parsed.payload).unwrap());
+        store.import_workspace(&text).unwrap();
+    }
+
+    #[test]
     fn workspace_round_trip_remaps_relations_and_preserves_trash() {
         let mut store = Store::in_memory().unwrap();
         let original = store.seed_demo_workspaces().unwrap().remove(0);
