@@ -1,10 +1,11 @@
-use super::theme::{Theme, button, label};
+use super::theme::{Theme, button, label, primary_button};
 use crate::state::{Modal, State, Tab, display_value};
 use chrono::{Datelike, NaiveDate};
 use rotion_core::{Database, Property, PropertyKind, Record, ViewKind};
 use rune::*;
 use std::collections::BTreeMap;
 
+// shortcut: views use the current record page; replace with complete indexed view projections before release.
 pub fn view(s: &State, t: Theme) -> El {
     let Some(tab) = s.tab() else {
         return col();
@@ -16,7 +17,8 @@ pub fn view(s: &State, t: Theme) -> El {
     for (i, item) in db.views.iter().enumerate() {
         let active = tab.view == i;
         tabs = tabs.child(
-            button(format!("db-view-{i}"), &item.name, t).fill(if active {
+            button(format!("db-view-{i}"), &item.name, t)
+                .fill(if active {
                     t.selected
                 } else {
                     Color::TRANSPARENT
@@ -31,8 +33,15 @@ pub fn view(s: &State, t: Theme) -> El {
                 }),
         );
     }
-    let search = text_input(&s.filter, TextStyle::new(13., 400.)).key("db-filter").single_line().w(160.)
-        .h(30.).px(8.).radius(4.).fill(t.sidebar).color(t.text)
+    let search = text_input(&s.filter, TextStyle::new(13., 400.))
+        .key("db-filter")
+        .single_line()
+        .w(160.)
+        .h(30.)
+        .px(8.)
+        .radius(4.)
+        .fill(t.sidebar)
+        .color(t.text)
         .placeholder("Search records", t.muted)
         .on_edit(|s: &mut State| &mut s.filter)
         .on_input_change(|s: &mut State, tx| {
@@ -42,7 +51,10 @@ pub fn view(s: &State, t: Theme) -> El {
             s.query_records();
             tx.instant();
         });
-    let toolbar = row().w_full().gap(6.).center_y()
+    let toolbar = row()
+        .w_full()
+        .gap(6.)
+        .center_y()
         .child(tabs)
         .child(search)
         .child(
@@ -52,11 +64,9 @@ pub fn view(s: &State, t: Theme) -> El {
             }),
         )
         .child(
-            button("db-new", "New", t).fill(t.blue)
-                .on_press_tx(|s: &mut State, tx| {
-                    s.add_record();
-                    tx.instant();
-                }),
+            primary_button("db-new", "New", t).on_press_tx(|s: &mut State, _| {
+                s.add_record();
+            }),
         );
     let kind = db.views.get(tab.view).map(|v| v.kind);
     let body = match kind {
@@ -71,7 +81,8 @@ pub fn view(s: &State, t: Theme) -> El {
             14.,
             t.muted,
         )),
-        None => col().padding(20.)
+        None => col()
+            .padding(20.)
             .child(label("No database view is available.", 14., t.muted)),
     };
     let mut page = row().w_full().center_y().gap(8.).py(8.).child(label(
@@ -109,10 +120,32 @@ pub fn view(s: &State, t: Theme) -> El {
             }),
         );
     }
-    col().key("database").w_full().grow(1.).min_h(0.).gap(10.)
+    col()
+        .key("database")
+        .w_full()
+        .grow(1.)
+        .min_h(0.)
+        .gap(10.)
+        .px(28.)
+        .pt(42.)
+        .child(
+            text_input(&tab.title, TextStyle::new(32., 700.))
+                .key("database-title")
+                .single_line()
+                .w_full()
+                .color(t.text)
+                .placeholder("Untitled database", t.faint)
+                .on_edit(|s: &mut State| &mut s.tabs[s.active].title)
+                .on_input_change(|s: &mut State, _| s.save_title()),
+        )
+        .child(el().h(12.))
         .child(toolbar)
         .child(
-            col().key("db-body").w_full().grow(1.).min_h(0.)
+            col()
+                .key("db-body")
+                .w_full()
+                .grow(1.)
+                .min_h(0.)
                 .scroll_xy()
                 .child(body),
         )
@@ -133,22 +166,40 @@ fn cell_text(record: &Record, prop: &Property) -> String {
 }
 fn cell(index: usize, property: Option<String>, text: String, width: f32, t: Theme) -> El {
     let key = format!("cell-{index}-{}", property.as_deref().unwrap_or("title"));
-    row().key(key).role("button").label(&text).focusable(true).w(width).h(34.).px(9.).center_y()
-        .border(0.5, t.line).hover(t.hover)
+    row()
+        .key(key)
+        .role("button")
+        .label(&text)
+        .focusable(true)
+        .w(width)
+        .h(34.)
+        .px(9.)
+        .center_y()
+        .border(0.5, t.line)
+        .hover(t.hover)
         .child(label(text, 13., t.text))
-        .on_press_tx(move |s: &mut State, tx| {
+        .on_press_tx(move |s: &mut State, _| {
             s.edit_record(index, property.clone());
-            tx.instant();
         })
 }
 fn table(tab: &Tab, db: &Database, t: Theme) -> El {
     let mut head = row().child(
-        row().w(220.).h(34.).px(9.).center_y().border(0.5, t.line)
+        row()
+            .w(220.)
+            .h(34.)
+            .px(9.)
+            .center_y()
+            .border(0.5, t.line)
             .child(label("Name", 13., t.muted)),
     );
     for prop in properties(db) {
         head = head.child(
-            row().w(160.).h(34.).px(9.).center_y().border(0.5, t.line)
+            row()
+                .w(160.)
+                .h(34.)
+                .px(9.)
+                .center_y()
+                .border(0.5, t.line)
                 .child(label(&prop.name, 13., t.muted)),
         );
     }
@@ -167,9 +218,8 @@ fn table(tab: &Tab, db: &Database, t: Theme) -> El {
         content = content.child(line);
     }
     content.child(
-        button("table-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+        button("table-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
             s.add_record();
-            tx.instant();
         }),
     )
 }
@@ -181,18 +231,32 @@ fn card(index: usize, record: &Record, db: &Database, t: Theme) -> El {
             content = content.child(label(format!("{}: {}", prop.name, value), 12., t.muted));
         }
     }
-    col().key(format!("record-card-{index}")).role("button").label(&record.title).focusable(true)
-        .w(210.).padding(12.).radius(6.).border(1., t.line).fill(t.bg).hover(t.hover)
+    col()
+        .key(format!("record-card-{index}"))
+        .role("button")
+        .label(&record.title)
+        .focusable(true)
+        .w(210.)
+        .padding(12.)
+        .radius(6.)
+        .border(1., t.line)
+        .fill(t.bg)
+        .hover(t.hover)
         .child(content)
-        .on_press_tx(move |s: &mut State, tx| {
+        .on_press_tx(move |s: &mut State, _| {
             s.edit_record(index, None);
-            tx.instant();
         })
 }
 fn list(tab: &Tab, db: &Database, t: Theme) -> El {
     let mut content = col().w_full();
     for (i, record) in tab.records.iter().enumerate() {
-        let mut line = row().w_full().h(38.).gap(14.).px(10.).center_y().border(0.5, t.line)
+        let mut line = row()
+            .w_full()
+            .h(38.)
+            .gap(14.)
+            .px(10.)
+            .center_y()
+            .border(0.5, t.line)
             .child(label(&record.title, 14., t.text));
         for prop in properties(db) {
             let v = cell_text(record, prop);
@@ -201,17 +265,19 @@ fn list(tab: &Tab, db: &Database, t: Theme) -> El {
             }
         }
         content = content.child(
-            line.key(format!("list-{i}")).role("button").label(&record.title).focusable(true).hover(t.hover)
-                .on_press_tx(move |s: &mut State, tx| {
+            line.key(format!("list-{i}"))
+                .role("button")
+                .label(&record.title)
+                .focusable(true)
+                .hover(t.hover)
+                .on_press_tx(move |s: &mut State, _| {
                     s.edit_record(i, None);
-                    tx.instant();
                 }),
         );
     }
     content.child(
-        button("list-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+        button("list-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
             s.add_record();
-            tx.instant();
         }),
     )
 }
@@ -226,9 +292,8 @@ fn gallery(tab: &Tab, db: &Database, t: Theme) -> El {
         content = content.child(line);
     }
     content.child(
-        button("gallery-new", "+ New page", t).on_press_tx(|s: &mut State, tx| {
+        button("gallery-new", "+ New page", t).on_press_tx(|s: &mut State, _| {
             s.add_record();
-            tx.instant();
         }),
     )
 }
@@ -280,7 +345,12 @@ fn board(tab: &Tab, db: &Database, t: Theme) -> El {
         } else {
             &group
         };
-        let mut column = col().w(220.).gap(8.).padding(6.).fill(t.sidebar).radius(6.)
+        let mut column = col()
+            .w(220.)
+            .gap(8.)
+            .padding(6.)
+            .fill(t.sidebar)
+            .radius(6.)
             .child(label(format!("{}  {}", name, matches.len()), 13., t.muted));
         for (i, record) in matches {
             column = column.child(card(i, record, db, t));
@@ -340,7 +410,12 @@ fn calendar(tab: &Tab, db: &Database, t: Theme) -> El {
             let mut line = row();
             for day in 0..7 {
                 let slot = week * 7 + day;
-                let mut box_ = col().w(130.).min_h(75.).padding(6.).border(0.5, t.line).gap(3.);
+                let mut box_ = col()
+                    .w(130.)
+                    .min_h(75.)
+                    .padding(6.)
+                    .border(0.5, t.line)
+                    .gap(3.);
                 if slot >= start && slot - start < count {
                     let number = slot - start + 1;
                     box_ = box_.child(label(number.to_string(), 12., t.muted));
@@ -350,9 +425,8 @@ fn calendar(tab: &Tab, db: &Database, t: Theme) -> El {
                             let r = &tab.records[i];
                             box_ = box_.child(
                                 button(format!("calendar-{i}"), &r.title, t).on_press_tx(
-                                    move |s: &mut State, tx| {
+                                    move |s: &mut State, _| {
                                         s.edit_record(i, None);
-                                        tx.instant();
                                     },
                                 ),
                             );
@@ -414,7 +488,8 @@ fn timeline(tab: &Tab, db: &Database, t: Theme) -> El {
         })
         .unwrap_or(28.);
     let mut content =
-        col().gap(4.)
+        col()
+            .gap(4.)
             .child(label(format!("Timeline by {}", prop.name), 14., t.muted));
     if let (Some(first), Some(last)) = (first, last) {
         content = content.child(label(format!("{} — {}", first, last), 12., t.muted));
@@ -422,7 +497,9 @@ fn timeline(tab: &Tab, db: &Database, t: Theme) -> El {
     for (i, start, end) in records {
         let record = &tab.records[i];
         let mut line = row().gap(8.).center_y().h(38.).border(0.5, t.line).child(
-            row().w(150.).px(8.)
+            row()
+                .w(150.)
+                .px(8.)
                 .child(label(&record.title, 13., t.text)),
         );
         if let (Some(first), Some(start), Some(end)) = (first, start, end) {
@@ -444,11 +521,13 @@ fn timeline(tab: &Tab, db: &Database, t: Theme) -> El {
             line = line.child(label("No date", 12., t.muted));
         }
         content = content.child(
-            line.key(format!("timeline-{i}")).role("button").label(&record.title).focusable(true)
+            line.key(format!("timeline-{i}"))
+                .role("button")
+                .label(&record.title)
+                .focusable(true)
                 .hover(t.hover)
-                .on_press_tx(move |s: &mut State, tx| {
+                .on_press_tx(move |s: &mut State, _| {
                     s.edit_record(i, None);
-                    tx.instant();
                 }),
         );
     }

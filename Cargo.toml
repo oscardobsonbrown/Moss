@@ -18,6 +18,9 @@ rusqlite = { version = "0.41.1", features = ["bundled", "functions"] }
 rotion-core = { path = "crates/rotion-core" }
 rotion-engine = { path = "crates/rotion-engine" }
 
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 opt-level = 3
 debug = 1
@@ -25,5 +28,6 @@ incremental = true
 
 [profile.perf]
 inherits = "release"
-debug = 1
+debug = false
+incremental = false
 

@@ -148,14 +148,30 @@ pub enum ViewKind {
 }
 
 impl ViewKind {
-    pub const ALL: [Self; 10] = [Self::Table, Self::Board, Self::Calendar, Self::Timeline,
-        Self::Gallery, Self::List, Self::Chart, Self::Feed, Self::Map, Self::Dashboard];
+    pub const ALL: [Self; 10] = [
+        Self::Table,
+        Self::Board,
+        Self::Calendar,
+        Self::Timeline,
+        Self::Gallery,
+        Self::List,
+        Self::Chart,
+        Self::Feed,
+        Self::Map,
+        Self::Dashboard,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Table => "Table", Self::Board => "Board", Self::Calendar => "Calendar",
-            Self::Timeline => "Timeline", Self::Gallery => "Gallery", Self::List => "List",
-            Self::Chart => "Chart", Self::Feed => "Feed", Self::Map => "Map",
+            Self::Table => "Table",
+            Self::Board => "Board",
+            Self::Calendar => "Calendar",
+            Self::Timeline => "Timeline",
+            Self::Gallery => "Gallery",
+            Self::List => "List",
+            Self::Chart => "Chart",
+            Self::Feed => "Feed",
+            Self::Map => "Map",
             Self::Dashboard => "Dashboard",
         }
     }
@@ -194,7 +210,16 @@ pub struct Record {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
-    Eq, Ne, Contains, NotContains, Gt, Ge, Lt, Le, IsEmpty, IsNotEmpty,
+    Eq,
+    Ne,
+    Contains,
+    NotContains,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    IsEmpty,
+    IsNotEmpty,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -229,7 +254,13 @@ pub struct RecordQuery {
 
 impl Default for RecordQuery {
     fn default() -> Self {
-        Self { filter: None, sorts: Vec::new(), group_by: None, limit: 200, offset: 0 }
+        Self {
+            filter: None,
+            sorts: Vec::new(),
+            group_by: None,
+            limit: 200,
+            offset: 0,
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 # Open product decisions
 
-Ask one question at a time. Give a recommended answer. Use evidence for questions that source or UI study can answer.
+The interview is paused at the user's request. Build from the agreed requirements. Resolve routine choices from source evidence and tests; ask only when a missing decision blocks work.
 
 ## Current branch: performance
 
@@ -25,8 +25,8 @@ Ask one question at a time. Give a recommended answer. Use evidence for question
 10. Define release gates, delivery order within the full scope, and module test requirements. All five video scenarios are selected as acceptance workspaces; review the detailed steps in ACCEPTANCE-WORKFLOWS.md.
 11. Define local automation triggers, supported actions, cycles, and retries. Closing the last window keeps the app and scheduled work running. Explicit Quit stops them. Skip missed schedules. External service actions are excluded from v1.
 13. Define reminder notification actions, overdue-summary details, and setup-dialog timing. Date reminders use local macOS notifications while Rotion is running, even with all windows closed. Show one overdue-reminder summary on resume and skip missed automations. Offer optional Start at login in a dialog; it stays disabled until enabled, and login startup runs the service without opening windows.
-14. Define public release details. Rotion is for personal use, with MIT-licensed public source code and versioned downloads on GitHub and app downloads on the user's website. Keep private Notion reference material local. Resolve Mac hardware and OS support, update behavior, packaging, and release checks. Confirm the copyright-holder name before creating the final license file.
+14. Define public release details. Rotion is for personal use, with MIT-licensed public source code and versioned downloads on GitHub and app downloads on the user's website. Keep private Notion reference material local. Resolve Mac hardware and OS support, update behavior, packaging, and release checks. The user approved MIT. The current copyright notice names Rotion contributors; final public release details remain deferred.
 
 ## PRD status
 
-The full PRD is pending the interview and state study. Do not label a draft complete while these decisions are open. No implementation or GitHub publication is authorized by this record.
+The PRD is the implementation baseline. The user authorized implementation on 2026-11-07. The state study and some detailed behavior remain open. GitHub and website publication are deferred.

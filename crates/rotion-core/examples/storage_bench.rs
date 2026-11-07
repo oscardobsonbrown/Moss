@@ -4,7 +4,7 @@
 //!   cargo run --release -p rotion-core --example storage_bench -- --small --path /tmp/rotion-bench-small.sqlite
 //! Full run (100,000 pages, 1,000,000 records):
 //!   cargo run --release -p rotion-core --example storage_bench -- --path /tmp/rotion-bench-full.sqlite
-//! Optional: --samples N (default 30). The path must not already exist.
+//! Optional: --samples N (default 30), --reuse to read an existing fixture. New paths must not exist.
 //! The fixture is kept on disk for inspection. Remove it manually when done.
 //! All samples follow fixture creation and a warm-up. OS cache is not controlled.
 use rotion_core::{
@@ -203,16 +203,18 @@ fn report(name: &str, times: &mut [f64], rows: usize) {
 fn main() -> Result<(), Box<dyn Error>> {
     let mut path = None;
     let mut small = false;
+    let mut reuse = false;
     let mut samples = 30usize;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--small" => small = true,
+            "--reuse" => reuse = true,
             "--path" => path = Some(PathBuf::from(args.next().ok_or("--path needs a value")?)),
             "--samples" => samples = args.next().ok_or("--samples needs a value")?.parse()?,
             "--help" | "-h" => {
                 println!(
-                    "Usage: storage_bench --path NEW_FILE [--small] [--samples N]\nThe full fixture has 100,000 pages and 1,000,000 records. The file is kept."
+                    "Usage: storage_bench --path NEW_FILE [--small] [--samples N] [--reuse]\nThe full fixture has 100,000 pages and 1,000,000 records. The file is kept."
                 );
                 return Ok(());
             }
@@ -224,25 +226,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let path = path.ok_or("--path is required and must not exist")?;
     // Fail instead of overwriting any existing user data.
-    drop(
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?,
-    );
+    if !reuse {
+        drop(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)?,
+        );
+    }
     let (pages, records) = if small {
         (100usize, 1_000usize)
     } else {
         (100_000, 1_000_000)
     };
     let setup = Instant::now();
-    populate(&path, pages, records)?;
+    if !reuse {
+        populate(&path, pages, records)?;
+    }
     let check = Connection::open(&path)?;
-    let actual_pages: usize = check.query_row("SELECT count(*) FROM pages", [], |r| r.get(0))?;
-    let actual_blocks: usize = check.query_row("SELECT count(*) FROM blocks", [], |r| r.get(0))?;
-    let actual_records: usize =
-        check.query_row("SELECT count(*) FROM records", [], |r| r.get(0))?;
-    if (actual_pages, actual_blocks, actual_records) != (pages, (pages - 1) * 3, records) {
+    let actual_pages: i64 = check.query_row("SELECT count(*) FROM pages", [], |r| r.get(0))?;
+    let actual_blocks: i64 = check.query_row("SELECT count(*) FROM blocks", [], |r| r.get(0))?;
+    let actual_records: i64 = check.query_row("SELECT count(*) FROM records", [], |r| r.get(0))?;
+    if (actual_pages, actual_blocks, actual_records)
+        != (pages as i64, ((pages - 1) * 3) as i64, records as i64)
+    {
         return Err("fixture counts do not match the requested scale".into());
     }
     drop(check);
@@ -252,15 +259,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         path.display(),
         setup.elapsed().as_secs_f64()
     );
-    println!(
-        "cache: fixture creation warmed the OS cache; samples follow warm-up. No uncached claim."
-    );
+    println!("cache: OS cache is uncontrolled; samples follow warm-up. No uncached claim.");
     let start = Instant::now();
-    let store = Store::open(&path)?;
+    let mut store = Store::open(&path)?;
     println!(
-        "store open after fixture creation: {:.3}ms (OS cache not controlled)",
+        "store open: {:.3}ms (OS cache not controlled)",
         start.elapsed().as_secs_f64() * 1000.0
     );
+    let sidebar_start = Instant::now();
+    let sidebar = store.list_pages(WORKSPACE)?;
+    println!(
+        "list all sidebar pages: returned_rows={} time={:.3}ms",
+        sidebar.len(),
+        sidebar_start.elapsed().as_secs_f64() * 1000.
+    );
+    drop(sidebar);
     let title_query = RecordQuery {
         sorts: vec![SortRule {
             property_id: "title".into(),
@@ -288,6 +301,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut title_times = Vec::with_capacity(samples);
     let mut filter_times = Vec::with_capacity(samples);
     let mut deep_times = Vec::with_capacity(samples);
+    let mut write_times = Vec::with_capacity(samples);
     let mut returned = [0usize; 6];
     // The first iteration is a warm-up and is excluded from all percentiles.
     for i in 0..=samples {
@@ -331,6 +345,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             returned = [1, b.len(), 1 + vb.len(), a.len(), f.len(), d.len()];
         }
     }
+    let edit_id = page_id(0);
+    let original = store.get_blocks(&edit_id)?;
+    for i in 0..=samples {
+        let mut edited = original.clone();
+        edited[0]
+            .text
+            .push_str(if i % 2 == 0 { " edit" } else { " saved" });
+        let start = Instant::now();
+        store.save_blocks(&edit_id, &edited)?;
+        if i > 0 {
+            write_times.push(start.elapsed().as_secs_f64() * 1000.);
+        }
+    }
+    store.save_blocks(&edit_id, &original)?;
+    report("save 3 blocks and update FTS", &mut write_times, 3);
     report("get_page", &mut page_times, returned[0]);
     report("get_blocks", &mut block_times, returned[1]);
     report("page plus blocks", &mut viewport_times, returned[2]);

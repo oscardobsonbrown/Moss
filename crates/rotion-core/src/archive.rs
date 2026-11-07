@@ -1,6 +1,5 @@
 use crate::{
-    Block, BlockKind, Database, Page, PageKind, PropertyKind, Record, Store, Workspace, new_id,
-    search,
+    Block, BlockKind, Database, Page, PropertyKind, Record, Store, Workspace, new_id, search,
 };
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -502,6 +501,7 @@ fn remap(p: &mut Payload, map: &HashMap<String, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PageKind;
     use serde_json::json;
 
     #[test]

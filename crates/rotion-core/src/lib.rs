@@ -1,5 +1,5 @@
-pub mod model;
 mod archive;
+pub mod model;
 mod schema;
 mod search;
 mod seeds;
