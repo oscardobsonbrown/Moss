@@ -1,0 +1,7 @@
+# Keep private Notion reference material local.
+/research/notion/
+
+# Build output and local macOS files.
+/target/
+/dist/
+.DS_Store
