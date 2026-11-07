@@ -7,7 +7,8 @@ use rusqlite::{
     Connection, OptionalExtension, Result, params, params_from_iter, types::Value as SqlValue,
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::path::Path;
+use serde_json::Value;
+use std::{collections::BTreeMap, path::Path};
 
 pub struct Store {
     pub(crate) conn: Connection,
@@ -74,7 +75,7 @@ impl Store {
         Ok(w)
     }
     pub fn list_pages(&self, workspace_id: &str) -> Result<Vec<Page>> {
-        collect_json(&mut self.conn.prepare("SELECT data FROM pages WHERE workspace_id=?1 AND deleted_at IS NULL ORDER BY json_extract(data,'$.created_at'),id")?, [workspace_id])
+        collect_json(&mut self.conn.prepare("SELECT data FROM pages WHERE workspace_id=?1 AND deleted_at IS NULL AND json_extract(data,'$.kind') <> 'record' ORDER BY json_extract(data,'$.created_at'),id")?, [workspace_id])
     }
     pub fn get_page(&self, id: &str) -> Result<Option<Page>> {
         search::page(&self.conn, id)
@@ -136,6 +137,13 @@ impl Store {
         if existing {
             let old = search::page(&self.conn, &page.id)?
                 .ok_or_else(|| invalid("page does not exist"))?;
+            if old.kind == PageKind::Record
+                && (old.title != page.title || old.parent_id != page.parent_id)
+            {
+                return Err(invalid(
+                    "record title or parent must be changed through the record API",
+                ));
+            }
             if old.workspace_id != page.workspace_id
                 || old.kind != page.kind
                 || old.created_at != page.created_at
@@ -267,8 +275,15 @@ impl Store {
         }
         if let Some(pid) = &record.page_id {
             let p = search::page(&self.conn, pid)?.ok_or_else(|| invalid("record page missing"))?;
-            if p.workspace_id != owner.workspace_id || p.deleted_at.is_some() {
-                return Err(invalid("record page outside workspace"));
+            if p.workspace_id != owner.workspace_id
+                || p.kind != PageKind::Record
+                || p.parent_id.as_deref() != Some(owner.id.as_str())
+                || p.deleted_at.is_some()
+            {
+                return Err(invalid("invalid record page"));
+            }
+            if p.title != record.title {
+                return Err(invalid("use rename_record to change a linked record title"));
             }
         }
         let old: Option<(String, Option<String>)> = self
@@ -283,6 +298,8 @@ impl Store {
             if id != record.database_id || pid != record.page_id {
                 return Err(invalid("record owner changed"));
             }
+        } else if record.page_id.is_some() {
+            return Err(invalid("link record pages with ensure_record_page"));
         }
         let tx = self.conn.transaction()?;
         tx.execute("INSERT INTO records(id,database_id,page_id,title,values_json,deleted_at,data) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET title=excluded.title,values_json=excluded.values_json,deleted_at=excluded.deleted_at,data=excluded.data",params![record.id,record.database_id,record.page_id,record.title,encode(&record.values)?,record.deleted_at,encode(record)?])?;
@@ -301,6 +318,164 @@ impl Store {
             )?;
         }
         tx.commit()
+    }
+    /// Create a record with caller-supplied property defaults.
+    pub fn create_record(
+        &mut self,
+        database_id: &str,
+        title: &str,
+        values: &BTreeMap<String, Value>,
+    ) -> Result<Record> {
+        let t = now();
+        let record = Record {
+            id: new_id(),
+            database_id: database_id.into(),
+            page_id: None,
+            title: title.into(),
+            values: values.clone(),
+            created_at: t.clone(),
+            updated_at: t,
+            deleted_at: None,
+        };
+        self.save_record(&record)?;
+        Ok(record)
+    }
+
+    /// Create the record's page once and link it in the same transaction.
+    pub fn ensure_record_page(&mut self, record_id: &str) -> Result<Page> {
+        let tx = self.conn.transaction()?;
+        let raw: String = tx
+            .query_row("SELECT data FROM records WHERE id=?1", [record_id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or_else(|| invalid("record missing"))?;
+        let mut record: Record = decode(raw)?;
+        if record.deleted_at.is_some() {
+            return Err(invalid("record in trash"));
+        }
+        let raw_db: String = tx
+            .query_row(
+                "SELECT data FROM databases WHERE id=?1",
+                [&record.database_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| invalid("database missing"))?;
+        let db: Database = decode(raw_db)?;
+        let owner =
+            search::page(&tx, &db.page_id)?.ok_or_else(|| invalid("database page missing"))?;
+        if owner.deleted_at.is_some() || owner.kind != PageKind::Database {
+            return Err(invalid("invalid database page"));
+        }
+        if let Some(id) = &record.page_id {
+            let page = search::page(&tx, id)?.ok_or_else(|| invalid("record page missing"))?;
+            if page.workspace_id != owner.workspace_id
+                || page.kind != PageKind::Record
+                || page.parent_id.as_deref() != Some(owner.id.as_str())
+                || page.deleted_at.is_some()
+            {
+                return Err(invalid("invalid record page"));
+            }
+            tx.commit()?;
+            return Ok(page);
+        }
+        let t = now();
+        let page = Page {
+            id: new_id(),
+            workspace_id: owner.workspace_id.clone(),
+            parent_id: Some(owner.id.clone()),
+            title: record.title.clone(),
+            icon: String::new(),
+            kind: PageKind::Record,
+            created_at: t.clone(),
+            updated_at: t.clone(),
+            deleted_at: None,
+            settings: Default::default(),
+        };
+        tx.execute(
+            "INSERT INTO pages(id,workspace_id,parent_id,deleted_at,data) VALUES(?1,?2,?3,NULL,?4)",
+            params![page.id, page.workspace_id, page.parent_id, encode(&page)?],
+        )?;
+        record.page_id = Some(page.id.clone());
+        record.updated_at = t;
+        tx.execute(
+            "UPDATE records SET page_id=?1,data=?2 WHERE id=?3",
+            params![page.id, encode(&record)?, record.id],
+        )?;
+        search::index(&tx, &format!("page:{}", page.id), &page, &page.title)?;
+        search::index(
+            &tx,
+            &format!("record:{}", record.id),
+            &page,
+            &format!("{} {}", record.title, encode(&record.values)?),
+        )?;
+        tx.commit()?;
+        Ok(page)
+    }
+
+    /// Rename a record and its linked page atomically.
+    pub fn rename_record(&mut self, record_id: &str, title: &str) -> Result<Record> {
+        let tx = self.conn.transaction()?;
+        let raw: String = tx
+            .query_row("SELECT data FROM records WHERE id=?1", [record_id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or_else(|| invalid("record missing"))?;
+        let mut record: Record = decode(raw)?;
+        if record.deleted_at.is_some() {
+            return Err(invalid("record in trash"));
+        }
+        let raw_db: String = tx
+            .query_row(
+                "SELECT data FROM databases WHERE id=?1",
+                [&record.database_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| invalid("database missing"))?;
+        let db: Database = decode(raw_db)?;
+        let owner =
+            search::page(&tx, &db.page_id)?.ok_or_else(|| invalid("database page missing"))?;
+        if owner.deleted_at.is_some() {
+            return Err(invalid("database in trash"));
+        }
+        let stamp = now();
+        record.title = title.into();
+        record.updated_at = stamp.clone();
+        let target = if let Some(id) = &record.page_id {
+            let mut page = search::page(&tx, id)?.ok_or_else(|| invalid("record page missing"))?;
+            if page.workspace_id != owner.workspace_id
+                || page.kind != PageKind::Record
+                || page.parent_id.as_deref() != Some(owner.id.as_str())
+                || page.deleted_at.is_some()
+            {
+                return Err(invalid("invalid record page"));
+            }
+            page.title = title.into();
+            page.updated_at = stamp;
+            tx.execute(
+                "UPDATE pages SET data=?1 WHERE id=?2",
+                params![encode(&page)?, page.id],
+            )?;
+            search::index(&tx, &format!("page:{}", page.id), &page, &page.title)?;
+            page
+        } else {
+            owner
+        };
+        tx.execute(
+            "UPDATE records SET title=?1,data=?2 WHERE id=?3",
+            params![record.title, encode(&record)?, record.id],
+        )?;
+        search::index(
+            &tx,
+            &format!("record:{}", record.id),
+            &target,
+            &format!("{} {}", record.title, encode(&record.values)?),
+        )?;
+        tx.commit()?;
+        Ok(record)
     }
     pub fn query_records(&self, database_id: &str, query: &RecordQuery) -> Result<Vec<Record>> {
         let db = self

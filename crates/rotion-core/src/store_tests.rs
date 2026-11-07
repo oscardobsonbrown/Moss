@@ -203,3 +203,64 @@ fn old_pages_without_settings_keep_their_archive_encoding() {
     assert_eq!(page.settings, PageSettings::default());
     assert_eq!(serde_json::to_value(page).unwrap(), old);
 }
+
+#[test]
+fn record_page_is_created_once_hidden_and_renamed_atomically() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Records", "").unwrap();
+    let db = database(&mut store, &workspace.id);
+    let values = BTreeMap::from([("status".into(), json!("Open"))]);
+    let mut record = store.create_record(&db.id, "Original", &values).unwrap();
+    let page = store.ensure_record_page(&record.id).unwrap();
+    assert_eq!(store.ensure_record_page(&record.id).unwrap().id, page.id);
+    assert_eq!(page.kind, PageKind::Record);
+    assert_eq!(page.parent_id.as_deref(), Some(db.page_id.as_str()));
+    assert!(
+        !store
+            .list_pages(&workspace.id)
+            .unwrap()
+            .iter()
+            .any(|p| p.id == page.id)
+    );
+    assert_eq!(
+        store
+            .get_record(&record.id)
+            .unwrap()
+            .unwrap()
+            .page_id
+            .as_deref(),
+        Some(page.id.as_str())
+    );
+    let block = Block::paragraph(&page.id, "Unique record content", 0);
+    store.save_blocks(&page.id, &[block.clone()]).unwrap();
+    assert_eq!(store.get_blocks(&page.id).unwrap(), vec![block]);
+    assert_eq!(
+        store
+            .search("Unique record content", Some(&workspace.id), 10)
+            .unwrap()[0]
+            .page_id,
+        page.id
+    );
+    let renamed = store.rename_record(&record.id, "Revised").unwrap();
+    assert_eq!(renamed.title, "Revised");
+    assert_eq!(store.get_page(&page.id).unwrap().unwrap().title, "Revised");
+    assert_eq!(
+        store.get_record(&record.id).unwrap().unwrap().values,
+        values
+    );
+    record.page_id = Some(page.id.clone());
+    record.title = "Unsafe change".into();
+    assert!(store.save_record(&record).is_err());
+    assert_eq!(store.get_page(&page.id).unwrap().unwrap().title, "Revised");
+    record.database_id = new_id();
+    assert!(store.save_record(&record).is_err());
+    assert!(
+        store
+            .create_record(
+                &db.id,
+                "Bad",
+                &BTreeMap::from([("unknown".into(), json!(true))])
+            )
+            .is_err()
+    );
+}
