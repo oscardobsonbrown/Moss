@@ -326,7 +326,11 @@ impl Store {
         }
         for sort in &query.sorts {
             sql.push_str(&property_expr(&sort.property_id, &db, &mut args)?);
-            sql.push_str(if sort.descending { " DESC, " } else { " ASC, " });
+            sql.push_str(if sort.descending {
+                " DESC NULLS LAST, "
+            } else {
+                " ASC NULLS LAST, "
+            });
         }
         sql.push_str("id ASC LIMIT ? OFFSET ?");
         args.push(SqlValue::Integer(query.limit.min(1000) as i64));
@@ -499,8 +503,8 @@ fn filter_sql(
                     };
                     args.push(v);
                     let operator = match op {
-                        FilterOp::Eq => "=",
-                        FilterOp::Ne => "<>",
+                        FilterOp::Eq => "IS",
+                        FilterOp::Ne => "IS NOT",
                         FilterOp::Gt => ">",
                         FilterOp::Ge => ">=",
                         FilterOp::Lt => "<",
@@ -531,5 +535,99 @@ fn filter_sql(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod query_regression_tests {
+    use super::*;
+    use crate::{Database, FilterRule, Property, PropertyKind, SortRule};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn missing_values_sort_last_in_both_directions_and_null_filters_work() {
+        let mut store = Store::in_memory().unwrap();
+        let workspace = store.create_workspace("Test", "").unwrap();
+        let page = store
+            .create_page(&workspace.id, None, "Records", "", PageKind::Database)
+            .unwrap();
+        let db = Database {
+            id: new_id(),
+            page_id: page.id,
+            name: "Records".into(),
+            properties: vec![Property {
+                id: "rank".into(),
+                name: "Rank".into(),
+                kind: PropertyKind::Number,
+                config: json!({}),
+            }],
+            views: vec![],
+        };
+        store.save_database(&db).unwrap();
+        for (name, rank) in [("low", Some(1)), ("high", Some(2)), ("missing", None)] {
+            let mut values = BTreeMap::new();
+            if let Some(rank) = rank {
+                values.insert("rank".into(), json!(rank));
+            }
+            let t = now();
+            store
+                .save_record(&Record {
+                    id: new_id(),
+                    database_id: db.id.clone(),
+                    page_id: None,
+                    title: name.into(),
+                    values,
+                    created_at: t.clone(),
+                    updated_at: t,
+                    deleted_at: None,
+                })
+                .unwrap();
+        }
+        for (descending, expected) in [
+            (false, vec!["low", "high", "missing"]),
+            (true, vec!["high", "low", "missing"]),
+        ] {
+            let q = RecordQuery {
+                sorts: vec![SortRule {
+                    property_id: "rank".into(),
+                    descending,
+                }],
+                ..RecordQuery::default()
+            };
+            let names: Vec<String> = store
+                .query_records(&db.id, &q)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.title)
+                .collect();
+            assert_eq!(names, expected);
+            let first = RecordQuery {
+                limit: 1,
+                ..q.clone()
+            };
+            let second = RecordQuery {
+                limit: 1,
+                offset: 1,
+                ..q
+            };
+            assert_eq!(
+                store.query_records(&db.id, &first).unwrap()[0].title,
+                expected[0]
+            );
+            assert_eq!(
+                store.query_records(&db.id, &second).unwrap()[0].title,
+                expected[1]
+            );
+        }
+        let q = RecordQuery {
+            filter: Some(FilterExpr::Rule(FilterRule {
+                property_id: "rank".into(),
+                op: FilterOp::Eq,
+                value: json!(null),
+            })),
+            ..RecordQuery::default()
+        };
+        assert_eq!(store.query_records(&db.id, &q).unwrap()[0].title, "missing");
     }
 }

@@ -11,6 +11,7 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS databases(id TEXT PRIMARY KEY, page_id TEXT NOT NULL UNIQUE REFERENCES pages(id) ON DELETE CASCADE, data TEXT NOT NULL CHECK(json_valid(data)));
         CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, database_id TEXT NOT NULL REFERENCES databases(id) ON DELETE CASCADE, page_id TEXT REFERENCES pages(id) ON DELETE CASCADE, title TEXT NOT NULL, values_json TEXT NOT NULL CHECK(json_valid(values_json)), deleted_at TEXT, data TEXT NOT NULL CHECK(json_valid(data)));
         CREATE INDEX IF NOT EXISTS records_database ON records(database_id, deleted_at, id);
+        CREATE INDEX IF NOT EXISTS records_database_title ON records(database_id, deleted_at, title, id);
         CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(key UNINDEXED, page_id UNINDEXED, workspace_id UNINDEXED, body, tokenize='unicode61');
         CREATE TRIGGER IF NOT EXISTS page_search_delete AFTER DELETE ON pages BEGIN DELETE FROM search_fts WHERE page_id=old.id; END;
         CREATE TRIGGER IF NOT EXISTS block_search_delete AFTER DELETE ON blocks BEGIN DELETE FROM search_fts WHERE key='block:' || old.id; END;
