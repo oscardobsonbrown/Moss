@@ -40,6 +40,14 @@ struct Payload {
     blocks: Vec<Block>,
     databases: Vec<Database>,
     records: Vec<Record>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    record_trash_roots: Vec<RecordTrashRoot>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordTrashRoot {
+    record_id: String,
+    root_id: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,12 +126,23 @@ impl Store {
         let blocks=decode_rows(&mut self.conn.prepare("SELECT b.data FROM blocks b JOIN pages p ON p.id=b.page_id WHERE p.workspace_id=?1 ORDER BY b.id")?,workspace_id)?;
         let databases=decode_rows(&mut self.conn.prepare("SELECT d.data FROM databases d JOIN pages p ON p.id=d.page_id WHERE p.workspace_id=?1 ORDER BY d.id")?,workspace_id)?;
         let records=decode_rows(&mut self.conn.prepare("SELECT r.data FROM records r JOIN databases d ON d.id=r.database_id JOIN pages p ON p.id=d.page_id WHERE p.workspace_id=?1 ORDER BY r.id")?,workspace_id)?;
+        let record_trash_roots = {
+            let mut stmt = self.conn.prepare("SELECT t.record_id,t.root_id FROM record_trash_roots t JOIN records r ON r.id=t.record_id JOIN databases d ON d.id=r.database_id JOIN pages p ON p.id=d.page_id WHERE p.workspace_id=?1 ORDER BY t.record_id")?;
+            let rows = stmt.query_map([workspace_id], |r| {
+                Ok(RecordTrashRoot {
+                    record_id: r.get(0)?,
+                    root_id: r.get(1)?,
+                })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
         let payload = Payload {
             workspace,
             pages,
             blocks,
             databases,
             records,
+            record_trash_roots,
         };
         validate(&payload)?;
         let envelope = Envelope {
@@ -234,6 +253,12 @@ impl Store {
                     &format!("{} {}", r.title, serde_json::to_string(&r.values)?),
                 )?;
             }
+        }
+        for tag in &payload.record_trash_roots {
+            tx.execute(
+                "INSERT INTO record_trash_roots(record_id,root_id) VALUES (?1,?2)",
+                params![tag.record_id, tag.root_id],
+            )?;
         }
         tx.commit()?;
         Ok(payload.workspace)
@@ -375,6 +400,20 @@ fn validate(p: &Payload) -> Result<(), ArchiveError> {
             }
         }
     }
+    let mut tagged = HashSet::new();
+    for tag in &p.record_trash_roots {
+        let record = p
+            .records
+            .iter()
+            .find(|r| r.id == tag.record_id)
+            .ok_or_else(|| invalid("missing trashed record"))?;
+        if record.deleted_at.is_none()
+            || !tagged.insert(&tag.record_id)
+            || (tag.root_id != tag.record_id && !pages.contains_key(tag.root_id.as_str()))
+        {
+            return Err(invalid("invalid record trash root"));
+        }
+    }
     Ok(())
 }
 
@@ -484,6 +523,10 @@ fn remap(p: &mut Payload, map: &HashMap<String, String>) {
             }
             optional_id(&mut v.query.group_by, map);
         }
+    }
+    for tag in &mut p.record_trash_roots {
+        id(&mut tag.record_id, map);
+        id(&mut tag.root_id, map);
     }
     for r in &mut p.records {
         id(&mut r.id, map);

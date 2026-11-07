@@ -264,3 +264,182 @@ fn record_page_is_created_once_hidden_and_renamed_atomically() {
             .is_err()
     );
 }
+
+#[test]
+fn record_and_page_trash_stay_in_sync_with_database_cascade() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Trash", "").unwrap();
+    let db = database(&mut store, &workspace.id);
+    let first = store
+        .create_record(&db.id, "First", &BTreeMap::new())
+        .unwrap();
+    let second = store
+        .create_record(&db.id, "Second", &BTreeMap::new())
+        .unwrap();
+    let unlinked = store
+        .create_record(&db.id, "Third", &BTreeMap::new())
+        .unwrap();
+    let first_page = store.ensure_record_page(&first.id).unwrap();
+    let second_page = store.ensure_record_page(&second.id).unwrap();
+    store
+        .save_blocks(
+            &first_page.id,
+            &[Block::paragraph(&first_page.id, "firstblockunique", 0)],
+        )
+        .unwrap();
+    store.delete_record(&first.id).unwrap();
+    assert!(
+        store
+            .get_page(&first_page.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(
+        store
+            .search("firstblockunique", Some(&workspace.id), 10)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .query_records(&db.id, &RecordQuery::default())
+            .unwrap()
+            .len(),
+        2
+    );
+    store.restore_record(&first.id).unwrap();
+    assert_eq!(
+        store
+            .search("firstblockunique", Some(&workspace.id), 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    store.delete_page(&first_page.id).unwrap();
+    assert!(
+        store
+            .get_record(&first.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    store.restore_page(&first_page.id).unwrap();
+    assert!(
+        store
+            .get_record(&first.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_none()
+    );
+    store.delete_record(&first.id).unwrap();
+    store.delete_page(&db.page_id).unwrap();
+    assert!(
+        store
+            .get_record(&second.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(
+        store
+            .get_record(&unlinked.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(
+        store
+            .get_page(&second_page.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(store.restore_record(&second.id).is_err());
+    store.restore_page(&db.page_id).unwrap();
+    assert!(
+        store
+            .get_record(&first.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(
+        store
+            .get_page(&first_page.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some()
+    );
+    assert!(
+        store
+            .get_record(&second.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_none()
+    );
+    assert!(
+        store
+            .get_record(&unlinked.id)
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .query_records(&db.id, &RecordQuery::default())
+            .unwrap()
+            .len(),
+        2
+    );
+    store.restore_record(&first.id).unwrap();
+    assert_eq!(
+        store
+            .query_records(&db.id, &RecordQuery::default())
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn archive_preserves_record_trash_roots() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Archive trash", "").unwrap();
+    let db = database(&mut store, &workspace.id);
+    let first = store
+        .create_record(&db.id, "Already deleted", &BTreeMap::new())
+        .unwrap();
+    let second = store
+        .create_record(&db.id, "Deleted with database", &BTreeMap::new())
+        .unwrap();
+    store.ensure_record_page(&first.id).unwrap();
+    store.ensure_record_page(&second.id).unwrap();
+    store.delete_record(&first.id).unwrap();
+    store.delete_page(&db.page_id).unwrap();
+    let archive = store.export_workspace(&workspace.id).unwrap();
+    let copy = store.import_workspace(&archive).unwrap();
+    let trashed_db = store
+        .list_trash(&copy.id)
+        .unwrap()
+        .into_iter()
+        .find(|p| p.kind == PageKind::Database)
+        .unwrap();
+    store.restore_page(&trashed_db.id).unwrap();
+    let copied_db = store.get_database_by_page(&trashed_db.id).unwrap().unwrap();
+    let records = store
+        .query_records(&copied_db.id, &RecordQuery::default())
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].title, "Deleted with database");
+}

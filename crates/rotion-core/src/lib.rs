@@ -1,5 +1,6 @@
 mod archive;
 pub mod model;
+mod record_pages;
 mod schema;
 mod search;
 mod seeds;
