@@ -290,10 +290,7 @@ impl Store {
         } else {
             owner
         };
-        tx.execute(
-            "DELETE FROM search_fts WHERE key=?1",
-            [format!("record:{}", record.id)],
-        )?;
+        search::remove(&tx, &format!("record:{}", record.id))?;
         if record.deleted_at.is_none() {
             search::index(
                 &tx,

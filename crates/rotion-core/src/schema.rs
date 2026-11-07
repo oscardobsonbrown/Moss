@@ -19,6 +19,33 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
         CREATE TRIGGER IF NOT EXISTS block_search_delete AFTER DELETE ON blocks BEGIN DELETE FROM search_fts WHERE key='block:' || old.id; END;
         CREATE TRIGGER IF NOT EXISTS record_search_delete AFTER DELETE ON records BEGIN DELETE FROM search_fts WHERE key='record:' || old.id; END;"
     )?;
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version < 1 {
+        // Rebuild the FTS table once, retaining rowids and all existing content.
+        // The old schema and its triggers remain intact if this transaction fails.
+        conn.execute_batch(r#"
+            BEGIN IMMEDIATE;
+            DROP TRIGGER IF EXISTS page_search_delete;
+            DROP TRIGGER IF EXISTS block_search_delete;
+            DROP TRIGGER IF EXISTS record_search_delete;
+            ALTER TABLE search_fts RENAME TO search_fts_old;
+            CREATE VIRTUAL TABLE search_fts USING fts5(key, page_id UNINDEXED, workspace_id UNINDEXED, body, tokenize='unicode61');
+            INSERT INTO search_fts(rowid,key,page_id,workspace_id,body)
+                SELECT rowid,key,page_id,workspace_id,body FROM search_fts_old;
+            DROP TABLE search_fts_old;
+            CREATE TRIGGER page_search_delete AFTER DELETE ON pages BEGIN
+                DELETE FROM search_fts WHERE search_fts MATCH ('key : "' || replace('page:' || old.id, '"', '""') || '"') AND key='page:' || old.id;
+            END;
+            CREATE TRIGGER block_search_delete AFTER DELETE ON blocks BEGIN
+                DELETE FROM search_fts WHERE search_fts MATCH ('key : "' || replace('block:' || old.id, '"', '""') || '"') AND key='block:' || old.id;
+            END;
+            CREATE TRIGGER record_search_delete AFTER DELETE ON records BEGIN
+                DELETE FROM search_fts WHERE search_fts MATCH ('key : "' || replace('record:' || old.id, '"', '""') || '"') AND key='record:' || old.id;
+            END;
+            PRAGMA user_version=1;
+            COMMIT;
+        "#)?;
+    }
     conn.execute("DELETE FROM pages WHERE deleted_at IS NOT NULL AND julianday(deleted_at) <= julianday('now', '-30 days')", [])?;
     conn.execute("DELETE FROM records WHERE deleted_at IS NOT NULL AND julianday(deleted_at) <= julianday('now', '-30 days')", [])?;
     Ok(())
