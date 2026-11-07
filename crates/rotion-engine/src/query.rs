@@ -34,9 +34,14 @@ pub fn matches_filter(record: &Record, filter: &FilterExpr) -> bool {
                     .is_some_and(|(a, b)| a.contains(b))
                     || actual.as_array().is_some_and(|a| a.contains(&rule.value))
             };
+            let equal = if actual.is_number() && rule.value.is_number() {
+                cmp == Some(Ordering::Equal)
+            } else {
+                actual == &rule.value
+            };
             match rule.op {
-                FilterOp::Eq => actual == &rule.value,
-                FilterOp::Ne => actual != &rule.value,
+                FilterOp::Eq => equal,
+                FilterOp::Ne => !equal,
                 FilterOp::Contains => contains(),
                 FilterOp::NotContains => !contains(),
                 FilterOp::Gt => cmp == Some(Ordering::Greater),
@@ -50,6 +55,7 @@ pub fn matches_filter(record: &Record, filter: &FilterExpr) -> bool {
     }
 }
 /// Intended for small, already-loaded projections. Storage owns paged queries.
+/// Missing and null values sort last, regardless of direction.
 pub fn apply_query(records: &[Record], query: &RecordQuery) -> Vec<Record> {
     let mut result: Vec<_> = records
         .iter()
@@ -71,6 +77,10 @@ pub fn apply_query(records: &[Record], query: &RecordQuery) -> Vec<Record> {
                 compare(a, b).unwrap_or_else(|| a.to_string().cmp(&b.to_string()))
             };
             if order != Ordering::Equal {
+                // Missing and null values sort last in either direction.
+                if a.is_null() || b.is_null() {
+                    return order;
+                }
                 return if sort.descending {
                     order.reverse()
                 } else {

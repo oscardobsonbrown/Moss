@@ -135,3 +135,101 @@ fn dependency_shift_chain_and_cycle() {
         day(12)
     );
 }
+
+#[test]
+fn boolean_calls_short_circuit_and_missing_properties_are_null() {
+    let property = Property {
+        id: "p".into(),
+        name: "Optional".into(),
+        kind: PropertyKind::Number,
+        config: Value::Null,
+    };
+    let values = BTreeMap::new();
+    assert_eq!(
+        evaluate("empty(prop(\"Optional\"))", &values, &[property.clone()]).unwrap(),
+        json!(true)
+    );
+    assert_eq!(
+        evaluate("and(false, 1 / 0 > 0)", &values, &[]).unwrap(),
+        json!(false)
+    );
+    assert_eq!(
+        evaluate("or(true, 1 / 0 > 0)", &values, &[]).unwrap(),
+        json!(true)
+    );
+    assert_eq!(
+        evaluate("ifs(false, 1 / 0, true, 7, 0)", &values, &[]).unwrap(),
+        json!(7.0)
+    );
+    assert!(evaluate("and()", &values, &[]).is_err());
+    assert!(evaluate("or(false, 1 / 0 > 0)", &values, &[]).is_err());
+    let duplicate = Property {
+        id: "other".into(),
+        ..property.clone()
+    };
+    assert!(evaluate("prop(\"Optional\")", &values, &[property, duplicate]).is_err());
+}
+
+#[test]
+fn query_compares_numeric_representations_and_sorts_missing_last() {
+    let mut missing = record("missing", 0);
+    missing.values.clear();
+    let rows = vec![record("low", 2), missing, record("high", 5)];
+    let filter = FilterExpr::Rule(FilterRule {
+        property_id: "score".into(),
+        op: FilterOp::Eq,
+        value: json!(2.0),
+    });
+    assert_eq!(
+        apply_query(
+            &rows,
+            &RecordQuery {
+                filter: Some(filter),
+                ..RecordQuery::default()
+            }
+        )[0]
+        .id,
+        "low"
+    );
+    for descending in [false, true] {
+        let query = RecordQuery {
+            sorts: vec![SortRule {
+                property_id: "score".into(),
+                descending,
+            }],
+            ..RecordQuery::default()
+        };
+        assert_eq!(apply_query(&rows, &query).last().unwrap().id, "missing");
+    }
+}
+
+#[test]
+fn dependency_maintains_gap_and_checks_cycles_even_without_shifting() {
+    let tasks = vec![
+        Task {
+            id: "a".into(),
+            start: day(9),
+            end: day(10),
+        },
+        Task {
+            id: "b".into(),
+            start: day(13),
+            end: day(14),
+        },
+    ];
+    let edges = vec![Dependency {
+        before: "a".into(),
+        after: "b".into(),
+    }];
+    let shifted =
+        shift_dependencies(&tasks, &edges, "a", day(11), ShiftMode::MaintainGap, false).unwrap();
+    assert_eq!((shifted[1].start, shifted[1].end), (day(15), day(16)));
+    let cycle = vec![
+        edges[0].clone(),
+        Dependency {
+            before: "b".into(),
+            after: "a".into(),
+        },
+    ];
+    assert!(shift_dependencies(&tasks, &cycle, "a", day(11), ShiftMode::None, false).is_err());
+}

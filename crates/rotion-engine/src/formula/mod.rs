@@ -95,6 +95,18 @@ fn eval(
                 }
                 return eval(args.last().unwrap(), values, properties);
             }
+            if name == "and" || name == "or" {
+                if args.is_empty() {
+                    return Err(error(format!("{name} requires at least one argument")));
+                }
+                for arg in args {
+                    let result = boolean(&eval(arg, values, properties)?)?;
+                    if (name == "and" && !result) || (name == "or" && result) {
+                        return Ok(json!(result));
+                    }
+                }
+                return Ok(json!(name == "and"));
+            }
             if name == "prop" {
                 if args.len() != 1 {
                     return Err(error("prop requires one argument"));
@@ -103,14 +115,21 @@ fn eval(
                 let key = key
                     .as_str()
                     .ok_or_else(|| error("prop requires a string"))?;
-                let id = properties
-                    .iter()
-                    .find(|p| p.id == key || p.name == key)
-                    .map(|p| p.id.as_str())
-                    .unwrap_or(key);
-                if !properties.iter().any(|p| p.id == id) && !values.contains_key(id) {
-                    return Err(error(format!("Unknown property: {key}")));
-                }
+                let id = if let Some(property) = properties.iter().find(|p| p.id == key) {
+                    property.id.as_str()
+                } else {
+                    let mut named = properties.iter().filter(|p| p.name == key);
+                    if let Some(property) = named.next() {
+                        if named.next().is_some() {
+                            return Err(error(format!("Ambiguous property name: {key}")));
+                        }
+                        property.id.as_str()
+                    } else if values.contains_key(key) {
+                        key
+                    } else {
+                        return Err(error(format!("Unknown property: {key}")));
+                    }
+                };
                 return Ok(values.get(id).cloned().unwrap_or(Value::Null));
             }
             let evaluated = args
