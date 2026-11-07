@@ -11,3 +11,4 @@ uuid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 rusqlite.workspace = true
+sha2 = "0.10"
