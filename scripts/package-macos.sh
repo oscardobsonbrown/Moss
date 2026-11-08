@@ -2,24 +2,33 @@
 set -eu
 cd "$(dirname "$0")/.."
 profile="${1:-release}"
-if [ "$profile" = debug ]; then
-    cargo build -p rotion --jobs 2
-else
-    cargo build --release -p rotion --jobs 2
+version="${MOSS_VERSION:-0.1.0}"
+if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+    printf '%s\n' "MOSS_VERSION must be a stable semantic version." >&2
+    exit 1
 fi
-app="dist/Rotion.app"
+if [ "$profile" = debug ]; then
+    cargo build -p moss --jobs 2
+else
+    cargo build --release -p moss --jobs 2
+fi
+app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "target/$profile/rotion" "$app/Contents/MacOS/Rotion"
-cp crates/rotion-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
-cp crates/rotion-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"
+cp "target/$profile/moss" "$app/Contents/MacOS/Moss"
+cp crates/moss-app/assets/Moss.icns "$app/Contents/Resources/Moss.icns"
+cp crates/moss-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
+cp crates/moss-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"
+cp crates/moss-app/assets/phosphor/LICENSE "$app/Contents/Resources/Phosphor-MIT.txt"
+cp crates/moss-app/assets/emoji/LICENSE-UNICODE.txt "$app/Contents/Resources/Unicode-LICENSE.txt"
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>Rotion</string>
-<key>CFBundleIdentifier</key><string>app.rotion.desktop</string>
-<key>CFBundleName</key><string>Rotion</string>
-<key>CFBundleDisplayName</key><string>Rotion</string>
+<key>CFBundleExecutable</key><string>Moss</string>
+<key>CFBundleIdentifier</key><string>app.moss.desktop</string>
+<key>CFBundleName</key><string>Moss</string>
+<key>CFBundleDisplayName</key><string>Moss</string>
+<key>CFBundleIconFile</key><string>Moss</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
@@ -27,5 +36,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>NSSupportsAutomaticTermination</key><false/>
 </dict></plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 printf '%s\n' "Built $app (local, ad hoc signature)."

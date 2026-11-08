@@ -4,7 +4,7 @@ Date: 2026-11-07. Native Notion was checked with task-created sample data. Raw s
 
 ## Create paths
 
-| Control | Rotion behavior |
+| Control | Moss behavior |
 | --- | --- |
 | Table footer New page | Create a blank saved row and focus its title cell. Enter ends editing. |
 | List footer New page | Create a blank saved row and focus its title. Enter ends editing. |
@@ -15,7 +15,7 @@ Date: 2026-11-07. Native Notion was checked with task-created sample data. Raw s
 | Timeline empty track, drag | Show the selected range, then create a dated item with its inline title on the bar. Both drag directions work. |
 | Toolbar New | Open a saved record page in the view's open mode. |
 
-The observed configurations use Side peek for Table, Board, List and Timeline, and Centre peek for Gallery and Calendar. Rotion uses these initial configurations. A view config can override `open_mode` with `side` or `center`; a settings control for this is still required. These are observed configurations, not a claim that all Notion views have the same defaults.
+The observed configurations use Side peek for Table, Board, List and Timeline, and Centre peek for Gallery and Calendar. Moss uses these initial configurations. A view config can override `open_mode` with `side` or `center`; a settings control for this is still required. These are observed configurations, not a claim that all Notion views have the same defaults.
 
 A record page has a live title, properties and editable blocks. Enter from the title starts the page body. Open as page uses the same saved page in a tab. Record pages do not appear as separate Private sidebar pages. Title changes in a row, peek or full page update the linked record and page together.
 

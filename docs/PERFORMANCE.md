@@ -1,6 +1,6 @@
 # Performance contract: working draft
 
-Status: requirement record. No Rotion benchmark has run. App implementation has not started.
+Status: active requirement and measurement contract. Storage measurements exist in PERFORMANCE-RESULTS.md. Million-row Rune UI measurements are in progress; no timing target is established by the earlier storage results.
 
 ## Confirmed requirement
 
@@ -8,13 +8,15 @@ On this Mac, opening ordinary content must take **less than 8.8 ms**, including 
 
 For the single-million-row database case, the real first viewport must be ready for input **within 20 ms**, including disk reads. This replaces the original 8.8 ms limit for that case. Ordinary content keeps the 8.8 ms target.
 
-This content-open rule applies while Rotion is running. It includes uncached disk reads.
+This content-open rule applies while Moss is running. It includes uncached disk reads.
 
 Cold start has a separate **300 ms** target, from launch request to the real first viewport ready for input, at the same workspace size on this Mac.
 
 After Quit, startup restores only the last active workspace window and its tabs. Measure the 300 ms target against that restored window's first real viewport. Other workspace windows remain closed.
 
 The result must be the real first viewport, ready for input. Text and database values must be correct. A blank shell, spinner, or placeholder does not pass. Content outside the viewport can load as needed.
+
+The million-row Table test must use one logical scroll range covering every record. Reading and rendering only a bounded window is expected. A test of a 100- or 999-row page in that database is a paged baseline, not a full million-row scroll test. Test the first, middle and final ranges, rapid scrolling, deep scrollbar jumps, editing, and bounded memory. Report every query or layout that still uses pagination.
 
 On a pointer-triggered tab switch, content appears immediately while only the active-tab indicator animates. This animation must not delay content readiness. Keyboard-triggered tab switches are fully instant. All database view switches are instant.
 

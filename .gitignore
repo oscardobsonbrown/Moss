@@ -8,3 +8,6 @@
 
 # Local renderer output.
 /artifacts/
+
+# Python cache files.
+__pycache__/

@@ -22,11 +22,11 @@ The app now pins this revision as its Rune dependency. The first native editor a
 - `rune-readme.md`: framework README downloaded from the official `dev` branch.
 - `hello-main.rs`: official starter example downloaded from the same branch.
 
-These source files are research material. They are not Rotion implementation.
+These source files are research material. They are not Moss implementation.
 
 ## Risks to test
 
-- The framework's launch notes report about 300 ms for a small app's first window with content on Apple silicon. This is a reported source result, not a Rotion measurement. The 8.8 ms content-open requirement needs an explicit decision about launch from a stopped process. Source: the framework README, `Launching fast`.
+- The framework's launch notes report about 300 ms for a small app's first window with content on Apple silicon. This is a reported source result, not a Moss measurement. The 8.8 ms content-open requirement needs an explicit decision about launch from a stopped process. Source: the framework README, `Launching fast`.
 - Rune's default macOS font smoothing differs from its documented browser-style mode. Exact Notion text matching requires a comparison of the font, scale, smoothing, and blend settings. Do not assume default Rune text matches the reference.
 
 - Text shaping, selection, IME, bidirectional text, rich paste, and undo across blocks.

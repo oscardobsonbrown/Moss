@@ -2,7 +2,7 @@
 
 Status: the user selected all five scenarios. The fixture details below are a working test specification. No app tests have run.
 
-Use the [video references](../research/notion/WORKFLOW-VIDEOS.md) for workflow ideas. Build these workspaces from blank pages with sample data. They are Rotion test workspaces, not requests to create new Notion workspaces or buy templates.
+Use the [video references](../research/notion/WORKFLOW-VIDEOS.md) for workflow ideas. Build these workspaces from blank pages with sample data. They are Moss test workspaces, not requests to create new Notion workspaces or buy templates.
 
 ## Common checks
 
@@ -14,11 +14,11 @@ For each workspace:
 4. Reopen saved local content with no connection. Network work must not block it.
 5. Close its window and reopen it. Check the saved tab, scroll, selection, and workspace rules where applicable.
 6. Delete and restore a sample page or record through Trash. Check its content and relationships after restore.
-7. Export a Rotion archive and open it as a separate workspace. Compare content, attachments, properties, formulas, relations, views, templates, and stored automation configuration.
+7. Export a Moss archive and open it as a separate workspace. Compare content, attachments, properties, formulas, relations, views, templates, and stored automation configuration.
 8. Inspect Markdown/CSV, HTML, and PDF exports and the report of any losses.
 9. Check light and dark themes, keyboard focus, keyboard commands, and the selected pointer-animation rules.
-10. Set a date reminder, close all Rotion windows, and keep the service running. Check that a local macOS notification arrives at the configured time when notifications are allowed.
-11. Resume after several reminder times and automation times were missed. Check that Rotion shows one overdue-reminder summary and does not run missed automation occurrences.
+10. Set a date reminder, close all Moss windows, and keep the service running. Check that a local macOS notification arrives at the configured time when notifications are allowed.
+11. Resume after several reminder times and automation times were missed. Check that Moss shows one overdue-reminder summary and does not run missed automation occurrences.
 12. Use a controlled test clock to check Trash retention. Deleted pages and records must remain restorable before the 30-day deadline and expire after that deadline. Do not advance the Mac's clock or use personal data for this test.
 
 Measure ordinary first-viewport readiness against 8.8 ms, including disk reads. Use a separate scale fixture with 100,000 pages and one database of 1 million rows; that database's first-viewport limit is 20 ms. Cold start has the separate 300 ms limit. Use the full [performance contract](PERFORMANCE.md). A workflow demonstration is not a timing result.

@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: moss-release
+  queue: max
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_release_version.py'
+          cargo test --workspace --locked --quiet
+
+      - name: Select version
+        id: version
+        run: echo "tag=$(python3 scripts/release_version.py "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package Moss
+        env:
+          MOSS_VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          MOSS_VERSION="${MOSS_VERSION#v}" scripts/package-macos.sh
+          ditto -c -k --sequesterRsrc --keepParent dist/Moss.app "dist/Moss-${{ steps.version.outputs.tag }}-macos-arm64.zip"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          archive="dist/Moss-${TAG}-macos-arm64.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$archive" --clobber
+          else
+            gh release create "$TAG" "$archive" --target "$GITHUB_SHA" --title "Moss $TAG" --generate-notes
+          fi
