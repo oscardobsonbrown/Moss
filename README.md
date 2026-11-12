@@ -18,7 +18,7 @@ Data is saved in `~/Library/Application Support/Moss`. Set `MOSS_DATA_DIR` to us
 MOSS_DATA_DIR=/tmp/moss-demo MOSS_DEMO=1 cargo run -p moss
 ```
 
-Build the local macOS app bundle `dist/Moss.app` with `scripts/package-macos.sh`. The Moss icon uses the supplied reference and a Sentient-style M. It uses an ad hoc signature; it is not a signed or notarized public release.
+Build the macOS app with `scripts/package-macos.sh`. Local builds create `dist/Moss.app` and replace `/Applications/Moss.app`; restart Moss to use the new build. CI packages the app without installing it. The Moss icon uses the supplied reference and a Sentient-style M. It uses an ad hoc signature; it is not a signed or notarized public release.
 
 ## Releases
 

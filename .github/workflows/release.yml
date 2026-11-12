@@ -25,7 +25,7 @@ jobs:
 
       - name: Test
         run: |
-          python3 -m unittest discover -s scripts -p 'test_release_version.py'
+          python3 -m unittest discover -s scripts -p 'test_*.py'
           cargo test --workspace --locked --quiet
 
       - name: Select version

@@ -40,3 +40,6 @@ PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
 codesign --force --sign - "$app"
 printf '%s\n' "Built $app (local, ad hoc signature)."
+if [ "${CI:-}" != true ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
+    scripts/install-macos.sh "$app" /Applications/Moss.app
+fi
