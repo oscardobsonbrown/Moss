@@ -294,6 +294,10 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
+                .on_scroll_offset({
+                    let scroll = s.sidebar_sections.scroll.clone();
+                    move |position| scroll.set(position)
+                })
                 .child(super::sidebar_sections::view(s, t)),
         )
         .child(el().h(12.))

@@ -47,6 +47,13 @@ fn init() -> State {
     State::open(State::data_path(), None).expect("Could not open Moss data")
 }
 fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
+    if event.key == Key::Escape && s.sidebar_sections.page_drag.is_some() {
+        s.sidebar_sections.page_drag = None;
+        s.sidebar_sections.page_drag_cancelled = true;
+        s.sidebar_sections.suppress_page_press = true;
+        tx.instant();
+        return true;
+    }
     if event.key == Key::Escape && s.database_views.calendar.schedule.is_some() {
         s.database_views.calendar.schedule = None;
         tx.instant();
@@ -166,11 +173,12 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
 fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
     let records = records::poll(s, time, tx);
     let sidebar = sidebar_reveal::poll(s, time, tx);
+    let sidebar_drag = sidebar_sections::poll(s, time, tx);
     let views = database_views::poll(s, time, tx);
     let covers = page_covers::poll(s, time, tx);
     let place = place_property::poll(s, tx);
     let appearance = page_appearance::poll(s, time, tx);
-    records || sidebar || views || covers || appearance || place
+    records || sidebar || sidebar_drag || views || covers || appearance || place
 }
 fn spec() -> AppSpec<State> {
     AppSpec {

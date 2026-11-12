@@ -48,6 +48,356 @@ fn create_section(rt: &mut Runtime<State>, name: &str) -> String {
         .clone()
 }
 
+fn drag_page(rt: &mut Runtime<State>, source: &str, target: &str) {
+    let (x, y) = rt
+        .find(source)
+        .unwrap_or_else(|| panic!("missing {source}"));
+    let (tx, ty) = rt
+        .find(target)
+        .unwrap_or_else(|| panic!("missing {target}"));
+    rt.pointer_down(x, y);
+    rt.pointer_move(x, y + 8.);
+    rt.frame(0.02);
+    rt.pointer_move(tx, ty);
+    rt.frame(0.02);
+    rt.pointer_up(tx, ty);
+    rt.frame(0.15);
+}
+
+#[test]
+fn private_pages_can_be_reordered_and_remain_in_order_after_reopening() {
+    let (mut state, path) = fixture();
+    let first = new_page(&mut state, None, "First");
+    let last = new_page(&mut state, None, "Last");
+    let workspace = state.workspace.id.clone();
+    let mut rt = make_runtime(state, false, 1.);
+    let (x, y) = rt.find(&format!("page-open-{}", last.id)).unwrap();
+    let rect = rt
+        .presented(&format!("page-highlight-{}", first.id))
+        .unwrap()
+        .0;
+    rt.pointer_down(x, y);
+    rt.pointer_move(rect[0] + 30., rect[1] + 3.);
+    rt.frame(0.02);
+    rt.pointer_up(rect[0] + 30., rect[1] + 3.);
+    settle(&mut rt);
+    let roots = |s: &State| {
+        s.sidebar_tree
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                crate::sidebar_tree::SidebarRow::Page { page, depth: 0, .. } => {
+                    Some(page.id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let result = roots(&rt.state);
+    assert!(
+        result.iter().position(|id| *id == last.id).unwrap()
+            < result.iter().position(|id| *id == first.id).unwrap()
+    );
+    drop(rt);
+    let reopened = State::open(path.clone(), Some(&workspace)).unwrap();
+    assert_eq!(roots(&reopened), result);
+    drop(reopened);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn private_drag_at_page_boundary_keeps_following_pages_in_place() {
+    let (mut state, path) = fixture();
+    for i in 0..52 {
+        new_page(&mut state, None, &format!("Page {i}"));
+    }
+    state.refresh_pages();
+    let roots: Vec<_> = state
+        .sidebar_tree
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            crate::sidebar_tree::SidebarRow::Page { page, depth: 0, .. } => Some(page.id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(roots.len(), 50);
+    let mut rt = make_runtime(state, false, 1.);
+    rt.set_viewport((1000., 800.), 1.);
+    rt.update(|_, tx| tx.scroll_to_y("sidebar-scroll", f32::MAX));
+    settle(&mut rt);
+    let (x, y) = rt.find(&format!("page-open-{}", roots[48])).unwrap();
+    let target = rt
+        .presented(&format!("page-highlight-{}", roots[49]))
+        .unwrap()
+        .0;
+    rt.pointer_down(x, y);
+    rt.pointer_move(target[0] + 30., target[1] + target[3] - 3.);
+    rt.frame(0.02);
+    rt.pointer_up(target[0] + 30., target[1] + target[3] - 3.);
+    settle(&mut rt);
+    let group = rt
+        .state
+        .store
+        .page_children(
+            &rt.state.workspace.id,
+            None,
+            moss_core::PagePosition::Start,
+            51,
+        )
+        .unwrap();
+    assert_eq!(group.items[48].page.id, roots[49]);
+    assert_eq!(group.items[49].page.id, roots[48]);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn pages_move_between_sections_without_changing_their_parent() {
+    for (dark, scale) in [(false, 1.), (true, 2.)] {
+        let (mut state, path) = fixture();
+        let parent = new_page(&mut state, None, "Parent");
+        let page = new_page(&mut state, Some(&parent.id), "Nested page");
+        state.refresh_pages();
+        state.toggle_sidebar_page(&parent.id);
+        state.record_sidebar_recent(&page.id);
+        let a = state.create_sidebar_section("Projects").unwrap();
+        let b = state.create_sidebar_section("Reading").unwrap();
+        let workspace = state.workspace.id.clone();
+        let mut rt = make_runtime(state, dark, scale);
+        rt.poll = Some(crate::poll);
+        drag_page(
+            &mut rt,
+            &format!("page-open-{}", page.id),
+            &format!("section-toggle-{a}"),
+        );
+        assert!(
+            rt.state
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == a)
+                .unwrap()
+                .page_ids
+                .contains(&page.id)
+        );
+        assert!(rt.find(&format!("page-open-{}", page.id)).is_some());
+        drag_page(
+            &mut rt,
+            &format!("section-{a}-open-{}", page.id),
+            &format!("section-toggle-{b}"),
+        );
+        assert!(
+            !rt.state
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == a)
+                .unwrap()
+                .page_ids
+                .contains(&page.id)
+        );
+        assert!(
+            rt.state
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == b)
+                .unwrap()
+                .page_ids
+                .contains(&page.id)
+        );
+        drag_page(
+            &mut rt,
+            &format!("section-{b}-open-{}", page.id),
+            "section-toggle-favorites",
+        );
+        assert!(rt.state.is_sidebar_favorite(&page.id));
+        assert!(
+            !rt.state
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == b)
+                .unwrap()
+                .page_ids
+                .contains(&page.id)
+        );
+        drag_page(
+            &mut rt,
+            &format!("favorite-open-{}", page.id),
+            "section-toggle-private",
+        );
+        assert!(!rt.state.is_sidebar_favorite(&page.id));
+        assert_eq!(
+            rt.state
+                .store
+                .get_page(&page.id)
+                .unwrap()
+                .unwrap()
+                .parent_id
+                .as_deref(),
+            Some(parent.id.as_str())
+        );
+        drag_page(
+            &mut rt,
+            &format!("page-open-{}", page.id),
+            "section-toggle-recents",
+        );
+        assert!(!rt.state.is_sidebar_favorite(&page.id));
+        assert!(rt.state.sidebar_sections.pages[&a].is_empty());
+        drag_page(
+            &mut rt,
+            &format!("recent-open-{}", page.id),
+            &format!("section-toggle-{a}"),
+        );
+        assert!(rt.state.sidebar_sections.pages[&a].is_empty());
+        drop(rt);
+        let reopened = State::open(path.clone(), Some(&workspace)).unwrap();
+        assert!(!reopened.is_sidebar_favorite(&page.id));
+        assert!(reopened.sidebar_sections.pages[&a].is_empty());
+        assert!(reopened.sidebar_sections.pages[&b].is_empty());
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn page_drag_scrolls_to_later_sections() {
+    let (mut state, path) = fixture();
+    let page = new_page(&mut state, None, "Page");
+    let sections: Vec<_> = (0..20)
+        .map(|i| state.create_sidebar_section(&format!("Group {i}")).unwrap())
+        .collect();
+    let mut rt = make_runtime(state, false, 1.);
+    rt.poll = Some(crate::poll);
+    rt.set_viewport((850., 600.), 1.);
+    settle(&mut rt);
+    let (x, y) = rt.find(&format!("page-open-{}", page.id)).unwrap();
+    let viewport = rt.presented("sidebar-scroll").unwrap().0;
+    rt.pointer_down(x, y);
+    rt.pointer_move(x, viewport[1] + viewport[3] - 4.);
+    for _ in 0..180 {
+        rt.frame(1. / 60.);
+    }
+    let target = sections.last().unwrap();
+    let (tx, ty) = rt
+        .find(&format!("section-toggle-{target}"))
+        .expect("later section should be visible after scrolling");
+    rt.pointer_move(tx, ty);
+    rt.frame(0.02);
+    rt.pointer_up(tx, ty);
+    settle(&mut rt);
+    assert!(
+        rt.state
+            .sidebar_sections
+            .sections
+            .iter()
+            .find(|s| s.id == *target)
+            .unwrap()
+            .page_ids
+            .contains(&page.id)
+    );
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn escape_cancels_page_drag_and_next_click_opens_page() {
+    let (mut state, path) = fixture();
+    let page = new_page(&mut state, None, "Page");
+    let target = state.create_sidebar_section("Projects").unwrap();
+    let mut rt = make_runtime(state, false, 1.);
+    let (x, y) = rt.find(&format!("page-open-{}", page.id)).unwrap();
+    let (tx, ty) = rt.find(&format!("section-toggle-{target}")).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_move(tx, ty);
+    rt.frame(0.02);
+    press(&mut rt, Key::Escape);
+    rt.pointer_up(tx, ty);
+    settle(&mut rt);
+    assert!(rt.state.sidebar_sections.pages[&target].is_empty());
+    click(&mut rt, &format!("page-open-{}", page.id));
+    assert_eq!(rt.state.tab().unwrap().page.id, page.id);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn disclosure_replaces_the_page_icon_and_section_caret_follows_its_title() {
+    let (mut state, path) = fixture();
+    let parent = new_page(&mut state, None, "Parent");
+    new_page(&mut state, Some(&parent.id), "Child");
+    let mut rt = make_runtime(state, false, 1.);
+    let glyph = format!("page-icon-glyph-{}", parent.id);
+    let disclosure = format!("page-disclosure-glyph-{}", parent.id);
+    let info = |rt: &Runtime<State>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap()
+    };
+    rt.pointer_move(900., 700.);
+    rt.frame(0.);
+    assert!(info(&rt, &glyph).opacity > 0.99);
+    assert!(info(&rt, &disclosure).opacity < 0.01);
+    let slot = rt.presented(&format!("page-icon-{}", parent.id)).unwrap().0;
+    let row = rt
+        .presented(&format!("page-highlight-{}", parent.id))
+        .unwrap()
+        .0;
+    assert_eq!(slot[2..], [20., 20.]);
+    assert!((slot[0] - row[0] - 3.).abs() < 1.);
+    assert!((slot[1] - row[1] - 3.).abs() < 1.);
+    let (x, y) = rt.find(&format!("page-icon-{}", parent.id)).unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(0.);
+    assert!(info(&rt, &glyph).opacity < 0.01);
+    assert!(info(&rt, &disclosure).opacity > 0.99);
+    let arrow = info(&rt, &format!("page-disclosure-{}", parent.id)).rect;
+    assert!((slot[0] - arrow[0]).abs() < 1.);
+    click(&mut rt, &format!("page-disclosure-{}", parent.id));
+    assert!(rt.state.sidebar_tree.rows.iter().any(|row| matches!(row, crate::sidebar_tree::SidebarRow::Page { page, expanded: true, .. } if page.id == parent.id)));
+    assert!(rt.state.page_icon_picker.is_none());
+    let title = info(&rt, "private-heading").rect;
+    let caret = info(&rt, "section-caret-private").rect;
+    assert!((slot[0] - title[0]).abs() < 1.);
+    assert!(
+        (caret[0] - title[0] - title[2] - 4.).abs() < 1.,
+        "{title:?} {caret:?}"
+    );
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn clicking_a_parent_page_opens_it_and_toggles_its_children() {
+    let (mut state, path) = fixture();
+    let parent = new_page(&mut state, None, "Parent");
+    let child = new_page(&mut state, Some(&parent.id), "Child");
+    let mut rt = make_runtime(state, false, 1.);
+    let parent_key = format!("page-open-{}", parent.id);
+    let child_key = format!("page-open-{}", child.id);
+    assert!(rt.find(&child_key).is_none());
+    click(&mut rt, &parent_key);
+    settle(&mut rt);
+    assert_eq!(rt.state.tab().unwrap().page.id, parent.id);
+    assert!(rt.find(&child_key).is_some());
+    click(&mut rt, &parent_key);
+    settle(&mut rt);
+    assert!(rt.find(&child_key).is_none());
+    click(&mut rt, &format!("page-disclosure-{}", parent.id));
+    settle(&mut rt);
+    assert_eq!(rt.state.tab().unwrap().page.id, parent.id);
+    assert!(rt.find(&child_key).is_some());
+    click(&mut rt, &child_key);
+    settle(&mut rt);
+    assert_eq!(rt.state.tab().unwrap().page.id, child.id);
+    assert!(rt.find(&child_key).is_some());
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 #[test]
 fn section_input_dismiss_reopen_and_external_removal_are_safe() {
     let (s, path) = fixture();

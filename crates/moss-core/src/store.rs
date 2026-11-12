@@ -132,6 +132,7 @@ impl Store {
             kind,
             cover: None,
             created_at: t.clone(),
+            sidebar_order: None,
             updated_at: t,
             deleted_at: None,
             settings: Default::default(),
@@ -169,6 +170,7 @@ impl Store {
             kind: PageKind::Database,
             cover: None,
             created_at: stamp.clone(),
+            sidebar_order: None,
             updated_at: stamp,
             deleted_at: None,
             settings: Default::default(),
@@ -326,12 +328,21 @@ impl Store {
     }
     pub fn update_page(&mut self, page: &Page) -> Result<()> {
         self.validate_page(page, true)?;
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = search::page(&tx, &page.id)?.ok_or_else(|| invalid("page does not exist"))?;
+        let mut page = page.clone();
+        page.sidebar_order = if page.parent_id == current.parent_id {
+            current.sidebar_order
+        } else {
+            None
+        };
         tx.execute(
             "UPDATE pages SET parent_id=?1,data=?2 WHERE id=?3",
-            params![page.parent_id, encode(page)?, page.id],
+            params![page.parent_id, encode(&page)?, page.id],
         )?;
-        search::index(&tx, &format!("page:{}", page.id), page, &page.title)?;
+        search::index(&tx, &format!("page:{}", page.id), &page, &page.title)?;
         tx.commit()
     }
     pub fn get_blocks(&self, page_id: &str) -> Result<Vec<Block>> {

@@ -8,6 +8,8 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS pages_parent ON pages(parent_id);
         CREATE INDEX IF NOT EXISTS pages_navigation ON pages(workspace_id,parent_id,json_extract(data,'$.created_at'),id)
             WHERE deleted_at IS NULL AND json_extract(data,'$.kind') <> 'record';
+        CREATE INDEX IF NOT EXISTS pages_sidebar_order ON pages(workspace_id,parent_id,coalesce(json_extract(data,'$.sidebar_order'),json_extract(data,'$.created_at') || ':' || id),id)
+            WHERE deleted_at IS NULL AND json_extract(data,'$.kind') <> 'record';
         CREATE INDEX IF NOT EXISTS pages_suggestions ON pages(workspace_id,json_extract(data,'$.created_at'),id)
             WHERE deleted_at IS NULL AND json_extract(data,'$.kind') <> 'record';
         CREATE INDEX IF NOT EXISTS pages_expired_trash ON pages(deleted_at) WHERE deleted_at IS NOT NULL;

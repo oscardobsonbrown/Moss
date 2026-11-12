@@ -13,3 +13,7 @@ The workspace suite passed 333 tests (249 app, 71 core and 13 engine), with two 
 Recent resolves at most five pages for an update and does not reload the custom-section cache on a visit. Preferences are written synchronously. No open-time performance measurement was made for this path.
 
 The sidebar uses one index-built virtual row list for section headers, Private, Favorites, Recent, custom shortcuts and New section in each sidebar state. This avoids a growing virtual Private list followed by sibling sections, which could overlap in Rune. Tests confirm that expanded Private and a following custom section do not overlap. With 1,200 shortcuts, fewer than 100 shortcut rows mount at either end, and the last shortcut remains reachable.
+
+Pages can be dragged between Private, Favorites and custom sections. Custom sections hold shortcuts, so a page keeps its place in the Private tree. Moving a shortcut to Private removes the shortcut; moving a favorite to Private removes the favorite. Dropping on a collapsed section opens it. Recent pages cannot be dragged or used as a drop target.
+
+Pages in Private can also be dragged to a new position among their siblings. The order is stored with each page and works across the paged sidebar list. This does not change the page's parent.

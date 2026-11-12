@@ -2,6 +2,7 @@ use crate::state::{Preferences, State};
 use moss_core::{Page, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::{cell::Cell, rc::Rc};
 
 const MAX_SECTIONS: usize = 32;
 const MAX_CUSTOM_PAGES: usize = 100;
@@ -33,6 +34,22 @@ pub struct SidebarSections {
     pub pages: BTreeMap<String, Vec<Page>>,
     pub dragging: Option<String>,
     pub drag_target: Option<String>,
+    pub page_drag: Option<SidebarPageDrag>,
+    pub suppress_page_press: bool,
+    pub page_drag_cancelled: bool,
+    pub scroll: Rc<Cell<rune::ScrollPos>>,
+    pub page_scroll_at: f64,
+}
+
+pub struct SidebarPageDrag {
+    pub page_id: String,
+    pub source: String,
+    pub target: Option<String>,
+    pub before: Option<String>,
+    pub title: String,
+    pub icon: String,
+    pub point: [f32; 2],
+    pub viewport: [f32; 4],
 }
 
 impl SidebarSections {
@@ -167,8 +184,7 @@ impl State {
         Ok(SidebarSections {
             sections,
             pages,
-            dragging: None,
-            drag_target: None,
+            ..Default::default()
         })
     }
 
@@ -192,12 +208,17 @@ impl State {
             .get(&self.workspace.id)
             .is_some_and(|saved| saved != &sections);
         if recent != valid || invalid_sections {
-            return self.change_sidebar_sections(|_, _| Ok(()));
+            return self.change_sidebar_sections(|_, _, _| Ok(()));
         }
         match self.load_sidebar_sections(sections, &valid) {
             Ok(mut cache) => {
                 cache.dragging = self.sidebar_sections.dragging.take();
                 cache.drag_target = self.sidebar_sections.drag_target.take();
+                cache.page_drag = self.sidebar_sections.page_drag.take();
+                cache.suppress_page_press = self.sidebar_sections.suppress_page_press;
+                cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
+                cache.scroll = self.sidebar_sections.scroll.clone();
+                cache.page_scroll_at = self.sidebar_sections.page_scroll_at;
                 self.sidebar_sections = cache;
                 self.close_missing_sidebar_section_menu();
                 true
@@ -211,7 +232,11 @@ impl State {
 
     fn change_sidebar_sections(
         &mut self,
-        change: impl FnOnce(&mut Vec<SidebarSection>, &mut Vec<String>) -> Result<(), String>,
+        change: impl FnOnce(
+            &mut Vec<SidebarSection>,
+            &mut Vec<String>,
+            &mut Vec<String>,
+        ) -> Result<(), String>,
     ) -> bool {
         let owner = self.shared_preferences.clone();
         let mut shared = owner.lock().unwrap();
@@ -222,7 +247,13 @@ impl State {
             .get(&self.workspace.id)
             .cloned()
             .unwrap_or_default();
-        if let Err(error) = change(&mut sections, &mut recent) {
+        let mut favorites = next
+            .favorite_pages
+            .get(&self.workspace.id)
+            .cloned()
+            .unwrap_or_default();
+        let old_favorites = favorites.clone();
+        if let Err(error) = change(&mut sections, &mut recent, &mut favorites) {
             self.error = Some(error);
             return false;
         }
@@ -240,6 +271,19 @@ impl State {
                 return false;
             }
         };
+        let favorite_pages = if favorites != old_favorites {
+            match self.section_pages(&favorites, MAX_CUSTOM_PAGES) {
+                Ok(pages) => Some(pages),
+                Err(error) => {
+                    self.error = Some(format!("Favorites could not be loaded: {error}"));
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+        next.favorite_pages
+            .insert(self.workspace.id.clone(), favorites);
         next.sidebar_sections
             .insert(self.workspace.id.clone(), sections);
         next.recent_pages
@@ -253,8 +297,17 @@ impl State {
         self.prefs = next;
         cache.dragging = self.sidebar_sections.dragging.take();
         cache.drag_target = self.sidebar_sections.drag_target.take();
+        cache.page_drag = self.sidebar_sections.page_drag.take();
+        cache.suppress_page_press = self.sidebar_sections.suppress_page_press;
+        cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
+        cache.scroll = self.sidebar_sections.scroll.clone();
+        cache.page_scroll_at = self.sidebar_sections.page_scroll_at;
         self.sidebar_sections = cache;
+        if let Some(pages) = favorite_pages {
+            self.sidebar_favorites.pages = pages;
+        }
         self.close_missing_sidebar_section_menu();
+        self.error = None;
         true
     }
 
@@ -264,7 +317,7 @@ impl State {
             return None;
         };
         let id = format!("custom-{}", new_id());
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             if sections.len() >= MAX_SECTIONS {
                 return Err("Sidebar sections are full.".into());
             }
@@ -283,21 +336,21 @@ impl State {
             self.error = Some("Enter a section name.".into());
             return false;
         };
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             let section = custom(sections, id)?;
             section.name = name;
             Ok(())
         })
     }
     pub fn remove_sidebar_section(&mut self, id: &str) -> bool {
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             custom(sections, id)?;
             sections.retain(|section| section.id != id);
             Ok(())
         })
     }
     pub fn move_sidebar_section(&mut self, id: &str, offset: isize) -> bool {
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             let from = sections
                 .iter()
                 .position(|s| s.id == id)
@@ -309,7 +362,7 @@ impl State {
         })
     }
     pub fn reorder_sidebar_section(&mut self, id: &str, before_id: &str) -> bool {
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             if id == before_id {
                 return if sections.iter().any(|s| s.id == id) {
                     Ok(())
@@ -336,7 +389,7 @@ impl State {
         })
     }
     pub fn toggle_sidebar_section(&mut self, id: &str) -> bool {
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             let section = sections
                 .iter_mut()
                 .find(|s| s.id == id)
@@ -357,7 +410,7 @@ impl State {
                 return false;
             }
         }
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             let section = custom(sections, section)?;
             if section.page_ids.iter().any(|existing| existing == id) {
                 return Ok(());
@@ -370,10 +423,96 @@ impl State {
         })
     }
     pub fn remove_page_from_sidebar_section(&mut self, section: &str, id: &str) -> bool {
-        self.change_sidebar_sections(|sections, _| {
+        self.change_sidebar_sections(|sections, _, _| {
             custom(sections, section)?
                 .page_ids
                 .retain(|page| page != id);
+            Ok(())
+        })
+    }
+
+    pub fn move_sidebar_page(
+        &mut self,
+        id: &str,
+        source: &str,
+        target: &str,
+        before: Option<&str>,
+    ) -> bool {
+        if source == "private" && target == "private" {
+            return match self
+                .store
+                .reorder_sidebar_page(&self.workspace.id, id, before)
+            {
+                Ok(()) => {
+                    self.refresh_sidebar_tree();
+                    true
+                }
+                Err(error) => {
+                    self.error = Some(format!("Could not reorder page: {error}"));
+                    false
+                }
+            };
+        }
+        if !self
+            .section_pages(&[id.to_owned()], 1)
+            .is_ok_and(|pages| !pages.is_empty())
+        {
+            self.error = Some("Page is not available in this workspace.".into());
+            return false;
+        }
+        self.change_sidebar_sections(|sections, _, favorites| {
+            let from = sections
+                .iter()
+                .position(|s| s.id == source)
+                .ok_or("Source section not found.")?;
+            let to = sections
+                .iter()
+                .position(|s| s.id == target)
+                .ok_or("Target section not found.")?;
+            let from_kind = sections[from].kind;
+            let to_kind = sections[to].kind;
+            if from_kind == SidebarSectionKind::Recents || to_kind == SidebarSectionKind::Recents {
+                return Err("Recent pages cannot be moved.".into());
+            }
+            if before == Some(id) && source == target {
+                return Ok(());
+            }
+            match from_kind {
+                SidebarSectionKind::Custom => {
+                    if !sections[from].page_ids.iter().any(|page| page == id) {
+                        return Err("Page is no longer in the source section.".into());
+                    }
+                    sections[from].page_ids.retain(|page| page != id);
+                }
+                SidebarSectionKind::Favorites => {
+                    if !favorites.iter().any(|page| page == id) {
+                        return Err("Page is no longer in Favorites.".into());
+                    }
+                    favorites.retain(|page| page != id);
+                }
+                SidebarSectionKind::Private => {}
+                SidebarSectionKind::Recents => unreachable!(),
+            }
+            let pages = match to_kind {
+                SidebarSectionKind::Custom => Some(&mut sections[to].page_ids),
+                SidebarSectionKind::Favorites => Some(favorites),
+                SidebarSectionKind::Private => None,
+                SidebarSectionKind::Recents => unreachable!(),
+            };
+            if let Some(pages) = pages {
+                let existing = pages.iter().position(|page| page == id);
+                if existing.is_none() && pages.len() >= MAX_CUSTOM_PAGES {
+                    return Err("Target section is full.".into());
+                }
+                if let Some(index) = existing {
+                    pages.remove(index);
+                }
+                let index = before
+                    .and_then(|page| pages.iter().position(|item| item == page))
+                    .unwrap_or(pages.len());
+                pages.insert(index, id.into());
+            }
+            sections[to].collapsed = false;
             Ok(())
         })
     }
@@ -438,6 +577,39 @@ fn valid_name(name: &str) -> Option<String> {
     let name = name.trim();
     (!name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control))
         .then(|| name.to_owned())
+}
+
+pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
+    let Some(drag) = &s.sidebar_sections.page_drag else {
+        return false;
+    };
+    let [x, y] = drag.point;
+    let [left, top, width, height] = drag.viewport;
+    if x < left || x > left + width || y < top || y > top + height {
+        return false;
+    }
+    let delta = if y < top + 28. {
+        -12.
+    } else if y > top + height - 28. {
+        12.
+    } else {
+        0.
+    };
+    if delta == 0. {
+        return false;
+    }
+    tx.wake_after(std::time::Duration::from_millis(16));
+    if time - s.sidebar_sections.page_scroll_at < 1. / 60. {
+        return false;
+    }
+    s.sidebar_sections.page_scroll_at = time;
+    let scroll = s.sidebar_sections.scroll.get();
+    let next = (scroll.offset[1] + delta).clamp(0., scroll.max[1]);
+    if next == scroll.offset[1] {
+        return false;
+    }
+    tx.scroll_to_instant("sidebar-scroll", 0., next);
+    true
 }
 fn custom<'a>(
     sections: &'a mut [SidebarSection],
@@ -584,6 +756,25 @@ mod tests {
     }
 
     #[test]
+    fn failed_page_move_preserves_source_and_favorites() {
+        let (mut s, path) = fixture();
+        let item = page(&mut s, None, "Item");
+        let section = s.create_sidebar_section("Projects").unwrap();
+        assert!(s.add_page_to_sidebar_section(&section, &item.id));
+        let before = s.shared_preferences.lock().unwrap().clone();
+        s.path = path.join("missing-directory");
+        assert!(!s.move_sidebar_page(&item.id, &section, "favorites", None));
+        let after = s.shared_preferences.lock().unwrap().clone();
+        assert_eq!(before.sidebar_sections, after.sidebar_sections);
+        assert_eq!(before.favorite_pages, after.favorite_pages);
+        assert_eq!(s.sidebar_sections.pages[&section][0].id, item.id);
+        assert!(!s.is_sidebar_favorite(&item.id));
+        s.path = path.clone();
+        drop(s);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn record_peek_adds_recent_only_on_open_and_updates_renamed_label() {
         let (mut s, path) = fixture();
         s.new_page(true, None);
@@ -626,11 +817,14 @@ mod tests {
         let ids: Vec<String> = (0..=MAX_CUSTOM_PAGES)
             .map(|i| page(&mut s, None, &format!("Page {i}")).id)
             .collect();
-        assert!(s.change_sidebar_sections(|sections, _| {
+        assert!(s.change_sidebar_sections(|sections, _, _| {
             custom_section_for_test(sections, &custom).page_ids = ids[..MAX_CUSTOM_PAGES].to_vec();
             Ok(())
         }));
         assert!(!s.add_page_to_sidebar_section(&custom, &ids[MAX_CUSTOM_PAGES]));
+        assert!(s.toggle_sidebar_favorite(&ids[MAX_CUSTOM_PAGES]));
+        assert!(!s.move_sidebar_page(&ids[MAX_CUSTOM_PAGES], "favorites", &custom, None));
+        assert!(s.is_sidebar_favorite(&ids[MAX_CUSTOM_PAGES]));
         assert_eq!(s.sidebar_sections.pages[&custom].len(), MAX_CUSTOM_PAGES);
         assert!(
             !s.sidebar_sections.pages[&custom]

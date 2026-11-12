@@ -2,18 +2,21 @@ use crate::{
     Page, Store,
     store::{decode, invalid},
 };
-use rusqlite::{Result, params};
+use rusqlite::{OptionalExtension, Result, params};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageCursor {
-    pub created_at: String,
+    pub sort_key: String,
     pub id: String,
 }
 
 impl From<&Page> for PageCursor {
     fn from(page: &Page) -> Self {
         Self {
-            created_at: page.created_at.clone(),
+            sort_key: page
+                .sidebar_order
+                .clone()
+                .unwrap_or_else(|| format!("{}:{}", page.created_at, page.id)),
             id: page.id.clone(),
         }
     }
@@ -41,7 +44,35 @@ pub struct PageChildren {
 
 const SIBLINGS: &str = "FROM pages p WHERE p.workspace_id=?1 AND p.parent_id IS ?2
     AND p.deleted_at IS NULL AND json_extract(p.data,'$.kind') <> 'record'";
-const CREATED: &str = "json_extract(p.data,'$.created_at')";
+const ORDER_KEY: &str = "coalesce(json_extract(p.data,'$.sidebar_order'),json_extract(p.data,'$.created_at') || ':' || p.id)";
+
+fn between(lower: &str, upper: Option<&str>) -> Result<String> {
+    if !lower.bytes().all(|c| (32..=126).contains(&c))
+        || upper.is_some_and(|s| !s.bytes().all(|c| (32..=126).contains(&c)) || lower >= s)
+    {
+        return Err(invalid("invalid sidebar page order"));
+    }
+    let (a, mut b) = (lower.as_bytes(), upper.map(str::as_bytes));
+    let mut key = Vec::new();
+    let mut i = 0;
+    loop {
+        let low = a.get(i).copied().unwrap_or(32);
+        let high = b.and_then(|v| v.get(i)).copied().unwrap_or(127);
+        if high > low + 1 {
+            key.push(low + (high - low) / 2);
+            break;
+        }
+        if high < low {
+            return Err(invalid("invalid sidebar page order"));
+        }
+        key.push(low);
+        if high == low + 1 {
+            b = None;
+        }
+        i += 1;
+    }
+    String::from_utf8(key).map_err(|_| invalid("invalid sidebar page order"))
+}
 
 fn check_limit(limit: u32) -> Result<()> {
     if (1..=200).contains(&limit) {
@@ -52,6 +83,73 @@ fn check_limit(limit: u32) -> Result<()> {
 }
 
 impl Store {
+    /// Move a page among its siblings without changing its parent.
+    pub fn reorder_sidebar_page(
+        &mut self,
+        workspace_id: &str,
+        id: &str,
+        before: Option<&str>,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let page = crate::search::page(&tx, id)?.ok_or_else(|| invalid("page does not exist"))?;
+        if page.workspace_id != workspace_id
+            || page.deleted_at.is_some()
+            || page.kind == crate::PageKind::Record
+        {
+            return Err(invalid("page is outside the live workspace"));
+        }
+        if before == Some(id) {
+            return Ok(());
+        }
+        let target = if let Some(id) = before {
+            let target = crate::search::page(&tx, id)?
+                .ok_or_else(|| invalid("target page does not exist"))?;
+            if target.workspace_id != workspace_id
+                || target.parent_id != page.parent_id
+                || target.deleted_at.is_some()
+                || target.kind == crate::PageKind::Record
+            {
+                return Err(invalid("target page is not a live sibling"));
+            }
+            Some(PageCursor::from(&target))
+        } else {
+            None
+        };
+        let range = if target.is_some() {
+            format!(" AND ({ORDER_KEY}, p.id) < (?4, ?5)")
+        } else {
+            String::new()
+        };
+        let sql = format!(
+            "SELECT {ORDER_KEY} {SIBLINGS} AND p.id <> ?3 {range}
+            ORDER BY {ORDER_KEY} DESC, p.id DESC LIMIT 1"
+        );
+        let previous: Option<String> = if let Some(target) = &target {
+            tx.query_row(
+                &sql,
+                params![workspace_id, page.parent_id, id, target.sort_key, target.id],
+                |row| row.get(0),
+            )
+            .optional()?
+        } else {
+            tx.query_row(&sql, params![workspace_id, page.parent_id, id], |row| {
+                row.get(0)
+            })
+            .optional()?
+        };
+        let key = between(
+            previous.as_deref().unwrap_or(""),
+            target.as_ref().map(|c| c.sort_key.as_str()),
+        )?;
+        tx.execute(
+            "UPDATE pages SET data=json_set(data,'$.sidebar_order',?1) WHERE id=?2",
+            params![key, id],
+        )?;
+        tx.commit()
+    }
+
     /// Read one bounded sibling page. Pass `previous` to Before and `next` to After.
     pub fn page_children(
         &self,
@@ -88,7 +186,7 @@ impl Store {
                     params![
                         workspace_id,
                         parent_id,
-                        cursor.map(|c| c.created_at.as_str()),
+                        cursor.map(|c| c.sort_key.as_str()),
                         cursor.map(|c| c.id.as_str()),
                         count
                     ],
@@ -103,22 +201,22 @@ impl Store {
         };
         let mut items = if cursor.is_some() {
             let op = if descending { "<" } else { ">" };
-            // Separate equal timestamps so both the timestamp and ID have explicit index bounds.
+            // Separate equal keys so both the key and ID have explicit index bounds.
             let mut items = read(
-                &format!(" AND {CREATED}=?3 AND p.id {op} ?4"),
+                &format!(" AND {ORDER_KEY}=?3 AND p.id {op} ?4"),
                 &format!("p.id {order}"),
                 limit + 1,
             )?;
             if items.len() <= limit as usize {
                 items.extend(read(
-                    &format!(" AND {CREATED} {op} ?3"),
-                    &format!("{CREATED} {order},p.id {order}"),
+                    &format!(" AND {ORDER_KEY} {op} ?3"),
+                    &format!("{ORDER_KEY} {order},p.id {order}"),
                     limit + 1 - items.len() as u32,
                 )?);
             }
             items
         } else {
-            read("", &format!("{CREATED} ASC,p.id ASC"), limit + 1)?
+            read("", &format!("{ORDER_KEY} ASC,p.id ASC"), limit + 1)?
         };
         let more = items.len() > limit as usize;
         items.truncate(limit as usize);
@@ -130,11 +228,11 @@ impl Store {
         let exists = |cursor: &PageCursor, op: &str| -> Result<bool> {
             let sql = format!(
                 "SELECT EXISTS(
-                SELECT 1 {SIBLINGS} AND {CREATED}=?3 AND p.id {op} ?4
-                UNION ALL SELECT 1 {SIBLINGS} AND {CREATED} {op} ?3)"
+                SELECT 1 {SIBLINGS} AND {ORDER_KEY}=?3 AND p.id {op} ?4
+                UNION ALL SELECT 1 {SIBLINGS} AND {ORDER_KEY} {op} ?3)"
             );
             self.conn.prepare_cached(&sql)?.query_row(
-                params![workspace_id, parent_id, cursor.created_at, cursor.id],
+                params![workspace_id, parent_id, cursor.sort_key, cursor.id],
                 |row| row.get(0),
             )
         };

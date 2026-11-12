@@ -5,6 +5,15 @@ use crate::{
     state::State,
 };
 use rune::*;
+use std::rc::Rc;
+
+#[derive(Clone, PartialEq)]
+pub struct PageDropZone {
+    pub section: String,
+    pub page: Option<String>,
+    pub parent: Option<String>,
+    pub rect: [f32; 4],
+}
 
 fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
     let id = section.id.clone();
@@ -25,6 +34,11 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
         })
         .collect();
     let target = s.sidebar_sections.drag_target.as_deref() == Some(id.as_str());
+    let page_target = s
+        .sidebar_sections
+        .page_drag
+        .as_ref()
+        .is_some_and(|drag| drag.target.as_deref() == Some(id.as_str()));
     row()
         .key(format!("section-header-{id}"))
         .w_full()
@@ -32,6 +46,12 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
         .pl(10.)
         .pr(3.)
         .center_y()
+        .radius(4.)
+        .fill(if page_target {
+            t.hover
+        } else {
+            Color::TRANSPARENT
+        })
         .hover_group()
         .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .child(
@@ -50,7 +70,7 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                     t.label(&section.name, t.faint)
                         .key(format!("{id}-heading"))
                         .truncate()
-                        .grow(1.)
+                        .shrink()
                         .min_w(0.),
                 )
                 .child(
@@ -62,9 +82,11 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                         },
                         12.,
                     )
+                    .key(format!("section-caret-{id}"))
                     .color(t.faint)
                     .group_opacity(if section.collapsed { 1. } else { 0. }, 1.),
                 )
+                .child(el().grow(1.))
                 .on_press_tx(move |s: &mut State, tx| {
                     s.toggle_sidebar_section(&id);
                     tx.instant();
@@ -190,8 +212,93 @@ pub fn shortcut_prefix(section: &SidebarSection) -> String {
     }
 }
 
+pub fn page_drag_preview(s: &State, t: Theme) -> Option<El> {
+    let drag = s.sidebar_sections.page_drag.as_ref()?;
+    Some(
+        row()
+            .key("sidebar-page-drag-preview")
+            .absolute(drag.point[0] + 8., drag.point[1] - 13.)
+            .max_w(220.)
+            .h(28.)
+            .px(8.)
+            .gap(8.)
+            .center_y()
+            .radius(5.)
+            .fill(t.menu)
+            .border(1., t.line)
+            .shadow(2., 8., Color::BLACK.alpha(0.18))
+            .child(el().size(20., 20.).center().child(if drag.icon.is_empty() {
+                rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
+            } else {
+                super::theme::sized_label(&drag.icon, 16., t.text)
+            }))
+            .child(
+                t.label(
+                    if drag.title.is_empty() {
+                        "Untitled"
+                    } else {
+                        &drag.title
+                    },
+                    t.text,
+                )
+                .min_w(0.)
+                .truncate(),
+            )
+            .inert()
+            .raise(),
+    )
+}
+
 pub fn view(s: &State, t: Theme) -> El {
-    let rows = std::rc::Rc::new(items(s, false));
+    let rows = Rc::new(items(s, false));
+    let mut section = None;
+    let mut zones = Vec::new();
+    for item in rows.iter().copied() {
+        let (key, page, parent) = match item {
+            Item::Header(index) => {
+                section = Some(s.sidebar_sections.sections[index].id.clone());
+                (
+                    format!("section-header-{}", s.sidebar_sections.sections[index].id),
+                    None,
+                    None,
+                )
+            }
+            Item::Private(index) => match &s.sidebar_tree.rows[index] {
+                crate::sidebar_tree::SidebarRow::Page { page, .. } => (
+                    format!("page-highlight-{}", page.id),
+                    Some(page.id.clone()),
+                    page.parent_id.clone(),
+                ),
+                _ => continue,
+            },
+            Item::Favorite(index) => {
+                let id = &s.sidebar_favorites.pages[index].id;
+                (format!("favorite-highlight-{id}"), Some(id.clone()), None)
+            }
+            Item::Shortcut(index, page) => {
+                let item = &s.sidebar_sections.sections[index];
+                let id = &s.sidebar_sections.pages[&item.id][page].id;
+                (
+                    format!("{}-highlight-{id}", shortcut_prefix(item)),
+                    Some(id.clone()),
+                    None,
+                )
+            }
+            Item::New => break,
+        };
+        if let Some(section) = section.clone() {
+            if let Some(zone) = rune::memo::window_layout_with(&key, move |rect| PageDropZone {
+                section: section.clone(),
+                page: page.clone(),
+                parent: parent.clone(),
+                rect,
+            }) {
+                zones.push(zone);
+            }
+        }
+    }
+    let zones = Rc::new(zones);
+    let viewport = rune::memo::window_layout_with("sidebar-scroll", |rect| rect).unwrap_or([0.; 4]);
     let keys = rows.clone();
     col()
         .key("page-list")
@@ -203,7 +310,7 @@ pub fn view(s: &State, t: Theme) -> El {
             move |s, i| std::borrow::Cow::Owned(item_key(s, keys[i], false)),
             move |s, i| match rows[i] {
                 Item::Header(i) => header(s, &s.sidebar_sections.sections[i], t),
-                Item::Private(i) => super::sidebar_tree::row_at(s, i, t),
+                Item::Private(i) => super::sidebar_tree::row_at(s, i, t, zones.clone(), viewport),
                 Item::Favorite(i) => super::sidebar_tree::page_row(
                     s,
                     &s.sidebar_favorites.pages[i],
@@ -211,6 +318,9 @@ pub fn view(s: &State, t: Theme) -> El {
                     false,
                     0,
                     "favorite",
+                    "favorites",
+                    zones.clone(),
+                    viewport,
                     t,
                 ),
                 Item::Shortcut(i, page) => {
@@ -222,6 +332,9 @@ pub fn view(s: &State, t: Theme) -> El {
                         false,
                         0,
                         &shortcut_prefix(section),
+                        &section.id,
+                        zones.clone(),
+                        viewport,
                         t,
                     )
                 }

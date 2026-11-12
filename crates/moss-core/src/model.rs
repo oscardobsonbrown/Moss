@@ -70,6 +70,8 @@ pub struct Page {
     pub cover: Option<PageCover>,
     pub kind: PageKind,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_order: Option<String>,
     pub updated_at: String,
     pub deleted_at: Option<String>,
     // Omit defaults so archives made before page settings keep their checksum.

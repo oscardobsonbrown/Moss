@@ -38,6 +38,7 @@ fn page(id: String, title: String, kind: PageKind) -> Page {
         icon: "📄".into(),
         kind,
         created_at: TIME.into(),
+        sidebar_order: None,
         updated_at: TIME.into(),
         deleted_at: None,
         settings: Default::default(),
