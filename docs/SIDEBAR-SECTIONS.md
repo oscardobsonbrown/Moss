@@ -17,3 +17,5 @@ The sidebar uses one index-built virtual row list for section headers, Private, 
 Pages can be dragged between Private, Favorites and custom sections. Custom sections hold shortcuts, so a page keeps its place in the Private tree. Moving a shortcut to Private removes the shortcut; moving a favorite to Private removes the favorite. Dropping on a collapsed section opens it. Recent pages cannot be dragged or used as a drop target.
 
 Pages in Private can also be dragged to a new position among their siblings. The order is stored with each page and works across the paged sidebar list. This does not change the page's parent.
+
+The collapsed and revealed sidebar use the same surface, rows and scroll view. Hover changes the width of that surface without moving the page content. The compact state shows the page icons and section dividers; the revealed state shows their labels and controls.

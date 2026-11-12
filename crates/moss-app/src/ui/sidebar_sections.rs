@@ -17,6 +17,8 @@ pub struct PageDropZone {
 
 fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
     let id = section.id.clone();
+    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
+    let divider = format!("rail-group-{id}");
     let drag_id = id.clone();
     let anchor = format!("section-actions-{id}");
     let menu_anchor = anchor.clone();
@@ -55,6 +57,14 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
         .hover_group()
         .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .child(
+            el().key(divider)
+                .size(20., 1.)
+                .absolute(4., 12.5)
+                .fill(t.line)
+                .opacity(if compact { 1. } else { 0. })
+                .opacity_motion(tok::motion::SNAP_EXIT),
+        )
+        .child(
             row()
                 .grow(1.)
                 .min_w(0.)
@@ -65,7 +75,9 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                 .role("button")
                 .label(format!("{} section", section.name))
                 .expanded(!section.collapsed)
-                .focusable(true)
+                .focusable(!compact)
+                .opacity(if compact { 0. } else { 1. })
+                .opacity_motion(tok::motion::SNAP_EXIT)
                 .child(
                     t.label(&section.name, t.faint)
                         .key(format!("{id}-heading"))
@@ -125,6 +137,9 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                 t.hover,
                 t,
             )
+            .focusable(!compact)
+            .opacity(if compact { 0. } else { 1. })
+            .opacity_motion(tok::motion::SNAP_EXIT)
             .on_press(move |s: &mut State| {
                 s.open_sidebar_section_menu(SectionMenuMode::Actions(menu_id.clone()), &menu_anchor)
             }),
@@ -141,7 +156,7 @@ pub enum Item {
     New,
 }
 
-pub fn items(s: &State, rail: bool) -> Vec<Item> {
+fn items(s: &State) -> Vec<Item> {
     let mut rows = Vec::new();
     for (index, section) in s.sidebar_sections.sections.iter().enumerate() {
         rows.push(Item::Header(index));
@@ -165,37 +180,26 @@ pub fn items(s: &State, rail: bool) -> Vec<Item> {
             }
         }
     }
-    if !rail {
-        rows.push(Item::New);
-    }
+    rows.push(Item::New);
     rows
 }
 
-pub fn item_key(s: &State, item: Item, rail: bool) -> String {
-    let prefix = if rail { "rail-" } else { "" };
+fn item_key(s: &State, item: Item) -> String {
     match item {
-        Item::Header(i) => format!(
-            "{}{}",
-            if rail {
-                "rail-section-"
-            } else {
-                "section-header-"
-            },
-            s.sidebar_sections.sections[i].id
-        ),
+        Item::Header(i) => format!("section-header-{}", s.sidebar_sections.sections[i].id),
         Item::Private(i) => match &s.sidebar_tree.rows[i] {
             crate::sidebar_tree::SidebarRow::Page { page, .. } => {
-                format!("{prefix}page-{}", page.id)
+                format!("page-{}", page.id)
             }
             crate::sidebar_tree::SidebarRow::Paging { parent, .. } => {
-                format!("{prefix}paging-{}", parent.as_deref().unwrap_or("root"))
+                format!("paging-{}", parent.as_deref().unwrap_or("root"))
             }
         },
-        Item::Favorite(i) => format!("{prefix}favorite-{}", s.sidebar_favorites.pages[i].id),
+        Item::Favorite(i) => format!("favorite-{}", s.sidebar_favorites.pages[i].id),
         Item::Shortcut(i, page) => {
             let section = &s.sidebar_sections.sections[i];
             format!(
-                "{prefix}{}-{}",
+                "{}-{}",
                 shortcut_prefix(section),
                 s.sidebar_sections.pages[&section.id][page].id
             )
@@ -250,7 +254,7 @@ pub fn page_drag_preview(s: &State, t: Theme) -> Option<El> {
 }
 
 pub fn view(s: &State, t: Theme) -> El {
-    let rows = Rc::new(items(s, false));
+    let rows = Rc::new(items(s));
     let mut section = None;
     let mut zones = Vec::new();
     for item in rows.iter().copied() {
@@ -307,7 +311,7 @@ pub fn view(s: &State, t: Theme) -> El {
         .virtual_rows::<State>(
             rows.len(),
             30.,
-            move |s, i| std::borrow::Cow::Owned(item_key(s, keys[i], false)),
+            move |s, i| std::borrow::Cow::Owned(item_key(s, keys[i])),
             move |s, i| match rows[i] {
                 Item::Header(i) => header(s, &s.sidebar_sections.sections[i], t),
                 Item::Private(i) => super::sidebar_tree::row_at(s, i, t, zones.clone(), viewport),
@@ -344,10 +348,12 @@ pub fn view(s: &State, t: Theme) -> El {
 }
 
 fn new_section(s: &State, t: Theme) -> El {
+    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
     let end_target = s.sidebar_sections.dragging.is_some()
         && s.sidebar_sections.drag_target.as_deref() == Some("");
     row()
         .key("sidebar-new-section")
+        .opacity(if compact { 0. } else { 1. })
         .w_full()
         .h(28.)
         .px(10.)
@@ -357,7 +363,7 @@ fn new_section(s: &State, t: Theme) -> El {
         .hover(t.hover)
         .role("button")
         .label("New section")
-        .focusable(true)
+        .focusable(!compact)
         .child(rune::icon(&phosphor::PLUS, 14.).color(t.faint).w(20.))
         .child(t.label("New section", t.faint))
         .on_press(|s: &mut State| {

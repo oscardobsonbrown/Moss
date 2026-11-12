@@ -25,7 +25,8 @@ fn sidebar_controls_and_history_work_at_narrow_and_wide_sizes() {
             assert!(header[1] + header[3] <= search[1]);
             assert!(tabs[0] >= search[0] + search[2]);
             click(&mut rt, "sidebar-collapse");
-            assert!(rt.find("sidebar").is_none());
+            assert!(rt.state.sidebar_collapsed());
+            assert!(rt.find("sidebar").is_some());
             assert!(rt.find("sidebar-expand").is_some());
             click(&mut rt, "sidebar-expand");
             assert!(rt.find("sidebar").is_some());

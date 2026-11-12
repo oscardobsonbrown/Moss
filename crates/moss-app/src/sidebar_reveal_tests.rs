@@ -65,6 +65,215 @@ fn focus(rt: &mut Runtime<State>, key: &str) {
 }
 
 #[test]
+fn sidebar_surface_expands_and_contracts_without_replacing_its_content() {
+    let (mut rt, path) = setup(850., false, 1., false);
+    let compact = rect(&rt, "sidebar-surface");
+    assert_eq!(compact[2], 44.);
+    let scroll_path = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("sidebar-scroll"))
+        .unwrap()
+        .path;
+    rt.pointer_move(28., 100.);
+    rt.frame(1. / 120.);
+    let start = rect(&rt, "sidebar-surface");
+    frames(&mut rt, 3);
+    let middle = rect(&rt, "sidebar-surface");
+    assert!(
+        start[2] < middle[2] && middle[2] < 320.,
+        "{start:?} {middle:?}"
+    );
+    frames(&mut rt, 30);
+    assert!((rect(&rt, "sidebar-surface")[2] - 320.).abs() < 1.);
+    assert_eq!(
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("sidebar-scroll"))
+            .unwrap()
+            .path,
+        scroll_path
+    );
+    rt.pointer_move(800., 450.);
+    frames(&mut rt, 9);
+    let leaving = rect(&rt, "sidebar-surface");
+    frames(&mut rt, 3);
+    let later = rect(&rt, "sidebar-surface");
+    assert!(later[2] < leaving[2], "{leaving:?} {later:?}");
+    rt.pointer_move(28., 100.);
+    rt.frame(1. / 120.);
+    let reversed = rect(&rt, "sidebar-surface");
+    assert!(reversed[2] >= later[2] - 20., "{later:?} {reversed:?}");
+    frames(&mut rt, 30);
+    assert!(rt.state.sidebar_reveal.visible);
+    assert!((rect(&rt, "sidebar-surface")[2] - 320.).abs() < 1.);
+    rt.pointer_move(800., 450.);
+    frames(&mut rt, 30);
+    assert!((rect(&rt, "sidebar-surface")[2] - 44.).abs() < 1.);
+    assert_eq!(
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("sidebar-scroll"))
+            .unwrap()
+            .path,
+        scroll_path
+    );
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn reduced_motion_opens_the_same_surface_without_travel() {
+    let (mut rt, path) = setup(850., false, 1., false);
+    rt.set_system_reduced_motion(true);
+    rt.pointer_move(28., 100.);
+    rt.frame(1. / 120.);
+    assert_eq!(rect(&rt, "sidebar-surface")[2], 320.);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn compact_sidebar_hides_labels_and_centers_icon_targets() {
+    for (dark, scale) in [(false, 1.), (true, 2.)] {
+        let (mut rt, path) = setup(850., dark, scale, false);
+        let page = rt.state.tab().unwrap().page.id.clone();
+        let node = |rt: &Runtime<State>, key: &str| {
+            rt.elements()
+                .into_iter()
+                .find(|node| node.key.as_deref() == Some(key))
+                .unwrap_or_else(|| panic!("missing {key}"))
+        };
+        for key in [
+            "sidebar-search-label",
+            "sidebar-search-shortcut",
+            "sidebar-label-settings-button",
+            "sidebar-label-trash-button",
+            "sidebar-workspace-name",
+            "sidebar-workspace-chevron",
+            &format!("page-open-{page}"),
+        ] {
+            assert!(node(&rt, key).opacity < 0.01, "{key} should be hidden");
+        }
+        for key in [
+            &format!("page-actions-{page}"),
+            &format!("page-add-{page}"),
+            "section-actions-private",
+        ] {
+            let action = node(&rt, key);
+            assert!(
+                action.opacity < 0.01 && !action.focusable,
+                "{key} should be hidden and unfocusable"
+            );
+        }
+        for key in [
+            "sidebar-search-icon",
+            "sidebar-icon-settings-button",
+            "sidebar-icon-trash-button",
+            "sidebar-workspace-icon",
+            &format!("page-icon-{page}"),
+        ] {
+            let icon = node(&rt, key).rect;
+            assert!((icon[0] + icon[2] / 2. - 22.).abs() < 1., "{key}: {icon:?}");
+        }
+        let tile = node(&rt, &format!("page-compact-tile-{page}"));
+        assert_eq!(tile.rect[2..], [26., 26.]);
+        assert!(tile.visible[2] >= 25.);
+        assert_ne!(tile.fill, node(&rt, &format!("page-highlight-{page}")).fill);
+        rt.pointer_move(28., 100.);
+        frames(&mut rt, 30);
+        for key in [
+            "sidebar-search-label",
+            "sidebar-label-settings-button",
+            "sidebar-workspace-name",
+            &format!("page-open-{page}"),
+        ] {
+            assert!(node(&rt, key).opacity > 0.99, "{key} should be visible");
+        }
+        drop(rt);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn compact_page_tile_opens_from_its_outer_edge() {
+    let (mut rt, path) = setup(850., false, 1., false);
+    let page = rt
+        .state
+        .store
+        .create_page(
+            &rt.state.workspace.id,
+            None,
+            "Target",
+            "🌱",
+            PageKind::Document,
+        )
+        .unwrap();
+    rt.state.refresh_pages();
+    rt.invalidate();
+    rt.frame(0.);
+    let tile = rect(&rt, &format!("page-compact-tile-{}", page.id));
+    rt.pointer_down(tile[0] + 1., tile[1] + tile[3] / 2.);
+    rt.pointer_up(tile[0] + 1., tile[1] + tile[3] / 2.);
+    rt.frame(0.);
+    assert_eq!(rt.state.tab().unwrap().page.id, page.id);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn reveal_keeps_the_same_page_icons_and_scroll_position() {
+    let (mut rt, path) = setup(850., false, 1., false);
+    for index in 0..45 {
+        rt.state
+            .store
+            .create_page(
+                &rt.state.workspace.id,
+                None,
+                &format!("Page {index}"),
+                "🌱",
+                PageKind::Document,
+            )
+            .unwrap();
+    }
+    rt.state.refresh_pages();
+    rt.invalidate();
+    rt.frame(0.);
+    rt.update(|_, tx| tx.scroll_to_y("sidebar-scroll", 300.));
+    frames(&mut rt, 10);
+    let offset = rt.state.sidebar_sections.scroll.get().offset[1];
+    assert!(offset > 0.);
+    let icon = rt
+        .elements()
+        .into_iter()
+        .find(|e| {
+            e.key
+                .as_deref()
+                .is_some_and(|key| key.starts_with("page-icon-"))
+                && e.visible[3] > 0.
+        })
+        .unwrap();
+    let key = icon.key.unwrap();
+    let original = icon.path;
+    let x = icon.rect[0] + icon.rect[2] / 2.;
+    rt.pointer_move(28., 100.);
+    frames(&mut rt, 30);
+    let opened = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(&key))
+        .unwrap();
+    assert_eq!(opened.path, original);
+    assert!((opened.rect[0] + opened.rect[2] / 2. - x).abs() <= 7.);
+    assert!((rt.state.sidebar_sections.scroll.get().offset[1] - offset).abs() < 1.);
+    rt.pointer_move(800., 450.);
+    frames(&mut rt, 30);
+    assert!((rt.state.sidebar_sections.scroll.get().offset[1] - offset).abs() < 1.);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn hover_reveal_and_grace_keep_content_and_preferences_stable() {
     for width in [850., 1440.] {
         for dark in [false, true] {
@@ -75,7 +284,7 @@ fn hover_reveal_and_grace_keep_content_and_preferences_stable() {
                 let content = rect(&rt, "content");
                 let top = rect(&rt, "titlebar");
                 assert_eq!(top[3], 40.);
-                assert_eq!(rect(&rt, "sidebar-rail")[2], 44.);
+                assert_eq!(rect(&rt, "sidebar-surface")[2], 44.);
                 assert_eq!(content[0], 44.);
                 assert_eq!(content[1], top[1] + top[3]);
                 assert!(rt.find("sidebar-compose").is_some());
@@ -83,7 +292,7 @@ fn hover_reveal_and_grace_keep_content_and_preferences_stable() {
                 rt.pointer_move(28., 100.);
                 frames(&mut rt, 20);
                 assert!(rt.state.sidebar_reveal.visible);
-                assert!(rt.find("sidebar-preview").is_some());
+                assert!(rt.find("sidebar-surface").is_some());
                 assert_eq!(rect(&rt, "content"), content);
                 rt.pointer_move(200., 100.);
                 frames(&mut rt, 2);
@@ -153,7 +362,7 @@ fn workspace_menu_keeps_the_sidebar_revealed_and_remains_usable() {
             click(&mut rt, "workspace-picker");
             frames(&mut rt, 20);
             assert!(matches!(rt.state.modal, Some(state::Modal::Workspace)));
-            let panel = rect(&rt, "sidebar-preview");
+            let panel = rect(&rt, "sidebar-surface");
             let settings = rect(&rt, "workspace-settings");
             let x = panel[0] + panel[2] + 2.;
             let y = settings[1] + settings[3] / 2.;
@@ -175,7 +384,7 @@ fn workspace_menu_keeps_the_sidebar_revealed_and_remains_usable() {
 #[test]
 fn keyboard_pin_and_pointer_exit_do_not_leave_preview_stuck() {
     let (mut rt, path) = setup(850., false, 1., false);
-    focus(&mut rt, "rail-workspace");
+    focus(&mut rt, "workspace-picker");
     press(&mut rt, Key::Text(" ".into()));
     frames(&mut rt, 3);
     assert!(rt.state.sidebar_reveal.visible);
@@ -326,7 +535,7 @@ fn collapsed_rail_keeps_loaded_page_and_favorite_icons_and_dividers() {
     rt.frame(0.);
     for id in &ids {
         assert!(
-            rt.find(&format!("rail-page-{id}")).is_some(),
+            rt.find(&format!("page-icon-{id}")).is_some(),
             "missing loaded page icon {id}; tree rows={}, rail keys={:?}",
             rt.state.sidebar_tree.rows.len(),
             rt.elements()
@@ -335,8 +544,19 @@ fn collapsed_rail_keeps_loaded_page_and_favorite_icons_and_dividers() {
                 .filter(|key| key.starts_with("rail-"))
                 .collect::<Vec<_>>()
         );
+        let icon = rt
+            .elements()
+            .into_iter()
+            .find(|node| node.key.as_deref() == Some(&format!("page-icon-{id}")))
+            .unwrap();
+        assert!(
+            icon.visible[2] >= 19.
+                && icon.visible[0] >= 0.
+                && icon.visible[0] + icon.visible[2] <= 44.,
+            "{icon:?}"
+        );
     }
-    assert!(rt.find(&format!("rail-favorite-{}", ids[0])).is_some());
+    assert!(rt.find(&format!("favorite-icon-{}", ids[0])).is_some());
     for key in [
         "rail-group-favorites",
         "rail-group-private",

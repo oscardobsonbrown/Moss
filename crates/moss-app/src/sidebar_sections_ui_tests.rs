@@ -642,9 +642,9 @@ fn recents_tracks_page_opens_and_tab_reactivation_and_shows_in_rail() {
     rt.state.toggle_sidebar();
     rt.invalidate();
     rt.frame(0.);
-    assert!(rt.find(&format!("rail-recent-{}", pages[1].id)).is_some());
+    assert!(rt.find(&format!("recent-icon-{}", pages[1].id)).is_some());
     assert!(
-        rt.find(&format!("rail-section-{section}-{}", pages[2].id))
+        rt.find(&format!("section-{section}-icon-{}", pages[2].id))
             .is_some()
     );
     assert!(rt.find("rail-group-recents").is_some());

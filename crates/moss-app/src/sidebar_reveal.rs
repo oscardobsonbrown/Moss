@@ -4,16 +4,9 @@ use std::time::Duration;
 
 const GRACE: f64 = 0.12;
 
-#[derive(Clone, Copy)]
-pub enum SidebarSurface {
-    Rail,
-    Panel,
-}
-
 #[derive(Default)]
 pub struct SidebarReveal {
     pub visible: bool,
-    rail_hover: bool,
     pointer_in_rail: bool,
     panel_hover: bool,
     pub keyboard_open: bool,
@@ -22,16 +15,11 @@ pub struct SidebarReveal {
 }
 
 impl State {
-    pub fn sidebar_reveal_hover(&mut self, surface: SidebarSurface, inside: bool, tx: &mut Tx) {
+    pub fn sidebar_reveal_hover(&mut self, inside: bool, tx: &mut Tx) {
         if !self.sidebar_collapsed() {
             return;
         }
-        match surface {
-            SidebarSurface::Rail => {
-                self.sidebar_reveal.rail_hover = inside;
-            }
-            SidebarSurface::Panel => self.sidebar_reveal.panel_hover = inside,
-        }
+        self.sidebar_reveal.panel_hover = inside;
         if inside && self.sidebar_reveal.suppress_rail_until_leave {
             return;
         }
@@ -49,7 +37,7 @@ impl State {
 
     pub fn dismiss_sidebar_reveal_by_key(&mut self) {
         // A modal can clear hover while the pointer still rests over the rail.
-        let suppress = self.sidebar_reveal.pointer_in_rail || self.sidebar_reveal.rail_hover;
+        let suppress = self.sidebar_reveal.pointer_in_rail;
         self.sidebar_reveal = SidebarReveal {
             pointer_in_rail: self.sidebar_reveal.pointer_in_rail,
             suppress_rail_until_leave: suppress,
@@ -89,7 +77,7 @@ pub fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
         || s.page_icon_picker.is_some()
         || matches!(s.modal, Some(Modal::Workspace | Modal::Search));
     let state = &mut s.sidebar_reveal;
-    if state.rail_hover || state.panel_hover || state.keyboard_open || protected {
+    if state.panel_hover || state.keyboard_open || protected {
         state.leave_since = None;
         // Menu closing is not a hover event, so recheck until it closes.
         if protected {

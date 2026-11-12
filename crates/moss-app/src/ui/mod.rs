@@ -39,9 +39,9 @@ mod record_metadata;
 mod record_peek;
 mod shell;
 mod sidebar_actions;
-mod sidebar_rail;
 mod sidebar_section_menu;
 mod sidebar_sections;
+mod sidebar_surface;
 mod simple_table;
 mod table;
 mod theme;
@@ -107,11 +107,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .w_full()
                 .grow(1.)
                 .min_h(0.)
-                .child(if s.sidebar_collapsed() {
-                    sidebar_rail::view(s, t)
-                } else {
-                    shell::sidebar(s, t, sidebar_width)
-                })
+                .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
                 .child(shell::content(s, t, available_width - peek_width))
                 .children(record_peek::side(s, t, peek_width)),
         )
@@ -121,7 +117,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         )
         // Sticky and frozen Table cells are raised. Raise the later root
         // overlays too, so both paint and pointer input follow overlay order.
-        .children(sidebar_rail::preview(s, t, expanded_sidebar_width).map(El::raise))
+        .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
         .children(record_peek::center(s, t).map(El::raise))
         .children(database_new::menu(s, t).map(El::raise))
         .children(database::undated_overlay(s, t).map(El::raise))

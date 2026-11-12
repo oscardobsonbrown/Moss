@@ -95,9 +95,14 @@ pub fn page_row(
         &page.title
     };
     let active = s.tab().is_some_and(|tab| tab.page.id == id);
+    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
     let width = rune::memo::layout_with("sidebar", |rect| rect[2]).unwrap_or(270.);
     // Keep at least 40 pt for titles after padding and the fixed control lanes.
-    let indent = (depth as f32 * 16.).min(160.).min((width - 163.).max(0.));
+    let indent = if compact {
+        0.
+    } else {
+        (depth as f32 * 16.).min(160.).min((width - 163.).max(0.))
+    };
     let icon_key = format!("{prefix}-icon-{id}");
     let menu_key = format!("{prefix}-actions-{id}");
     let menu_id = id.clone();
@@ -122,8 +127,12 @@ pub fn page_row(
         .gap(8.)
         .center_y()
         .radius(4.)
-        .fill(if active { t.selected } else { t.sidebar })
-        .hover(t.hover)
+        .fill(if active && !compact {
+            t.selected
+        } else {
+            t.sidebar
+        })
+        .hover(if compact { t.sidebar } else { t.hover })
         .hover_group()
         .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .on_press_tx(move |s: &mut State, tx| {
@@ -132,7 +141,7 @@ pub fn page_row(
                 return;
             }
             s.open_page(&row_id, false);
-            if has_children {
+            if has_children && !compact {
                 s.toggle_sidebar_page(&row_id);
             }
             tx.instant();
@@ -153,10 +162,44 @@ pub fn page_row(
             let slot = el()
                 .key(icon_key)
                 .size(20., 20.)
+                .offset(if compact { -6. } else { 0. }, 0.)
+                .offset_motion(tok::motion::SNAP_EXIT)
                 .center()
                 .radius(4.)
-                .hover(t.selected);
-            if has_children {
+                .hover(if compact {
+                    Color::TRANSPARENT
+                } else {
+                    t.selected
+                })
+                .children(compact.then(|| {
+                    let page_id = page.id.clone();
+                    el().key(format!("{prefix}-compact-tile-{id}"))
+                        .size(26., 26.)
+                        .a11y_hidden()
+                        .absolute(-3., -3.)
+                        .radius(4.)
+                        .fill(if active {
+                            t.selected
+                        } else {
+                            Color::TRANSPARENT
+                        })
+                        .hover(t.hover)
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.open_page(&page_id, false);
+                            tx.instant();
+                        })
+                }));
+            if compact {
+                let page_id = page.id.clone();
+                slot.role("button")
+                    .label(title)
+                    .focusable(true)
+                    .child(icon)
+                    .on_press_tx(move |s: &mut State, tx| {
+                        s.open_page(&page_id, false);
+                        tx.instant();
+                    })
+            } else if has_children {
                 slot.child(
                     icon.key(format!("{prefix}-icon-glyph-{disclosure_id}"))
                         .group_opacity(if s.sidebar_keyboard_controls { 0. } else { 1. }, 0.),
@@ -226,7 +269,9 @@ pub fn page_row(
                 .role("treeitem")
                 .label(title)
                 .focus_selected(active)
-                .focusable(true)
+                .focusable(!compact)
+                .opacity(if compact { 0. } else { 1. })
+                .opacity_motion(tok::motion::SNAP_EXIT)
                 .child(
                     label(title, t.text)
                         .key(format!("{prefix}-title-{id}"))
@@ -241,7 +286,7 @@ pub fn page_row(
                     }
                     tx.instant();
                     s.open_page(&id, false);
-                    if has_children {
+                    if has_children && !compact {
                         s.toggle_sidebar_page(&id);
                     }
                 }),
@@ -254,11 +299,19 @@ pub fn page_row(
             row()
                 .gap(0.)
                 .center_y()
-                .child(action(s, menu_key, "Page actions", &MORE, t).on_press(
-                    move |s: &mut State| {
-                        s.open_sidebar_page_menu_at_anchor(&action_id, &action_anchor, &action_icon)
-                    },
-                ))
+                .opacity(if compact { 0. } else { 1. })
+                .opacity_motion(tok::motion::SNAP_EXIT)
+                .child(
+                    action(s, menu_key, "Page actions", &MORE, t)
+                        .focusable(!compact)
+                        .on_press(move |s: &mut State| {
+                            s.open_sidebar_page_menu_at_anchor(
+                                &action_id,
+                                &action_anchor,
+                                &action_icon,
+                            )
+                        }),
+                )
                 .child(
                     action(
                         s,
@@ -267,6 +320,7 @@ pub fn page_row(
                         &PLUS,
                         t,
                     )
+                    .focusable(!compact)
                     .on_press_tx(move |s: &mut State, tx| {
                         s.begin_page(Some(child_id.clone()));
                         tx.instant();

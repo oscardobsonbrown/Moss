@@ -229,7 +229,7 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
                 )
         }))
 }
-fn nav(key: &str, icon: &'static Icon, name: &str, t: Theme) -> El {
+fn nav(key: &str, icon: &'static Icon, name: &str, compact: bool, t: Theme) -> El {
     row()
         .key(key)
         .h(30.)
@@ -246,13 +246,22 @@ fn nav(key: &str, icon: &'static Icon, name: &str, t: Theme) -> El {
             rune::icon(icon, 18.)
                 .color(t.muted)
                 .w(20.)
+                .offset(if compact { -6. } else { 0. }, 0.)
+                .offset_motion(tok::motion::SNAP_EXIT)
                 .key(format!("sidebar-icon-{key}")),
         )
-        .child(label(name, t.muted))
+        .child(
+            label(name, t.muted)
+                .key(format!("sidebar-label-{key}"))
+                .opacity(if compact { 0. } else { 1. })
+                .opacity_motion(tok::motion::SNAP_EXIT),
+        )
 }
 pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
+    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
     col()
         .key("sidebar")
+        .motion(Spring::NONE)
         .w(width)
         .min_w(width)
         .h_full()
@@ -269,7 +278,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .gap(8.)
                 .center_y()
                 .radius(6.)
-                .border(1., t.line)
+                .border(1., if compact { Color::TRANSPARENT } else { t.line })
                 .hover(t.hover)
                 .role("button")
                 .label("Search")
@@ -278,10 +287,23 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                     rune::icon(&super::phosphor::MAGNIFYING_GLASS, 16.)
                         .color(t.muted)
                         .key("sidebar-search-icon")
+                        .offset(if compact { -6. } else { 0. }, 0.)
+                        .offset_motion(tok::motion::SNAP_EXIT)
                         .w(20.),
                 )
-                .child(t.label("Search", t.faint).grow(1.))
-                .child(t.label("⌘K", t.faint))
+                .child(
+                    t.label("Search", t.faint)
+                        .key("sidebar-search-label")
+                        .grow(1.)
+                        .opacity(if compact { 0. } else { 1. })
+                        .opacity_motion(tok::motion::SNAP_EXIT),
+                )
+                .child(
+                    t.label("⌘K", t.faint)
+                        .key("sidebar-search-shortcut")
+                        .opacity(if compact { 0. } else { 1. })
+                        .opacity_motion(tok::motion::SNAP_EXIT),
+                )
                 .on_press(|s: &mut State| s.open_search()),
         )
         .child(el().h(18.))
@@ -300,14 +322,28 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 })
                 .child(super::sidebar_sections::view(s, t)),
         )
-        .child(el().h(12.))
+        .child(if compact {
+            row()
+                .h(12.)
+                .w(28.)
+                .center()
+                .child(el().key("rail-group-utilities").size(20., 1.).fill(t.line))
+        } else {
+            el().h(12.)
+        })
         .child(
-            nav("settings-button", &super::phosphor::GEAR_SIX, "Settings", t)
-                .w_full()
-                .on_press(|s: &mut State| s.modal = Some(Modal::Settings)),
+            nav(
+                "settings-button",
+                &super::phosphor::GEAR_SIX,
+                "Settings",
+                compact,
+                t,
+            )
+            .w_full()
+            .on_press(|s: &mut State| s.modal = Some(Modal::Settings)),
         )
         .child(
-            nav("trash-button", &super::phosphor::TRASH, "Trash", t)
+            nav("trash-button", &super::phosphor::TRASH, "Trash", compact, t)
                 .w_full()
                 .on_press(|s: &mut State| s.open_trash()),
         )
@@ -333,19 +369,35 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .child(
                     el().key("sidebar-workspace-icon")
                         .size(20., 24.)
+                        .offset(if compact { -6. } else { 0. }, 0.)
+                        .offset_motion(tok::motion::SNAP_EXIT)
                         .center()
                         .child(super::theme::sized_label(&s.workspace.icon, 16., t.text)),
                 )
                 .child(
                     text(&s.workspace.name)
+                        .key("sidebar-workspace-name")
                         .font(TextStyle::new(14., 600.))
                         .color(t.text)
                         .truncate()
                         .grow(1.)
-                        .min_w(0.),
+                        .min_w(0.)
+                        .opacity(if compact { 0. } else { 1. })
+                        .opacity_motion(tok::motion::SNAP_EXIT),
                 )
-                .child(rune::icon(&super::phosphor::CARET_DOWN, 16.).color(t.muted))
-                .on_press(|s: &mut State| s.modal = Some(Modal::Workspace)),
+                .child(
+                    rune::icon(&super::phosphor::CARET_DOWN, 16.)
+                        .key("sidebar-workspace-chevron")
+                        .color(t.muted)
+                        .opacity(if compact { 0. } else { 1. })
+                        .opacity_motion(tok::motion::SNAP_EXIT),
+                )
+                .on_press(|s: &mut State| {
+                    if s.sidebar_collapsed() {
+                        s.open_sidebar_reveal_for_keyboard();
+                    }
+                    s.modal = Some(Modal::Workspace);
+                }),
         )
         .child(el().h(8.))
 }
