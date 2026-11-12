@@ -147,6 +147,7 @@ impl Store {
             page.id = ids[page_id].clone();
             page.title = record.title.clone();
             page.created_at = stamp.clone();
+            page.sidebar_order = None;
             page.updated_at = stamp;
             tx.execute(
                 "INSERT INTO pages(id,workspace_id,parent_id,deleted_at,data) VALUES(?1,?2,?3,NULL,?4)",

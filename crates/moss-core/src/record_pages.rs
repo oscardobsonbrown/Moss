@@ -77,6 +77,7 @@ impl Store {
             kind: PageKind::Record,
             cover: None,
             created_at: t.clone(),
+            sidebar_order: None,
             updated_at: t.clone(),
             deleted_at: None,
             settings: Default::default(),

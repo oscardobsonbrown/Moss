@@ -2,6 +2,70 @@ use crate::*;
 use std::collections::BTreeMap;
 
 #[test]
+fn manual_page_order_survives_paging_and_rejects_other_parents() {
+    let mut s = Store::in_memory().unwrap();
+    let w = s.create_workspace("Order", "").unwrap();
+    let pages: Vec<_> = (0..7)
+        .map(|n| {
+            s.create_page(&w.id, None, &format!("{n}"), "", PageKind::Document)
+                .unwrap()
+        })
+        .collect();
+    let child = s
+        .create_page(&w.id, Some(&pages[0].id), "Child", "", PageKind::Document)
+        .unwrap();
+    s.reorder_sidebar_page(&w.id, &pages[6].id, Some(&pages[0].id))
+        .unwrap();
+    s.reorder_sidebar_page(&w.id, &pages[1].id, None).unwrap();
+    let mut stale = pages[6].clone();
+    stale.title = "Renamed".into();
+    s.update_page(&stale).unwrap();
+    assert!(
+        s.reorder_sidebar_page(&w.id, &pages[0].id, Some(&child.id))
+            .is_err()
+    );
+    let expected: Vec<_> = [6, 0, 2, 3, 4, 5, 1]
+        .into_iter()
+        .map(|i| pages[i].id.clone())
+        .collect();
+    let mut seen = Vec::new();
+    let mut group = s
+        .page_children(&w.id, None, PagePosition::Start, 2)
+        .unwrap();
+    loop {
+        seen.extend(group.items.iter().map(|p| p.page.id.clone()));
+        let Some(next) = group.next else { break };
+        let next_group = s
+            .page_children(&w.id, None, PagePosition::After(&next), 2)
+            .unwrap();
+        let previous = s
+            .page_children(
+                &w.id,
+                None,
+                PagePosition::Before(next_group.previous.as_ref().unwrap()),
+                2,
+            )
+            .unwrap();
+        assert_eq!(
+            previous
+                .items
+                .iter()
+                .map(|p| &p.page.id)
+                .collect::<Vec<_>>(),
+            group.items.iter().map(|p| &p.page.id).collect::<Vec<_>>()
+        );
+        group = next_group;
+    }
+    assert_eq!(seen, expected);
+    for _ in 0..200 {
+        s.reorder_sidebar_page(&w.id, &pages[6].id, Some(&pages[0].id))
+            .unwrap();
+        s.reorder_sidebar_page(&w.id, &pages[0].id, Some(&pages[6].id))
+            .unwrap();
+    }
+}
+
+#[test]
 fn child_cursor_crosses_equal_and_distinct_timestamps_in_both_directions() {
     let mut s = Store::in_memory().unwrap();
     let w = s.create_workspace("Cursor", "").unwrap();
