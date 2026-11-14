@@ -8,6 +8,7 @@ fn fixture_with_record() -> (
 ) {
     let (mut rt, path) = database_runtime(0);
     rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Fixture item");
     assert!(rt.state.finish_cell(false));
     let tab = rt.state.tab().unwrap();
     let db = tab.database.clone().unwrap();

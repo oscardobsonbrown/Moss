@@ -26,21 +26,23 @@ pub fn view(s: &State, t: Theme) -> El {
     let kind = db.views.get(tab.view).map(|v| v.kind);
     let body = match kind {
         Some(ViewKind::Table) => super::table::view(s, tab, db, t),
-        Some(ViewKind::Board) => super::board::view(s, tab, db, t),
-        Some(ViewKind::Calendar) => super::calendar::view(s, tab, db, t),
-        Some(ViewKind::Timeline) => super::timeline::view(s, tab, db, t),
-        Some(ViewKind::Gallery) => super::gallery::view(s, tab, db, t),
-        Some(ViewKind::List) => list(s, tab, db, t),
-        Some(ViewKind::Chart) => super::chart::view(s, tab, db, t),
-        Some(ViewKind::Map) => super::map::view(s, tab, db, t),
-        Some(ViewKind::Dashboard) => super::dashboard::view(s, tab, db, t),
-        Some(other) => col().padding(20.).child(t.label(
+        Some(ViewKind::Board) => vec![super::board::view(s, tab, db, t)],
+        Some(ViewKind::Calendar) => vec![super::calendar::view(s, tab, db, t)],
+        Some(ViewKind::Timeline) => vec![super::timeline::view(s, tab, db, t)],
+        Some(ViewKind::Gallery) => vec![super::gallery::view(s, tab, db, t)],
+        Some(ViewKind::List) => vec![list(s, tab, db, t)],
+        Some(ViewKind::Chart) => vec![super::chart::view(s, tab, db, t)],
+        Some(ViewKind::Map) => vec![super::map::view(s, tab, db, t)],
+        Some(ViewKind::Dashboard) => vec![super::dashboard::view(s, tab, db, t)],
+        Some(other) => vec![col().padding(20.).child(t.label(
             format!("{} view is not available yet.", other.label()),
             t.muted,
-        )),
-        None => col()
-            .padding(20.)
-            .child(t.label("No database view is available.", t.muted)),
+        ))],
+        None => vec![
+            col()
+                .padding(20.)
+                .child(t.label("No database view is available.", t.muted)),
+        ],
     };
     let limit = db
         .views
@@ -141,14 +143,6 @@ pub fn view(s: &State, t: Theme) -> El {
                                 }),
                         ),
                 )
-            } else if window.loading {
-                Some(
-                    row()
-                        .key("table-window-loading")
-                        .min_h(30.)
-                        .center_y()
-                        .child(t.label("Loading rows…", t.muted)),
-                )
             } else {
                 None
             }
@@ -178,7 +172,7 @@ pub fn view(s: &State, t: Theme) -> El {
                         .on_scroll_offset(move |position| signal.set(position))
                         .on_wheel(|s: &mut State, event, tx| s.calendar_wheel(event, tx));
                 }
-                viewport.child(body)
+                viewport.children(body)
             } else {
                 let mut viewport = viewport.scroll_xy();
                 if kind == Some(ViewKind::Board) {
@@ -201,7 +195,7 @@ pub fn view(s: &State, t: Theme) -> El {
                         }
                     });
                 }
-                viewport.child(body)
+                viewport.children(body)
             }
         })
         .children(

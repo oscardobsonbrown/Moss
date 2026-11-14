@@ -1,4 +1,4 @@
-use super::{phosphor, theme::Theme};
+use super::theme::Theme;
 use crate::{
     sidebar_section_menu::SectionMenuMode,
     sidebar_sections::{SidebarSection, SidebarSectionKind},
@@ -45,7 +45,7 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
         .key(format!("section-header-{id}"))
         .w_full()
         .h(26.)
-        .pl(10.)
+        .pl(12.)
         .pr(3.)
         .center_y()
         .radius(4.)
@@ -80,6 +80,7 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                 .opacity_motion(tok::motion::SNAP_EXIT)
                 .child(
                     t.label(&section.name, t.faint)
+                        .font(TextStyle::new(14., 500.).family(Family::Sans))
                         .key(format!("{id}-heading"))
                         .truncate()
                         .shrink()
@@ -88,9 +89,9 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                 .child(
                     rune::icon(
                         if section.collapsed {
-                            &phosphor::CARET_RIGHT
+                            &super::sidebar_actions::RIGHT
                         } else {
-                            &phosphor::CARET_DOWN
+                            &super::view_icons::TOOLBAR_CARET
                         },
                         12.,
                     )
@@ -132,7 +133,7 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                 s,
                 anchor,
                 &format!("{} section options", section.name),
-                &phosphor::DOTS_THREE,
+                &super::sidebar_actions::MORE,
                 16.,
                 t.hover,
                 t,
@@ -215,7 +216,7 @@ fn item_key(s: &State, item: Item) -> String {
                 s.sidebar_sections.pages[&section.id][page].id
             )
         }
-        Item::New => "sidebar-new-section".into(),
+        Item::New => "sidebar-new-section-slot".into(),
     }
 }
 
@@ -372,33 +373,41 @@ fn new_section(s: &State, t: Theme) -> El {
     let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
     let end_target = s.sidebar_sections.dragging.is_some()
         && s.sidebar_sections.drag_target.as_deref() == Some("");
-    row()
+    let button = row()
         .key("sidebar-new-section")
         .opacity(if compact { 0. } else { 1. })
         .w_full()
         .h(28.)
-        .px(10.)
-        .gap(8.)
+        .px(5.)
+        .gap(7.)
         .center_y()
-        .radius(4.)
+        .radius(7.)
         .hover(t.hover)
         .role("button")
         .label("New section")
         .focusable(!compact)
-        .child(rune::icon(&phosphor::PLUS, 14.).color(t.faint).w(20.))
-        .child(t.label("New section", t.faint))
+        .child(
+            row()
+                .size(20., 20.)
+                .center()
+                .child(rune::icon(&super::view_icons::TOOLBAR_PLUS, 14.).color(t.faint)),
+        )
+        .child(
+            t.label("New section", t.faint)
+                .font(TextStyle::new(14., 500.).family(Family::Sans)),
+        )
         .child(el().grow(1.))
         .child(
             row()
                 .key("sidebar-manage-sections")
-                .size(24., 24.)
+                .size(20., 20.)
                 .center()
-                .radius(4.)
+                .radius(5.)
                 .hover(t.selected)
                 .role("button")
                 .label("Show or hide sections")
                 .focusable(!compact)
-                .child(rune::icon(&phosphor::SLIDERS_HORIZONTAL, 16.).color(t.faint))
+                .child(rune::icon(&super::view_icons::TOOLBAR_SETTINGS, 16.).color(t.faint))
                 .on_press_tx(|s: &mut State, tx| {
                     s.open_sidebar_section_menu(
                         SectionMenuMode::Visibility,
@@ -410,5 +419,6 @@ fn new_section(s: &State, t: Theme) -> El {
         .on_press(|s: &mut State| {
             s.open_sidebar_section_menu(SectionMenuMode::Create, "sidebar-new-section")
         })
-        .children(end_target.then(|| el().absolute(0., 0.).w_full().h(2.).fill(t.blue)))
+        .children(end_target.then(|| el().absolute(0., 0.).w_full().h(2.).fill(t.blue)));
+    row().w_full().h(30.).px(7.).center_y().child(button)
 }

@@ -43,6 +43,7 @@ pub fn drag_preview(s: &State, t: Theme) -> Option<El> {
         projection,
         t,
         true,
+        None,
     )
     .w(drag.width);
     let preview = if drag.undated {
@@ -74,64 +75,62 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let Some(view) = db.views.get(tab.view) else {
         return col();
     };
-    let Some(prop) = calendar_view::date_property(db, view) else {
-        return col().padding(16.).child(t.label(
-            "Choose a date property in Calendar layout settings.",
-            t.muted,
-        ));
+    let slide = &s.database_views.calendar.slide;
+    let width = if slide.width > 0. { slide.width } else { 700. };
+    let current = s.database_views.calendar.projection_for(&db.id, &view.id);
+    let current = period_view(s, tab, db, t, tab.calendar_month, current, true);
+    let content = if slide.active {
+        let neighbor = |forward| {
+            calendar_view::adjacent_period(tab.calendar_month, view, forward)
+                .and_then(|period| {
+                    let (first, _) = calendar_view::bounds_for(period, view, s.prefs.week_start())?;
+                    let projection = s.database_views.calendar.adjacent.get(&first)?;
+                    Some(period_view(s, tab, db, t, period, Some(projection), false))
+                })
+                .unwrap_or_else(col)
+                .w(width)
+        };
+        col().offset(-width, 0.).offset_motion(Anim::INSTANT).child(
+            row().w(width * 3.).items_start().live_offset(&slide.offset)
+                .child(neighbor(false))
+                .child(current.w(width))
+                .child(neighbor(true)),
+        )
+    } else {
+        current.live_offset(&slide.offset)
     };
-    let Some((first, last)) = calendar_view::bounds(tab, view, s.prefs.start_week_on_monday) else {
-        return col();
-    };
+    let viewport = col().key("calendar-slide-viewport")
+        .w_full().min_w(0.).clip_rounded(0.)
+        .on_layout_tx(|s: &mut State, rect, tx| {
+            if (s.database_views.calendar.slide.width - rect[2]).abs() > 0.5 {
+                s.database_views.calendar.slide.resize(rect[2]);
+            } else {
+                tx.live_only();
+            }
+        })
+        .child(content);
+    col().w_full().min_w(0.).gap(4.).child(calendar_header(s, tab, view, t)).child(viewport)
+}
+
+fn calendar_header(s: &State, tab: &Tab, view: &moss_core::DatabaseView, t: Theme) -> El {
+    let period = tab.calendar_month;
     let is_week = calendar_view::week(view);
-    let properties = moss_core::record_layout::properties(db);
-    let shown_properties: Vec<_> = properties
-        .iter()
-        .copied()
-        .filter(|p| super::property_visibility::visible(db, tab.view, &p.id))
-        .collect();
-    let projection = s.database_views.calendar.projection_for(&db.id, &view.id);
-    let records = projection
-        .map(|p| p.records.as_slice())
-        .unwrap_or(&tab.records);
-    let undated = projection.map(|p| p.undated_count).unwrap_or_else(|| {
-        records
-            .iter()
-            .filter(|r| calendar_view::date_range(r, prop).is_none())
-            .count() as u64
-    });
-    let today = chrono::Local::now().date_naive();
+    let Some((first, last)) = calendar_view::bounds_for(period, view, s.prefs.week_start()) else { return row() };
     let label = if is_week {
         format!("{} – {}", first.format("%d %b"), last.format("%d %b %Y"))
     } else {
-        tab.calendar_month.format("%B %Y").to_string()
+        period.format("%B %Y").to_string()
     };
-    let header = row()
+    row()
         .key("calendar-header")
         .w_full()
         .center_y()
         .gap(4.)
-        .child(t.label(label, t.text).grow(1.))
-        .child(
-            button(
-                "calendar-no-date",
-                if projection.is_none() && s.database_views.calendar.loading {
-                    "No date (…)".to_owned()
-                } else {
-                    format!("No date ({undated})")
-                },
-                t,
-            )
-            .on_press(|s: &mut State| {
-                s.database_views.calendar.suppress_press = false;
-                s.undated_open = !s.undated_open;
-                s.undated_search = TextEdit::new("");
-                s.undated_search.focused = s.undated_open;
-            }),
-        )
+        .child(t.label(label, t.text).font(TextStyle::new(14., 600.).family(t.family)).grow(1.))
         .child(
             navigation_button("calendar-prev", "Previous", "‹", t).on_press_tx(
                 move |s: &mut State, tx| {
+                    s.reset_calendar_slide();
                     if let Some(tab) = s.tabs.get_mut(s.active) {
                         let next = if is_week {
                             tab.calendar_month.checked_sub_signed(Duration::days(7))
@@ -150,6 +149,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         )
         .child(
             button("calendar-today", "Today", t).on_press_tx(move |s: &mut State, tx| {
+                s.reset_calendar_slide();
                 if let Some(tab) = s.tabs.get_mut(s.active) {
                     let now = chrono::Local::now().date_naive();
                     tab.calendar_month = if is_week {
@@ -165,6 +165,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         .child(
             navigation_button("calendar-next", "Next", "›", t).on_press_tx(
                 move |s: &mut State, tx| {
+                    s.reset_calendar_slide();
                     if let Some(tab) = s.tabs.get_mut(s.active) {
                         let next = if is_week {
                             tab.calendar_month.checked_add_signed(Duration::days(7))
@@ -180,13 +181,44 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     tx.instant();
                 },
             ),
-        );
+        )
+}
+
+fn period_view(
+    s: &State,
+    tab: &Tab,
+    db: &Database,
+    t: Theme,
+    period: NaiveDate,
+    projection: Option<&moss_core::calendar::CalendarProjection>,
+    current: bool,
+) -> El {
+    let Some(view) = db.views.get(tab.view) else { return col() };
+    let Some(prop) = calendar_view::date_property(db, view) else {
+        return col().padding(16.).child(t.label(
+            "Choose a date property in Calendar layout settings.",
+            t.muted,
+        ));
+    };
+    let Some((first, last)) = calendar_view::bounds_for(period, view, s.prefs.week_start()) else {
+        return col();
+    };
+    let is_week = calendar_view::week(view);
+    let properties = moss_core::record_layout::properties(db);
+    let shown_properties: Vec<_> = properties
+        .iter()
+        .copied()
+        .filter(|p| super::property_visibility::visible(db, tab.view, &p.id))
+        .collect();
+    let records = projection
+        .map(|p| p.records.as_slice())
+        .unwrap_or(&tab.records);
+    let today = chrono::Local::now().date_naive();
     let mut content = col()
-        .key("calendar-grid")
+        .key(if current { "calendar-grid".to_owned() } else { format!("calendar-preview-{period}") })
         .w_full()
         .min_w(0.)
-        .gap(4.)
-        .child(header);
+        .gap(4.);
     if s.database_views.calendar.schedule.is_some() {
         content = content.child(t.label(
             "Choose a day to schedule the page. Press Escape to cancel.",
@@ -210,7 +242,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                 ),
         );
     }
-    if s.database_views.calendar.loading {
+    if current && projection.is_none() && s.database_views.calendar.loading {
         content = content.child(t.label("Loading calendar…", t.muted));
     }
     if let Some(projection) = projection.filter(|p| p.dated_count > 1000) {
@@ -244,12 +276,8 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         content = content.child(pager);
     }
     let mut weekdays = row().w_full();
-    let names = if s.prefs.start_week_on_monday {
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    } else {
-        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    };
-    for name in names {
+    for offset in 0..7 {
+        let name = calendar_view::WEEKDAYS[(s.prefs.week_start() as usize + offset) % 7];
         weekdays = weekdays.child(
             row()
                 .key(format!("calendar-weekday-{name}"))
@@ -326,10 +354,12 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
             } else {
                 date.day().to_string()
             };
-            let muted = date.month() != tab.calendar_month.month() && !is_week;
+            let muted = date.month() != period.month() && !is_week;
             let day_number = row()
-                .size(26., 26.)
-                .center()
+                .min_w(26.)
+                .h(26.)
+                .px(6.)
+                .center_y()
                 .radius(13.)
                 .fill(if date == today {
                     t.error
@@ -345,18 +375,27 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     } else {
                         t.text
                     },
-                ));
+                ).key(format!("calendar-date-label-{date}")));
             let add = row()
                 .key(format!("calendar-add-{date}"))
                 .size(26., 26.)
                 .center()
-                .radius(4.)
-                .hover(t.hover)
                 .role("button")
                 .label(format!("New page on {date}"))
                 .focusable(true)
-                .group_opacity(0.25, 1.)
-                .child(rune::icon(&phosphor::PLUS, 16.).color(t.muted))
+                .focus_ring(2., 0., t.blue)
+                .child(
+                    row().key(format!("calendar-add-visual-{date}"))
+                        .size(22., 22.)
+                        .center()
+                        .radius(6.)
+                        .fill(t.bg)
+                        .border(1., t.line)
+                        .shadow(1., 3., Color::BLACK.alpha(0.08))
+                        .hover(t.hover)
+                        .group_opacity(0., 1.)
+                        .child(rune::icon(&phosphor::PLUS, 14.).color(t.muted)),
+                )
                 .on_press(move |s: &mut State| create(s, &add_id, date));
             let mut cell = col()
                 .key(format!("calendar-day-{date}"))
@@ -382,7 +421,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                 )
                 .hover_group()
                 .on_drawn_layout_tx(move |s: &mut State, rect, tx| {
-                    s.database_views.calendar.day_rects.insert(date, rect);
+                    s.database_views.calendar.day_rects.insert((period, date), rect);
                     tx.live_only();
                 })
                 .child(
@@ -431,6 +470,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     projection,
                     t,
                     false,
+                    (!current).then_some(period),
                 )
                 .absolute(left as f32 * column_width + 4., top)
                 .w((right - left + 1) as f32 * column_width - 8.)
@@ -456,6 +496,7 @@ fn card(
     projection: Option<&moss_core::calendar::CalendarProjection>,
     t: Theme,
     floating: bool,
+    preview_period: Option<NaiveDate>,
 ) -> El {
     let title = if record.title.is_empty() {
         "Untitled"
@@ -466,7 +507,9 @@ fn card(
     let db_id = db.id.clone();
     let drag_record = record.clone();
     let drag_property = property_id.to_owned();
-    let card_key = if floating {
+    let card_key = if let Some(period) = preview_period {
+        format!("calendar-preview-card-{period}-{index}-{date}")
+    } else if floating {
         "calendar-drag-preview".to_owned()
     } else if primary {
         format!("calendar-{index}")
@@ -624,7 +667,9 @@ fn card(
             let id = record.id.clone();
             let property_id = property.id.clone();
             let kind = property.kind;
-            let anchor = if floating {
+            let anchor = if let Some(period) = preview_period {
+                format!("calendar-preview-value-{period}-{}-{}-{date}", record.id, property.id)
+            } else if floating {
                 format!("calendar-drag-value-{}", property.id)
             } else {
                 format!("calendar-value-{}-{}-{date}", record.id, property.id)
@@ -857,6 +902,6 @@ pub fn undated_panel(s: &State, tab: &Tab, db: &Database, t: Theme) -> Option<El
                     },
                 ),
             )
-            .anchored("calendar-no-date", Side::Bottom, Align::End, 4.),
+            .anchored("db-view-settings", Side::Bottom, Align::End, 4.),
     )
 }

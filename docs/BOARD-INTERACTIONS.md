@@ -89,3 +89,7 @@ The boundary regression drags across all four Board edges at 1× and 2×. It che
 Only the current drop marker adds space. Cancel restores the source order, while a saved move leaves no return slot. A dragged source column stays mounted during horizontal edge scrolling. The new regression checks footer spacing in an empty column, removal of the first and last source cards, cancellation and a saved move at both display scales. The subgroup test aims at its current row after source removal moves the rows below it.
 
 The 59-test app `board_` filter passes, including all 16 Board interaction tests. Build, formatting and diff checks pass. Rest and lifted-card renders under `/tmp/moss-board-flow-review/` were inspected. The development app was restarted. Native input remains unverified: computer use can list apps after the restart, but it rejects the unbundled development executable as an invalid app.
+
+## Card styling — 2026-11-14
+
+The supplied Notion image and a local sample were compared at the same card width. Cards show filled properties, stack linked pages, and omit generic title icons. Custom page icons remain available. Empty place properties can be set from the card menu; other empty properties can be edited on the opened page. Moss keeps its existing board columns and Geist font.

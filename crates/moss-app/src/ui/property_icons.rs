@@ -9,9 +9,9 @@ use super::phosphor::{
     MAP_PIN as PLACE, PHONE, TAG, TEXT_AA, TOGGLE_LEFT as BUTTON, USER as PERSON,
 };
 
-pub fn view(kind: PropertyKind, color: Color) -> El {
+fn icon(kind: PropertyKind) -> &'static rune::Icon {
     use PropertyKind::*;
-    let icon = match kind {
+    match kind {
         Title | Text => &TEXT_AA,
         Number => &HASH,
         Formula => &FUNCTION,
@@ -32,8 +32,25 @@ pub fn view(kind: PropertyKind, color: Color) -> El {
         EditedTime => &EDITED,
         Place => &PLACE,
         Button => &BUTTON,
-    };
-    rune::icon(icon, 16.).color(color)
+    }
+}
+
+pub fn view(kind: PropertyKind, color: Color) -> El {
+    rune::icon(icon(kind), 16.).color(color)
+}
+
+pub fn header(kind: PropertyKind, color: Color) -> El {
+    let original = icon(kind);
+    let name = original
+        .name
+        .strip_prefix("phosphor-")
+        .and_then(|name| name.strip_suffix("-regular"));
+    rune::icon(
+        name.and_then(super::view_icons::catalog_icon)
+            .unwrap_or(original),
+        16.,
+    )
+    .color(color)
 }
 
 pub fn metadata_name(

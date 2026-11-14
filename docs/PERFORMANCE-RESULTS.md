@@ -138,3 +138,11 @@ for i in (1, 16):
     if p.value: cf.CFRelease(p)
 PY
 ```
+
+## Table scrolling, 14 November 2026
+
+A release headless test used 3,000 records, eight properties, a 1,440 × 900 point window at 2× scale, and time-based wheel input. It ran 104 measured frames at each speed in the sequence 1,000, 2,000, 3,000, 5,000, 8,000, 13,000, 21,000, 34,000, 55,000, 89,000, 144,000, and 160,000 points per second. It checked visible row coverage, record identity, scroll direction, and the distance moved. The test data and logs were local scratch files; the OS cache and other processes were not controlled.
+
+No loading indicators, missing visible rows, incorrect visible record titles, jumps, or reversals were observed in that run. At speeds through 89,000 points per second, all 104 measured CPU frames stayed below 8.33 ms. At 144,000, 76 frames exceeded 8.33 ms (p50 9.78 ms, p95 18.63 ms); at 160,000, 81 did (p50 10.17 ms, p95 19.10 ms). The scroll can reach a table boundary, so measured mean travel may be below the input speed. These timings are headless CPU measurements, not native presentation or GPU timing, and do not establish sustained 120 Hz.
+
+An isolated experiment reduced Rune's off-screen row preparation. At 160,000 points per second it still exceeded the frame budget in 52 of 104 frames (p50 8.36 ms, p95 11.10 ms). It was not added to the project. An uncached jump in a table larger than the data window can still show placeholder rows while the requested records load; this case is not covered by the no-loading result above.

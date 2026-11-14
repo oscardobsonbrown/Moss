@@ -1,6 +1,27 @@
 use moss_core::ViewKind;
 use rune::*;
 
+include!("../../assets/phosphor/catalog.rs");
+
+pub fn catalog_icon(name: &str) -> Option<&'static Icon> {
+    CATALOG
+        .binary_search_by_key(&name, |(name, _)| *name)
+        .ok()
+        .map(|index| &CATALOG[index].1)
+}
+
+pub fn catalog() -> &'static [(&'static str, Icon)] {
+    CATALOG
+}
+
+pub fn for_view(view: &moss_core::DatabaseView) -> &'static Icon {
+    view.config
+        .get("icon")
+        .and_then(serde_json::Value::as_str)
+        .and_then(catalog_icon)
+        .unwrap_or_else(|| toolbar_icon(view.kind))
+}
+
 use super::phosphor::{
     CALENDAR_BLANK as CALENDAR, CARDS as FEED, CHART_BAR as CHART, IMAGES_SQUARE as GALLERY,
     KANBAN as BOARD, LIST_BULLETS as LIST, MAP_PIN as MAP, ROWS as TIMELINE,
@@ -61,6 +82,20 @@ pub fn icon(kind: ViewKind) -> &'static Icon {
         ViewKind::Dashboard => &DASHBOARD,
     }
 }
-pub fn element(kind: ViewKind, size: f32, color: Color) -> El {
-    rune::icon(icon(kind), size).color(color)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_catalogue_icon_is_searchable() {
+        assert_eq!(catalog().len(), 1512);
+        for (name, icon) in catalog() {
+            assert_eq!(
+                catalog_icon(name).map(|found| found.name),
+                Some(icon.name),
+                "{name}"
+            );
+        }
+    }
 }

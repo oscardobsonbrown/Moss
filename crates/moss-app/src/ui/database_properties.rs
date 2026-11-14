@@ -47,7 +47,7 @@ fn action(key: &str, name: &str, icon: &'static Icon, t: Theme) -> El {
         .child(label(name, t.text).grow(1.).truncate())
 }
 
-pub fn header(property: &Property, title: bool, t: Theme) -> El {
+pub fn header(property: &Property, title: bool, width: f32, t: Theme) -> El {
     let id = property.id.clone();
     row()
         .key(if title {
@@ -55,7 +55,7 @@ pub fn header(property: &Property, title: bool, t: Theme) -> El {
         } else {
             format!("table-header-{id}")
         })
-        .w(if title { 280. } else { 200. })
+        .w(width)
         .min_h(38.)
         .px(10.)
         .gap(6.)
@@ -65,7 +65,7 @@ pub fn header(property: &Property, title: bool, t: Theme) -> El {
         .role("button")
         .label(format!("Edit {} property", property.name))
         .focusable(true)
-        .child(super::property_icons::view(property.kind, t.muted))
+        .child(super::property_icons::header(property.kind, t.muted))
         .child(t.label(&property.name, t.muted).min_w(0.).truncate())
         .on_press(move |s: &mut State| s.open_database_property(Some(&id)))
 }

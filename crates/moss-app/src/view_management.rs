@@ -11,6 +11,7 @@ pub enum ViewPane {
     Sort,
     Group,
     OpenMode,
+    Icons,
     BoardLayout,
     BoardCardSize,
     BoardCardPreview,
@@ -31,6 +32,7 @@ pub struct ViewEditor {
     pub error: Option<String>,
     pub confirm_delete: bool,
     pub from_settings: bool,
+    pub icon_search: TextEdit,
 }
 
 pub fn ordered_board_groups(
@@ -439,6 +441,7 @@ impl State {
             error: None,
             confirm_delete: false,
             from_settings: false,
+            icon_search: TextEdit::new(""),
         });
     }
     pub fn open_new_view(&mut self) {
@@ -467,6 +470,7 @@ impl State {
             error: None,
             confirm_delete: false,
             from_settings: false,
+            icon_search: TextEdit::new(""),
         });
     }
     pub fn new_view_from_settings(&mut self) {
@@ -711,6 +715,37 @@ impl State {
                 Ok(())
             })
             .map_err(|e| e.to_string());
+        if self.view_result(result, None, false) {
+            self.view_management.as_mut().unwrap().pane = ViewPane::Main;
+        }
+    }
+
+    pub fn set_view_icon(&mut self, icon: Option<&str>) {
+        if icon.is_some_and(|name| crate::ui::view_icons::catalog_icon(name).is_none()) {
+            return;
+        }
+        let Some((id, Some(view))) = self.view_context() else {
+            return;
+        };
+        let expected = view.config.get("icon").cloned();
+        let result = self
+            .store
+            .edit_view_config(&id, &view.id, view.kind, |config| {
+                if config.get("icon").cloned() != expected {
+                    return Err("View icon changed elsewhere".into());
+                }
+                if config.is_null() {
+                    *config = serde_json::json!({});
+                }
+                let config = config.as_object_mut().ok_or("Invalid view settings")?;
+                if let Some(icon) = icon {
+                    config.insert("icon".into(), icon.into());
+                } else {
+                    config.remove("icon");
+                }
+                Ok(())
+            })
+            .map_err(|error| error.to_string());
         if self.view_result(result, None, false) {
             self.view_management.as_mut().unwrap().pane = ViewPane::Main;
         }

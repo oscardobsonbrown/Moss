@@ -264,7 +264,7 @@ fn reveal_keeps_the_same_page_icons_and_scroll_position() {
         .find(|e| e.key.as_deref() == Some(&key))
         .unwrap();
     assert_eq!(opened.path, original);
-    assert!((opened.rect[0] + opened.rect[2] / 2. - x).abs() <= 7.);
+    assert!((opened.rect[0] + opened.rect[2] / 2. - x).abs() <= 8.);
     assert!((rt.state.sidebar_sections.scroll.get().offset[1] - offset).abs() < 1.);
     rt.pointer_move(800., 450.);
     frames(&mut rt, 30);

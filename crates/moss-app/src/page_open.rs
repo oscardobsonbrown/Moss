@@ -62,6 +62,11 @@ impl State {
                         .and_then(|view_id| db.views.iter().position(|view| &view.id == view_id))
                 })
                 .unwrap_or(0);
+            let limit = database
+                .as_ref()
+                .and_then(|db| db.views.get(selected_view))
+                .map(|view| crate::table_window::initial_limit(view, "", 0))
+                .unwrap_or(100) as usize;
             let mut records = if let Some(db) = &database {
                 let mut query = db
                     .views
@@ -69,21 +74,11 @@ impl State {
                     .map(|view| view.query.clone())
                     .unwrap_or_default();
                 query.offset = 0;
-                query.limit = db
-                    .views
-                    .get(selected_view)
-                    .map(crate::records::view_load_limit)
-                    .unwrap_or(100)
-                    + 1;
+                query.limit = limit as u32 + 1;
                 self.store.query_records(&db.id, &query)?
             } else {
                 vec![]
             };
-            let limit = database
-                .as_ref()
-                .and_then(|db| db.views.get(selected_view))
-                .map(crate::records::view_load_limit)
-                .unwrap_or(100) as usize;
             let has_more_records = records.len() > limit;
             records.truncate(limit);
             let cursor_query = database
@@ -233,7 +228,23 @@ impl State {
             Ok(tab)
         })();
         match result {
-            Ok(tab) => {
+            Ok(mut tab) => {
+                if !new_tab {
+                    if let Some(old_id) = self.tab().map(|tab| tab.page.id.clone()).filter(|old_id| old_id != id) {
+                        let link = self.new_item_drafts.get(&old_id).and_then(|draft| draft.created_link.as_ref()).filter(|link| link.page_id == tab.page.id).map(|link| link.id.clone());
+                        if !self.discard_draft_for_page(&old_id) { return; }
+                        if let Some(link) = link {
+                            if self.store.get_page(&old_id).is_ok_and(|page| page.is_none()) {
+                                tab.blocks.retain(|block| block.block.id != link);
+                                tab.page_links.remove(&old_id);
+                                if tab.blocks.is_empty() {
+                                    let block = Block::paragraph(&tab.page.id, "", 0);
+                                    tab.blocks.push(EditableBlock { edit: crate::rich_text::load(&block), block });
+                                }
+                            }
+                        }
+                    }
+                }
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;

@@ -31,3 +31,8 @@ inherits = "release"
 debug = false
 incremental = false
 
+[profile.rune-hot]
+inherits = "release"
+debug = 0
+incremental = true
+

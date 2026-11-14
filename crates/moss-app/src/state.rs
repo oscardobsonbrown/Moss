@@ -63,6 +63,12 @@ pub struct RecordPeek {
     pub dirty_title: bool,
     pub dirty_blocks: bool,
 }
+pub struct NewItemDraft {
+    pub record: Option<Record>,
+    pub page: Option<Page>,
+    pub blocks: Vec<Block>,
+    pub created_link: Option<Block>,
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Modal {
     Search,
@@ -78,6 +84,8 @@ pub struct Preferences {
     pub dark: Option<bool>,
     #[serde(default)]
     pub start_week_on_monday: bool,
+    #[serde(default)]
+    pub week_start: Option<u8>,
     pub workspace: String,
     pub tabs: BTreeMap<String, Vec<String>>,
     pub active: BTreeMap<String, usize>,
@@ -97,6 +105,13 @@ pub struct Preferences {
     pub sidebar_sections: BTreeMap<String, Vec<crate::sidebar_sections::SidebarSection>>,
     #[serde(default)]
     pub recent_pages: BTreeMap<String, Vec<String>>,
+}
+impl Preferences {
+    pub fn week_start(&self) -> u8 {
+        self.week_start
+            .filter(|day| *day < 7)
+            .unwrap_or(u8::from(self.start_week_on_monday))
+    }
 }
 pub struct State {
     pub page_appearance: crate::page_appearance::PageAppearance,
@@ -149,6 +164,8 @@ pub struct State {
     pub editing_cell: Option<CellTarget>,
     pub selected_cell: Option<(String, Option<String>)>,
     pub record_peek: Option<RecordPeek>,
+    pub new_item_drafts: BTreeMap<String, NewItemDraft>,
+    pub pending_empty_items: Vec<String>,
     pub gallery_settings_open: bool,
     pub database_new_open: bool,
     pub database_property_editor: Option<crate::database_properties::PropertyEditor>,
@@ -281,6 +298,8 @@ impl State {
             editing_cell: None,
             selected_cell: None,
             record_peek: None,
+            new_item_drafts: BTreeMap::new(),
+            pending_empty_items: Vec::new(),
             gallery_settings_open: false,
             database_new_open: false,
             database_property_editor: None,
@@ -448,12 +467,15 @@ impl State {
         }
         self.save_preferences();
     }
-    pub fn set_week_start(&mut self, monday: bool) {
-        self.shared_preferences.lock().unwrap().start_week_on_monday = monday;
-        self.prefs.start_week_on_monday = monday;
+    pub fn set_week_start(&mut self, day: u8) {
+        if day >= 7 {
+            return;
+        }
+        self.shared_preferences.lock().unwrap().week_start = Some(day);
+        self.prefs.week_start = Some(day);
         if let Ok(handles) = self.handles.lock() {
             for handle in handles.values() {
-                handle.update(move |s, _| s.prefs.start_week_on_monday = monday);
+                handle.update(move |s, _| s.prefs.week_start = Some(day));
             }
         }
         self.save_preferences();
@@ -511,11 +533,16 @@ impl State {
         self.open_page(&id, false);
         self.navigating_history = false;
         if self.tab().is_some_and(|tab| tab.page.id == id) {
-            self.navigation_position = target;
+            if let Some((position, _)) = self.navigation_history.iter().enumerate().filter(|(_, page)| **page == id).min_by_key(|(position, _)| position.abs_diff(target)) {
+                self.navigation_position = position;
+            }
         }
     }
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || !self.flush_current() {
+            return;
+        }
+        if !self.discard_draft_for_page(&self.tabs[i].page.id.clone()) {
             return;
         }
         self.modal = None;
@@ -668,6 +695,7 @@ impl State {
                 tab.dirty_blocks = false;
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
+                self.keep_draft_for_page(&page_id);
             }
             Err(e) => {
                 self.error = Some(format!(

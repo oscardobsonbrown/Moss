@@ -121,12 +121,12 @@ pub fn page_row(
     let mut item = row()
         .key(format!("{prefix}-highlight-{id}"))
         .w_full()
-        .h(26.)
-        .pl(3. + indent)
-        .pr(3.)
-        .gap(8.)
+        .h(28.)
+        .pl(5. + indent)
+        .pr(5.)
+        .gap(7.)
         .center_y()
-        .radius(4.)
+        .radius(7.)
         .fill(if active && !compact {
             t.selected
         } else {
@@ -162,7 +162,7 @@ pub fn page_row(
             let slot = el()
                 .key(icon_key)
                 .size(20., 20.)
-                .offset(if compact { -6. } else { 0. }, 0.)
+                .offset(if compact { -8. } else { 0. }, 0.)
                 .offset_motion(tok::motion::SNAP_EXIT)
                 .center()
                 .radius(4.)
@@ -494,7 +494,8 @@ fn drop_at(
     Some((zone.section.clone(), before))
 }
 
-use super::phosphor::{CARET_DOWN as DOWN, CARET_RIGHT as RIGHT, DOTS_THREE as MORE, PLUS};
+use super::sidebar_actions::{MORE, RIGHT};
+use super::view_icons::{TOOLBAR_CARET as DOWN, TOOLBAR_PLUS as PLUS};
 fn action(s: &State, key: String, name: &str, icon: &'static Icon, t: Theme) -> El {
     super::sidebar_actions::button(s, key, name, icon, 14., t.selected, t)
 }

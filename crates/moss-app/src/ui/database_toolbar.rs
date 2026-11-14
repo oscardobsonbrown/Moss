@@ -44,7 +44,7 @@ fn fitted_tabs(widths: &[f32], active: usize, available: f32) -> Vec<usize> {
             }
     };
     let all: Vec<_> = (0..widths.len()).collect();
-    if required(&all, false) <= available {
+    if all.len() <= 4 && required(&all, false) <= available {
         return all;
     }
     if widths.is_empty() {
@@ -52,6 +52,9 @@ fn fitted_tabs(widths: &[f32], active: usize, available: f32) -> Vec<usize> {
     }
     let mut visible = vec![active.min(widths.len() - 1)];
     for index in 0..widths.len() {
+        if visible.len() == 4 {
+            break;
+        }
         if visible.contains(&index) {
             continue;
         }
@@ -138,7 +141,7 @@ pub fn view(s: &State, t: Theme) -> El {
                 .label(&item.name)
                 .focusable(true)
                 .focus_selected(active)
-                .child(rune::icon(super::view_icons::toolbar_icon(item.kind), 16.).color(color))
+                .child(rune::icon(super::view_icons::for_view(item), 16.).color(color))
                 .child(
                     t.label(&item.name, color)
                         .font(TextStyle::new(14., 500.).family(t.family))
@@ -258,13 +261,11 @@ mod tests {
             .unwrap()
             .views
             .len();
-        assert!(
-            rt.find("db-views").is_none(),
-            "all tabs should fit without a more button"
-        );
-        for index in 0..count {
+        assert!(rt.find("db-views").is_some());
+        for index in 0..4 {
             assert!(rt.find(&format!("db-view-{index}")).is_some());
         }
+        assert!(rt.find("db-view-4").is_none());
         rt.set_viewport((850., 700.), 1.);
         rt.state.select_database_view(count - 1);
         rt.invalidate();
@@ -294,7 +295,7 @@ mod tests {
         rt.set_viewport((2000., 700.), 1.);
         rt.frame(0.);
         rt.frame(0.);
-        assert!(rt.find("db-views").is_none());
+        assert!(rt.find("db-views").is_some());
         drop(rt);
         std::fs::remove_dir_all(path).unwrap();
     }

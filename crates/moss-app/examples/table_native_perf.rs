@@ -10,6 +10,8 @@ mod board_interaction;
 mod board_view;
 #[path = "../src/calendar_view.rs"]
 mod calendar_view;
+#[path = "../src/drafts.rs"]
+mod drafts;
 #[path = "../src/caret.rs"]
 mod caret;
 #[path = "../src/chart_view.rs"]
@@ -76,6 +78,8 @@ mod sidebar_tree;
 mod simple_table;
 #[path = "../src/state.rs"]
 mod state;
+#[path = "../src/table_columns.rs"]
+mod table_columns;
 #[path = "../src/table_summaries.rs"]
 mod table_summaries;
 #[path = "../src/table_window.rs"]
@@ -140,6 +144,54 @@ fn window_state() -> (bool, bool, bool, bool) {
     (false, false, false, false)
 }
 
+#[cfg(target_os = "macos")]
+fn window_display_id() -> Option<u32> {
+    use std::ffi::{c_char, c_void};
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+    unsafe {
+        let object: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let arg: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let number: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32 =
+            std::mem::transmute(objc_msgSend as *const ());
+        let sel = |name: &'static [u8]| sel_registerName(name.as_ptr().cast());
+        let app = object(
+            objc_getClass(c"NSApplication".as_ptr()),
+            sel(b"sharedApplication\0"),
+        );
+        let window = object(app, sel(b"keyWindow\0"));
+        if window.is_null() {
+            return None;
+        }
+        let screen = object(window, sel(b"screen\0"));
+        if screen.is_null() {
+            return None;
+        }
+        let description = object(screen, sel(b"deviceDescription\0"));
+        let key = arg(
+            objc_getClass(c"NSString".as_ptr()),
+            sel(b"stringWithUTF8String:\0"),
+            c"NSScreenNumber".as_ptr().cast_mut().cast(),
+        );
+        let value = arg(description, sel(b"objectForKey:\0"), key);
+        if value.is_null() {
+            None
+        } else {
+            Some(number(value, sel(b"unsignedIntValue\0")))
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn window_display_id() -> Option<u32> {
+    None
+}
+
 fn init() -> State {
     let path = std::path::PathBuf::from(
         std::env::var_os("MOSS_TABLE_BENCH_DIR").expect("scratch fixture required"),
@@ -156,8 +208,12 @@ fn init() -> State {
     state.open_page("bench-database-page", false);
     assert_eq!(
         state.tab().unwrap().records.len(),
-        999,
-        "native fixture must load 999 records"
+        if wrapped {
+            999
+        } else {
+            table_window::INITIAL_WINDOW
+        },
+        "native fixture must load the expected record window"
     );
     state
 }
@@ -170,7 +226,7 @@ fn poll(state: &mut State, time: f64, tx: &mut Tx) -> bool {
             *LOGICAL.get_or_init(|| std::env::var_os("MOSS_TABLE_BENCH_LOGICAL").is_some());
         let distance = if logical {
             let motion = if READY.load(Ordering::Relaxed) {
-                ((time * 2.).sin() * 40. + 40.) as f32
+                ((time * 4.).sin() * 40. + 40.) as f32
             } else {
                 0.
             };
@@ -187,7 +243,7 @@ fn poll(state: &mut State, time: f64, tx: &mut Tx) -> bool {
                     .tab()
                     .and_then(|tab| tab.table_window.as_ref())
                     .map_or(0., |window| {
-                        (window.scroll.get().max[1] - 80. + ((time * 2.).sin() * 40. + 40.) as f32)
+                        (window.scroll.get().max[1] - 80. + ((time * 4.).sin() * 40. + 40.) as f32)
                             .max(0.)
                     }),
                 _ => {
@@ -196,11 +252,16 @@ fn poll(state: &mut State, time: f64, tx: &mut Tx) -> bool {
                 }
             }
         } else {
-            ((time - 0.5) * 1800.) as f32
+            let max = state.tab().and_then(|tab| tab.table_window.as_ref())
+                .map_or(0., |window| window.scroll.get().max[1]);
+            if max > 0. {
+                let travel = ((time - 0.5) * 160_000.) as f32 % (2. * max);
+                if travel <= max { travel } else { 2. * max - travel }
+            } else { 0. }
         };
         tx.scroll_to_instant("db-body", (distance / 4.) % 400., distance);
     }
-    tx.wake_after(Duration::from_secs_f64(1. / 120.));
+    tx.wake_after(Duration::ZERO);
     changed
 }
 fn main() {
@@ -218,7 +279,13 @@ fn main() {
     let mut skipped = 0;
     let mut phase_frames = 0usize;
     App::new(spec)
-        .on_ready(|window| window.focus())
+         .on_ready(|window| {
+            #[cfg(target_os = "macos")]
+            if let Some(id) = std::env::var("MOSS_TABLE_BENCH_DISPLAY").ok().and_then(|value| value.parse().ok()) {
+                window.place(DisplayTarget::Native(NativeDisplayId::MacOS(id)), OverlayPlacement::Rect { x: 80., y: 80., width: 1440., height: 900. });
+            }
+            window.focus();
+        })
         .on_frame_encoded(move |frame| {
             if frame.outcome() == FrameOutcome::Skipped { skipped += 1; }
             if frame.outcome() == FrameOutcome::Drawn {
@@ -245,7 +312,7 @@ fn main() {
             drawn += 1;
             if drawn == 1 || drawn == 120 || drawn == 600 {
                 let (active, key, visible, main_screen) = window_state();
-                eprintln!("task window frame={drawn} app_active={active} key={key} visible={visible} main_screen={main_screen}");
+                eprintln!("task window frame={drawn} app_active={active} key={key} visible={visible} main_screen={main_screen} display_id={:?}", window_display_id());
             }
             if std::env::var_os("MOSS_TABLE_BENCH_LOGICAL").is_some() {
                 let phase = PHASE.load(Ordering::Relaxed);

@@ -33,8 +33,13 @@ fn all_views(rt: &mut Runtime<State>, label: &str) {
             tx.instant();
         });
         rt.frame(1. / 120.);
-        if key == "calendar" && !label.starts_with("Page icon ") {
-            assert!(rt.find("record-icon-calendar-0").is_none());
+        if (key == "calendar" || key == "board") && !label.starts_with("Page icon ") {
+            let icon = if key == "board" {
+                format!("board-icon-{}", rt.state.tab().unwrap().records[0].id)
+            } else {
+                "record-icon-calendar-0".to_owned()
+            };
+            assert!(rt.find(&icon).is_none());
         } else {
             assert_eq!(icon_label(rt, key), label, "view {key}");
         }
@@ -73,7 +78,11 @@ fn page_icons_follow_body_content_and_preserve_custom_icons_across_views() {
             tx.instant();
         });
         rt.frame(1. / 120.);
-        assert_eq!(icon_label(&rt, key), "Empty page");
+        if key == "board" {
+            assert!(rt.find(&format!("board-icon-{id}")).is_none());
+        } else {
+            assert_eq!(icon_label(&rt, key), "Empty page");
+        }
         press(&mut rt, Key::Escape);
     }
 
@@ -118,6 +127,32 @@ fn page_icons_follow_body_content_and_preserve_custom_icons_across_views() {
     rt.frame(1. / 120.);
     assert_eq!(rt.state.tab().unwrap().records[0].id, id);
     all_views(&mut rt, "Page icon 🌱");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn peek_actions_overlay_the_cover_in_both_modes() {
+    let (mut rt, path) = database_runtime(0);
+    let db = rt.state.tab().unwrap().database.as_ref().unwrap().id.clone();
+    let record = rt.state.store.create_record(&db, "Covered page", &Default::default()).unwrap();
+    let mut page = rt.state.store.ensure_record_page(&record.id).unwrap();
+    page.cover = Some(moss_core::PageCover::Color { color: "#b9aacc".into() });
+    rt.state.store.update_page(&page).unwrap();
+    for mode in ["center", "side"] {
+        rt.state.open_database_record(&db, &record.id, mode);
+        rt.invalidate();
+        rt.frame(1. / 60.);
+        let actions = rt.presented("peek-actions").unwrap().0;
+        let cover = rt.presented(&format!("cover-banner-{}-peek", page.id)).unwrap().0;
+        assert!(actions[1] >= cover[1] && actions[1] + actions[3] <= cover[1] + cover[3]);
+        assert!(actions[0] >= cover[0] && actions[0] + actions[2] <= cover[0] + cover[2]);
+        let top = actions[1] - cover[1];
+        let right = cover[0] + cover[2] - actions[0] - actions[2];
+        assert!((top - right).abs() < 0.5, "uneven action spacing: top={top}, right={right}");
+        click(&mut rt, "peek-close");
+        assert!(rt.state.record_peek.is_none());
+    }
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }

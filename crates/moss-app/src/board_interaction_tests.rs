@@ -183,6 +183,40 @@ fn board_status_badge_fits_its_text_at_both_display_scales() {
 }
 
 #[test]
+fn board_cards_show_filled_properties_and_stack_related_pages() {
+    let mut f = board_fixture(&[("Alpha", json!("In progress"), None)], false, false, 1.);
+    let mut db = f.rt.state.tab().unwrap().database.clone().unwrap();
+    let date = db.properties.iter().find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
+    let relation = moss_core::Property {
+        id: moss_core::new_id(),
+        name: "Related".into(),
+        kind: PropertyKind::Relation,
+        config: json!({"target_database_id": db.id}),
+    };
+    db.properties.push(relation.clone());
+    db.views[1].config["hidden_property_ids"] = json!([]);
+    f.rt.state.store.save_database(&db).unwrap();
+    let first = f.rt.state.store.create_record(&db.id, "Beta", &Default::default()).unwrap();
+    let second = f.rt.state.store.create_record(&db.id, "Gamma", &Default::default()).unwrap();
+    f.rt.state.store.set_relation_value_if_unchanged(&f.ids[0], &relation, &Value::Null, &[first.id, second.id]).unwrap();
+    f.rt.state.tabs[f.rt.state.active].database = Some(db);
+    f.rt.state.query_records();
+    f.rt.state.database_views.board.invalidate();
+    wait_board(&mut f.rt, |p| p.total == 3);
+    f.rt.invalidate();
+    f.rt.frame(1. / 120.);
+    assert!(f.rt.find(&format!("board-icon-{}", f.ids[0])).is_none());
+    assert!(f.rt.find(&format!("board-value-{}-{date}", f.ids[0])).is_none());
+    let first = rect(&f.rt, &format!("board-relation-{}-0", relation.id));
+    let second = rect(&f.rt, &format!("board-relation-{}-1", relation.id));
+    assert!(second[1] >= first[1] + first[3]);
+    click(&mut f.rt, &format!("board-value-{}-{}", f.ids[0], relation.id));
+    assert!(f.rt.state.advanced_property.relation_picker.is_some());
+    drop(f.rt);
+    std::fs::remove_dir_all(f.path).unwrap();
+}
+
+#[test]
 fn board_drag_can_start_on_a_property_and_click_still_opens_its_editor() {
     let mut f = board_fixture(&[("Alpha", json!("Not started"), None)], false, false, 1.);
     let id = f.ids[0].clone();
@@ -871,6 +905,8 @@ fn board_creation_inherits_guaranteed_filters_rejects_conflicting_columns_and_ap
     let toolbar = f.rt.state.record_peek.as_ref().unwrap().record.clone();
     assert_eq!(toolbar.values[&f.status], "Done");
     assert_eq!(toolbar.values[&notes], "keep");
+    f.rt.state.record_peek.as_mut().unwrap().title.replace_text("Toolbar task");
+    f.rt.state.save_peek_title();
     click(&mut f.rt, "peek-close");
     wait_board(&mut f.rt, |p| p.total == 3);
     let count =
@@ -969,7 +1005,11 @@ fn board_place_property_opens_shared_editor() {
     f.rt.state.database_views.board.invalidate();
     wait_board(&mut f.rt, |p| p.total == 1);
     f.rt.invalidate(); f.rt.frame(1. / 120.);
-    click(&mut f.rt, &format!("board-value-{}-{property}", f.ids[0]));
+    assert!(f.rt.find(&format!("board-value-{}-{property}", f.ids[0])).is_none());
+    click(&mut f.rt, &format!("board-card-menu-{}", f.ids[0]));
+    f.rt.frame(1.);
+    click(&mut f.rt, &format!("board-menu-set-place-{property}"));
+    assert!(f.rt.state.place_picker.is_some(), "place picker missing: {:?}, menu {}, peek {}", f.rt.state.error, f.rt.state.database_views.board_ui.menu.is_some(), f.rt.state.record_peek.is_some());
     assert!(f.rt.find("place-search-input").is_some());
     f.rt.state.database_views.map.place_query.replace_text("Fremantle");
     f.rt.invalidate(); f.rt.frame(1. / 120.);

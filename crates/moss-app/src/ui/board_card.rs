@@ -17,14 +17,28 @@ pub fn width(config: &Value) -> f32 {
 }
 pub fn estimated_height(db: &Database, tab: &Tab, record: &Record) -> f32 {
     let config = &db.views[tab.view].config;
-    let properties = db
+    let properties: usize = db
         .properties
         .iter()
         .filter(|p| {
             p.kind != PropertyKind::Title
                 && super::property_visibility::visible(db, tab.view, &p.id)
         })
-        .count();
+        .filter_map(|p| {
+            record
+                .values
+                .get(&p.id)
+                .filter(|value| has_value(value))
+                .map(|value| (p, value))
+        })
+        .map(|(p, value)| {
+            if p.kind == PropertyKind::Relation {
+                value.as_array().map_or(1, |values| values.len().max(1))
+            } else {
+                1
+            }
+        })
+        .sum();
     let preview = match config.get("card_preview").and_then(Value::as_str) {
         Some("content") => 104.,
         Some("cover") => 112.,
@@ -39,7 +53,15 @@ pub fn estimated_height(db: &Database, tab: &Tab, record: &Record) -> f32 {
     } else {
         0.
     };
-    42. + title + properties as f32 * 29. + preview
+    44. + title + properties as f32 * 28. + preview
+}
+fn has_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        _ => true,
+    }
 }
 fn preview(
     s: &State,
@@ -226,53 +248,26 @@ fn card(
                     .map(String::as_str)
                     .filter(|icon| !icon.is_empty())
             });
-        let has_content = appearance.map(|a| a.has_body_content).unwrap_or_else(|| {
-            tab.record_has_content
-                .get(&record.id)
-                .copied()
-                .unwrap_or(false)
-        });
-        let icon_label = icon
-            .map(|icon| format!("Page icon {icon}"))
-            .unwrap_or_else(|| {
-                if has_content {
-                    "Page with content".into()
-                } else {
-                    "Empty page".into()
-                }
-            });
-        let mark = if let Some(icon) = icon {
-            t.sized_label(icon, 16., t.text)
-        } else {
-            rune::icon(
-                if appearance.map(|a| a.has_body_content).unwrap_or_else(|| {
-                    tab.record_has_content
-                        .get(&record.id)
-                        .copied()
-                        .unwrap_or(false)
-                }) {
-                    &phosphor::FILE_TEXT
-                } else {
-                    &phosphor::FILE
-                },
-                16.,
-            )
-            .color(t.muted)
-        };
-        title_row = title_row.child(
-            row()
-                .key(format!("board-icon-{}", record.id))
-                .size(16., 16.)
-                .center()
-                .role("img")
-                .label(icon_label)
-                .child(mark),
-        );
+        if let Some(icon) = icon {
+            title_row = title_row.child(
+                row()
+                    .key(format!("board-icon-{}", record.id))
+                    .size(16., 16.)
+                    .center()
+                    .role("img")
+                    .label(format!("Page icon {icon}"))
+                    .child(t.sized_label(icon, 16., t.text)),
+            );
+        }
     }
     title_row = title_row.child(if active {
         database::editor(s, w - 54., t)
     } else {
-        let label = t.label(title, t.text).min_w(0.).grow(1.);
+        let label = t
+            .label(title, t.text)
+            .font(TextStyle::new(15. * t.text_scale, 600.).family(t.family))
+            .min_w(0.)
+            .grow(1.);
         if wrapped {
             label.wrap().max_h(60.).clip_rounded(0.)
         } else {
@@ -305,7 +300,7 @@ fn card(
                 )
             }),
     );
-    let mut body = col().w_full().gap(5.).padding(10.).child(title_row);
+    let mut body = col().w_full().gap(8.).padding(11.).child(title_row.mb(3.));
     for prop in properties
         .iter()
         .copied()
@@ -314,28 +309,23 @@ fn card(
         let value = record.values.get(&prop.id);
         let key = format!("board-value-{}-{}", record.id, prop.id);
         let editing = !floating && database::active(s, record, Some(&prop.id));
+        if !editing && value.is_none_or(|value| !has_value(value)) {
+            continue;
+        }
         let mut property_row = row()
             .key(key)
             .w_full()
-            .min_h(24.)
-            .gap(6.)
+            .min_h(20.)
             .center_y()
             .radius(3.)
-            .hover(t.hover)
-            .child(
-                row()
-                    .size(16., 20.)
-                    .center()
-                    .child(super::property_icons::view(prop.kind, t.muted)),
-            );
+            .hover(t.hover);
         property_row = property_row.child(if editing {
             database::editor(s, w - 44., t)
         } else if value.is_none_or(Value::is_null) || value.and_then(Value::as_str) == Some("") {
             t.label("Empty", t.faint).grow(1.)
         } else {
-            let value = super::property_value::view(s, prop, value, t)
+            let value = super::property_value::board_view(s, prop, value, t)
                 .min_w(0.)
-                .max_h(if wrapped { 54. } else { 24. })
                 .clip_rounded(0.);
             if matches!(prop.kind, PropertyKind::Select | PropertyKind::Status) {
                 row().min_w(0.).grow(1.).child(value)
@@ -434,8 +424,8 @@ fn card(
         .key(context_anchor.clone())
         .w(w)
         .min_w(0.)
-        .radius(5.)
-        .clip_rounded(5.)
+        .radius(10.)
+        .clip_rounded(10.)
         .border(1., t.line)
         .fill(t.bg)
         .hover(t.hover)

@@ -42,14 +42,14 @@ fn wait_until(rt: &mut Runtime<State>, test: impl Fn(&State) -> bool) {
 
 #[test]
 fn indexed_window_reaches_last_row_and_keeps_cache_bounded() {
-    let (state, path) = fixture(640);
+    let (state, path) = fixture(1400);
     let db_id = state.tab().unwrap().database.as_ref().unwrap().id.clone();
     let last = state
         .store
         .query_records(
             &db_id,
             &RecordQuery {
-                offset: 639,
+                offset: 1399,
                 limit: 1,
                 ..Default::default()
             },
@@ -70,10 +70,10 @@ fn indexed_window_reaches_last_row_and_keeps_cache_bounded() {
     rt.poll = Some(records::poll);
     rt.frame(0.);
     wait_until(&mut rt, |s| {
-        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(640)
+        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(1400)
     });
     assert!(rt.state.tab().unwrap().records.len() <= WINDOW);
-    rt.update(|_, tx| tx.scroll_to_y("db-body", 640. * ROW));
+    rt.update(|_, tx| tx.scroll_to_y("db-body", 1400. * ROW));
     rt.frame(1. / 120.);
     wait_until(&mut rt, |s| {
         let tab = s.tab().unwrap();
@@ -82,19 +82,49 @@ fn indexed_window_reaches_last_row_and_keeps_cache_bounded() {
     });
     let tab = rt.state.tab().unwrap();
     assert!(tab.records.len() <= WINDOW + 100);
-    assert!(tab.table_window.as_ref().unwrap().visible.end <= 640);
+    assert!(tab.table_window.as_ref().unwrap().visible.end <= 1400);
     assert!(rt.elements().iter().any(|e| {
         e.key
             .as_deref()
             .is_some_and(|k| k.starts_with("cell-") && k.ends_with("-title"))
     }));
+    rt.update(|_, tx| tx.scroll_to_instant("db-body", 0., f32::MAX));
+    rt.frame(1. / 120.);
+    let local = rt.state.tab().unwrap().records.iter().position(|r| r.id == last).unwrap();
+    let key = format!("cell-{local}-title");
+    assert!(rt.find(&key).is_some(), "last record must remain visible after a cache change");
+    let (x, y) = rt.find(&key).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.);
+    assert_eq!(rt.state.editing_cell.as_ref().map(|cell| &cell.record_id), Some(&last));
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn cache_change_keeps_the_scroll_position() {
+    let (state, path) = fixture(1400);
+    let mut rt = Runtime::new(state, ui::view, (1000., 700.), Env { system_dark: false, scale: 1. });
+    rt.poll = Some(records::poll);
+    rt.frame(0.);
+    wait_until(&mut rt, |s| s.tab().unwrap().table_window.as_ref().unwrap().total == Some(1400));
+    rt.poll = None;
+    rt.update(|_, tx| tx.scroll_to_instant("db-body", 0., 700. * ROW));
+    rt.frame(1. / 120.);
+    let before = rt.state.tab().unwrap().table_window.as_ref().unwrap().scroll.get().offset[1];
+    rt.poll = Some(records::poll);
+    wait_until(&mut rt, |s| s.tab().unwrap().table_window.as_ref().unwrap().start > 0);
+    rt.frame(1. / 120.);
+    let after = rt.state.tab().unwrap().table_window.as_ref().unwrap().scroll.get().offset[1];
+    assert!((after - before).abs() < 2., "cache change moved the scroll from {before} to {after}");
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }
 
 #[test]
 fn bottom_anchor_does_not_override_a_later_scroll() {
-    let (state, path) = fixture(640);
+    let (state, path) = fixture(1400);
     let mut rt = Runtime::new(
         state,
         ui::view,
@@ -107,7 +137,7 @@ fn bottom_anchor_does_not_override_a_later_scroll() {
     rt.poll = Some(records::poll);
     rt.frame(0.);
     wait_until(&mut rt, |s| {
-        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(640)
+        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(1400)
     });
     rt.update(|_, tx| tx.scroll_to_y("db-body", f32::MAX));
     rt.frame(1. / 120.);
@@ -125,7 +155,7 @@ fn bottom_anchor_does_not_override_a_later_scroll() {
         .scroll
         .get()
         .offset[1];
-    rt.update(|_, tx| tx.scroll_to_y("db-body", bottom - 500.));
+    rt.update(|_, tx| tx.scroll_to_instant("db-body", 0., bottom - 500.));
     rt.frame(1. / 120.);
     rt.state.tabs[rt.state.active]
         .table_window
@@ -297,6 +327,7 @@ fn new_draft_count_waits_for_fresh_rank_without_double_counting() {
             .displayed_total(),
         Some(6)
     );
+    rt.state.cell.replace_text("Saved row");
     assert!(rt.state.finish_cell(false));
     wait_until(&mut rt, |s| {
         let window = s.tab().unwrap().table_window.as_ref().unwrap();
@@ -454,7 +485,7 @@ fn cache_swaps_preserve_created_rows_and_defer_active_drafts() {
 
 #[test]
 fn dirty_peek_does_not_block_a_deep_window_or_lose_its_draft() {
-    let (state, path) = fixture(640);
+    let (state, path) = fixture(1400);
     let mut rt = Runtime::new(
         state,
         ui::view,
@@ -468,7 +499,7 @@ fn dirty_peek_does_not_block_a_deep_window_or_lose_its_draft() {
     rt.poll = Some(records::poll);
     rt.frame(0.);
     wait_until(&mut rt, |s| {
-        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(640)
+        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(1400)
     });
     rt.update(|s, tx| {
         s.open_record(0);
@@ -480,7 +511,7 @@ fn dirty_peek_does_not_block_a_deep_window_or_lose_its_draft() {
         tx.instant();
     });
     rt.frame(1. / 120.);
-    rt.update(|_, tx| tx.scroll_to_y("db-body", 640. * ROW));
+    rt.update(|_, tx| tx.scroll_to_y("db-body", 1400. * ROW));
     rt.frame(1. / 120.);
     wait_until(&mut rt, |s| {
         s.tab().unwrap().table_window.as_ref().unwrap().start > 0
@@ -585,5 +616,50 @@ fn rapid_window_resets_and_close_prune_obsolete_pending_requests() {
     prune_pending(&mut state);
     assert!(state.table_window_jobs.pending.is_empty());
     drop(state);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn large_initial_limit_uses_bounded_window_and_still_reaches_the_end() {
+    let (mut state, path) = fixture(640);
+    let mut db = state.tab().unwrap().database.clone().unwrap();
+    db.views[0].config["load_limit"] = serde_json::json!(999);
+    state.store.save_database(&db).unwrap();
+    let page_id = db.page_id.clone();
+    state.tabs.clear();
+    state.loading = true;
+    state.open_page(&page_id, false);
+    state.loading = false;
+    assert_eq!(
+        state.tab().unwrap().records.len(),
+        INITIAL_WINDOW,
+        "opening uses a bounded window"
+    );
+    state.tabs[state.active].database = Some(db);
+    assert!(state.query_records());
+    assert_eq!(state.tab().unwrap().records.len(), INITIAL_WINDOW);
+    let mut rt = Runtime::new(
+        state,
+        ui::view,
+        (1000., 700.),
+        Env {
+            system_dark: false,
+            scale: 1.,
+        },
+    );
+    rt.poll = Some(records::poll);
+    rt.frame(0.);
+    wait_until(&mut rt, |s| {
+        s.tab().unwrap().table_window.as_ref().unwrap().total == Some(640)
+    });
+    rt.update(|_, tx| tx.scroll_to_y("db-body", 640. * ROW));
+    rt.frame(1. / 120.);
+    wait_until(&mut rt, |s| {
+        s.tab().unwrap().table_window.as_ref().unwrap().visible.end == 640
+            && !s.tab().unwrap().table_window.as_ref().unwrap().loading
+    });
+    assert!(rt.state.tab().unwrap().records.len() <= WINDOW);
+    assert!(rt.find("table-new").is_some());
+    drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }

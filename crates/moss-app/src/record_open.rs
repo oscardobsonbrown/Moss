@@ -55,6 +55,7 @@ impl State {
         if full && !self.flush_current() {
             return;
         }
+        let before = self.store.get_record(record_id).ok().flatten();
         let result = (|| -> Result<RecordPeek, Box<dyn std::error::Error>> {
             let page = self.store.ensure_record_page(record_id)?;
             let record = self
@@ -91,6 +92,9 @@ impl State {
         match result {
             Ok(peek) => {
                 let page_id = peek.page.id.clone();
+                if let Some(before) = before.as_ref() {
+                    self.attach_draft_page(before, &peek.record, &peek.page);
+                }
                 self.sync_record(&peek.record);
                 if full {
                     self.open_page(&page_id, true);

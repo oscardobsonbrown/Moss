@@ -476,7 +476,7 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
                     }),
                 )
             } else {
-                card.child(render_records(data, &id, s.prefs.start_week_on_monday, t))
+                card.child(render_records(data, &id, s.prefs.week_start(), t))
             }
         }
     };
@@ -519,7 +519,7 @@ fn record_button(data: &WidgetData, widget_id: &str, record: &moss_core::Record,
     .w_full()
     .on_press(move |s: &mut State| s.open_database_record(&database, &id, &mode))
 }
-fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) -> El {
+fn render_records(data: &WidgetData, widget_id: &str, week_start: u8, t: Theme) -> El {
     let outer = col().grow(1.).min_h(0.).w_full().gap(4.);
     let mut content = col().grow(1.).min_h(0.).w_full().scroll(ScrollSpec {
         stick_bottom: false,
@@ -532,7 +532,7 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
                 .iter()
                 .position(|v| v.id == data.view.id)
                 .unwrap_or(0);
-            let props: Vec<_> = moss_core::record_layout::columns(&data.database)
+            let props: Vec<_> = moss_core::record_layout::columns_for_view(&data.database, index)
                 .into_iter()
                 .filter(|p| super::property_visibility::visible(&data.database, index, &p.id))
                 .collect();
@@ -622,7 +622,7 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
             content = content.child(cards);
         }
         ViewKind::Calendar | ViewKind::Timeline => {
-            content = content.child(date_records(data, widget_id, monday, t));
+            content = content.child(date_records(data, widget_id, week_start, t));
         }
         ViewKind::List | ViewKind::Feed => {
             let index = data
@@ -664,7 +664,7 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
     }
     outer.child(content)
 }
-fn date_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) -> El {
+fn date_records(data: &WidgetData, widget_id: &str, week_start: u8, t: Theme) -> El {
     use chrono::{Datelike, NaiveDate};
     let property = data
         .view
@@ -739,21 +739,13 @@ fn date_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) -> E
         .min()
         .unwrap_or_else(|| chrono::Local::now().date_naive());
     let first = month.with_day(1).unwrap();
-    let offset = if monday {
-        first.weekday().num_days_from_monday()
-    } else {
-        first.weekday().num_days_from_sunday()
-    } as i64;
+    let offset = crate::calendar_view::weekday_offset(first, week_start) as i64;
     let mut grid = col()
         .gap(2.)
         .child(t.label(format!("{} {}", first.format("%B"), first.year()), t.text));
     let mut header = row().w_full();
-    let names = if monday {
-        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    } else {
-        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    };
-    for day in names {
+    for index in 0..7 {
+        let day = crate::calendar_view::WEEKDAYS[(week_start as usize + index) % 7];
         header = header.child(t.label(day, t.muted).grow(1.));
     }
     grid = grid.child(header);

@@ -46,6 +46,8 @@ fn computed_refresh_reloads_content_presence_for_loaded_records() {
     let (mut s, path) = fixture();
     s.new_page(true, None);
     s.create_peek(Default::default());
+    s.record_peek.as_mut().unwrap().title.replace_text("Fixture item");
+    s.save_peek_title();
     let record = s.record_peek.as_ref().unwrap().record.id.clone();
     let page = s.record_peek.as_ref().unwrap().page.id.clone();
     assert!(s.close_peek());

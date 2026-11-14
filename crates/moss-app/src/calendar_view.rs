@@ -3,7 +3,7 @@ use chrono::{Datelike, Duration as Days, NaiveDate};
 use moss_core::{
     Database, DatabaseView, Property, PropertyKind, Store, ViewKind, calendar::CalendarProjection,
 };
-use rune::{GesturePhase, ScrollPos, Tx, WheelEvent};
+use rune::{GesturePhase, Live, ScrollPos, Tx, WheelEvent};
 use std::{
     cell::Cell,
     collections::BTreeMap,
@@ -32,19 +32,22 @@ pub fn date_property<'a>(db: &'a Database, view: &DatabaseView) -> Option<&'a Pr
 pub fn week(view: &DatabaseView) -> bool {
     view.config.get("calendar_mode").and_then(|v| v.as_str()) == Some("week")
 }
-pub fn bounds(tab: &Tab, view: &DatabaseView, monday: bool) -> Option<(NaiveDate, NaiveDate)> {
+pub const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+pub fn weekday_offset(date: NaiveDate, week_start: u8) -> u32 {
+    (date.weekday().num_days_from_sunday() + 7 - u32::from(week_start)) % 7
+}
+
+pub fn bounds(tab: &Tab, view: &DatabaseView, week_start: u8) -> Option<(NaiveDate, NaiveDate)> {
+    bounds_for(tab.calendar_month, view, week_start)
+}
+pub fn bounds_for(period: NaiveDate, view: &DatabaseView, week_start: u8) -> Option<(NaiveDate, NaiveDate)> {
     let first = if week(view) {
-        tab.calendar_month
+        period
     } else {
-        tab.calendar_month.with_day(1)?
+        period.with_day(1)?
     };
-    let weekday = |date: NaiveDate| {
-        if monday {
-            date.weekday().num_days_from_monday()
-        } else {
-            date.weekday().num_days_from_sunday()
-        }
-    };
+    let weekday = |date: NaiveDate| weekday_offset(date, week_start);
     let start = first.checked_sub_signed(Days::days(weekday(first) as i64))?;
     let end = if week(view) {
         start.checked_add_signed(Days::days(6))?
@@ -54,6 +57,15 @@ pub fn bounds(tab: &Tab, view: &DatabaseView, monday: bool) -> Option<(NaiveDate
         last.checked_add_signed(Days::days((6 - weekday(last)) as i64))?
     };
     Some((start, end))
+}
+pub fn adjacent_period(period: NaiveDate, view: &DatabaseView, forward: bool) -> Option<NaiveDate> {
+    if week(view) {
+        period.checked_add_signed(Days::days(if forward { 7 } else { -7 }))
+    } else if forward {
+        period.checked_add_months(chrono::Months::new(1))
+    } else {
+        period.checked_sub_months(chrono::Months::new(1))
+    }
 }
 pub fn date_range(
     record: &moss_core::Record,
@@ -74,6 +86,7 @@ pub fn date_range(
 }
 struct Request {
     key: String,
+    id: u64,
     database: String,
     view: String,
     search: String,
@@ -81,25 +94,65 @@ struct Request {
     start: NaiveDate,
     end: NaiveDate,
     offset: u64,
+    adjacent: Vec<(NaiveDate, NaiveDate)>,
 }
 struct Response {
     key: String,
+    id: u64,
+    start: NaiveDate,
+    adjacent: bool,
     result: Result<CalendarProjection, String>,
+}
+pub struct CalendarSlide {
+    pub offset: Live<[f32; 2]>,
+    pub width: f32,
+    pub active: bool,
+    pending: f32,
+    phased: bool,
+    snap_deadline: Option<std::time::Instant>,
+    snap: Option<(std::time::Instant, f32, f32)>,
+}
+impl Default for CalendarSlide {
+    fn default() -> Self {
+        Self { offset: Live::new([0., 0.]), width: 0., active: false, pending: 0., phased: false, snap_deadline: None, snap: None }
+    }
+}
+impl CalendarSlide {
+    pub fn resize(&mut self, width: f32) {
+        if self.width > 0. && width > 0. {
+            let ratio = width / self.width;
+            let offset = self.offset.get();
+            self.offset.set([offset[0] * ratio, offset[1]]);
+            self.pending *= ratio;
+            if let Some((_, distance, applied)) = &mut self.snap {
+                *distance *= ratio;
+                *applied *= ratio;
+            }
+        }
+        self.width = width;
+    }
 }
 #[derive(Default)]
 pub struct CalendarState {
     pub projection: Option<CalendarProjection>,
     pub loading: bool,
     pub error: Option<String>,
-    pub day_rects: BTreeMap<NaiveDate, [f32; 4]>,
+    pub day_rects: BTreeMap<(NaiveDate, NaiveDate), [f32; 4]>,
     pub property_anchor: Option<String>,
     pub drag: Option<CalendarDrag>,
     pub schedule: Option<CalendarSchedule>,
     pub suppress_press: bool,
     pub offset: u64,
     pub scroll: Rc<Cell<ScrollPos>>,
+    pub slide: CalendarSlide,
+    pub adjacent: BTreeMap<NaiveDate, CalendarProjection>,
+    cache_scope: String,
+    projection_start: Option<NaiveDate>,
+    prefetch_pending: usize,
+    request_id: u64,
     wheel_delta: f32,
     wheel_changed: bool,
+    wheel_last: Option<std::time::Instant>,
     key: String,
     context: String,
     projection_key: String,
@@ -114,23 +167,71 @@ pub struct CalendarState {
 }
 
 impl State {
+    pub fn reset_calendar_slide(&mut self) {
+        let slide = &mut self.database_views.calendar.slide;
+        slide.active = false;
+        slide.pending = 0.;
+        slide.phased = false;
+        slide.snap_deadline = None;
+        slide.snap = None;
+        slide.offset.set([0., 0.]);
+    }
+
     pub fn calendar_wheel(&mut self, event: WheelEvent, tx: &mut Tx) -> bool {
         let calendar = &mut self.database_views.calendar;
-        if event.phase == GesturePhase::Began && !event.momentum {
+        let now = std::time::Instant::now();
+        if !event.momentum
+            && (event.phase == GesturePhase::Began
+                || calendar
+                    .wheel_last
+                    .is_some_and(|last| now.duration_since(last) > Duration::from_millis(300)))
+        {
             calendar.wheel_delta = 0.;
             calendar.wheel_changed = false;
+        }
+        if event.dx != 0. || event.dy != 0. {
+            calendar.wheel_last = Some(now);
         }
         if calendar.drag.is_some() || self.undated_open || event.mods.cmd || event.mods.ctrl {
             return false;
         }
+        if !event.dx.is_finite() || !event.dy.is_finite() {
+            return false;
+        }
+        if event.phase == GesturePhase::Ended && calendar.slide.phased {
+            calendar.slide.phased = false;
+            calendar.slide.snap_deadline = Some(now + Duration::from_millis(70));
+            tx.wake_after(Duration::from_millis(70));
+            if event.dx == 0. && event.dy == 0. {
+                return true;
+            }
+        }
+        let horizontal = event.dx.abs() > event.dy.abs();
+        let delta = if horizontal { event.dx } else { event.dy };
+        if delta == 0. {
+            return false;
+        }
+        if horizontal {
+            let slide = &mut self.database_views.calendar.slide;
+            slide.snap = None;
+            if event.phase == GesturePhase::Began {
+                slide.phased = true;
+            }
+            if slide.phased {
+                slide.snap_deadline = None;
+            } else {
+                let delay = Duration::from_millis(100);
+                slide.snap_deadline = Some(now + delay);
+                tx.wake_after(delay);
+            }
+            self.scroll_calendar_horizontally(delta, tx);
+            return true;
+        }
         if event.precise && calendar.wheel_changed {
             return true;
         }
-        if !event.dy.is_finite() || event.dy == 0. || event.dx.abs() > event.dy.abs() {
-            return false;
-        }
         let position = calendar.scroll.get();
-        let forward = event.dy < 0.;
+        let forward = delta < 0.;
         let at_edge = if forward {
             position.offset[1] >= position.max[1] - 1.
         } else {
@@ -141,10 +242,10 @@ impl State {
             return false;
         }
         if event.precise {
-            if calendar.wheel_delta.signum() != event.dy.signum() {
+            if calendar.wheel_delta.signum() != delta.signum() {
                 calendar.wheel_delta = 0.;
             }
-            calendar.wheel_delta += event.dy;
+            calendar.wheel_delta += delta;
             if calendar.wheel_delta.abs() < 55. {
                 return true;
             }
@@ -169,11 +270,107 @@ impl State {
                 .checked_sub_months(chrono::Months::new(1))
         };
         if let Some(next) = next {
+            self.reset_calendar_slide();
+            let tab = &mut self.tabs[self.active];
             tab.calendar_month = next;
             self.save_preferences();
             tx.scroll_to_instant("db-body", 0., if forward { 0. } else { f32::MAX });
             tx.instant();
         }
+        true
+    }
+
+    fn scroll_calendar_horizontally(&mut self, delta: f32, tx: &mut Tx) {
+        let Some(tab) = self.tabs.get(self.active) else { return };
+        let Some(view) = tab.database.as_ref().and_then(|db| db.views.get(tab.view)).cloned() else { return };
+        let mut period = tab.calendar_month;
+        let week_start = self.prefs.week_start();
+        let calendar = &mut self.database_views.calendar;
+        let width = calendar.slide.width.max(1.);
+        let mut remaining = calendar.slide.pending + delta;
+        calendar.slide.pending = 0.;
+        let mut offset = calendar.slide.offset.get()[0];
+        let was_active = calendar.slide.active;
+        calendar.slide.active = true;
+        let mut changed_period = false;
+        while remaining.abs() > 0.0001 {
+            let forward = remaining < 0.;
+            let next = adjacent_period(period, &view, forward);
+            let next_start = next.and_then(|date| bounds_for(date, &view, week_start)).map(|bounds| bounds.0);
+            let toward_center = offset != 0. && offset.signum() != remaining.signum();
+            if !toward_center && next_start.is_none() {
+                break;
+            }
+            if !toward_center && !next_start.is_some_and(|start| calendar.adjacent.contains_key(&start)) {
+                calendar.slide.pending = remaining;
+                break;
+            }
+            let distance = if toward_center { offset.abs() } else { width - offset.abs() };
+            let amount = remaining.abs().min(distance);
+            offset += remaining.signum() * amount;
+            remaining -= remaining.signum() * amount;
+            if offset.abs() >= width - 0.01 {
+                let Some(next) = next else { break };
+                let Some(start) = next_start else { break };
+                let Some(projection) = calendar.adjacent.remove(&start) else { break };
+                if let (Some(old_start), Some(old)) = (calendar.projection_start, calendar.projection.take()) {
+                    calendar.adjacent.insert(old_start, old);
+                }
+                calendar.projection = Some(projection);
+                calendar.projection_start = Some(start);
+                calendar.projection_key = calendar.key.clone();
+                period = next;
+                offset -= offset.signum() * width;
+                changed_period = true;
+            } else if amount <= 0.0001 {
+                break;
+            }
+        }
+        calendar.slide.offset.set([offset, 0.]);
+        calendar.slide.active = offset.abs() > 0.01 || calendar.slide.pending.abs() > 0.01;
+        let active_changed = calendar.slide.active != was_active;
+        if changed_period {
+            self.tabs[self.active].calendar_month = period;
+            self.save_preferences();
+            tx.instant();
+        } else if !active_changed {
+            tx.live_only();
+        } else {
+            tx.instant();
+        }
+    }
+
+    fn advance_calendar_snap(&mut self, tx: &mut Tx) -> bool {
+        let slide = &mut self.database_views.calendar.slide;
+        let now = std::time::Instant::now();
+        if let Some(deadline) = slide.snap_deadline {
+            if now < deadline {
+                tx.wake_after(deadline.duration_since(now));
+                return false;
+            }
+            if slide.pending.abs() > 0.01 {
+                tx.wake_after(Duration::from_millis(16));
+                return false;
+            }
+            slide.snap_deadline = None;
+            slide.phased = false;
+            let column = slide.width / 7.;
+            if column > 0. {
+                let offset = slide.offset.get()[0];
+                let distance = (offset / column).round() * column - offset;
+                if distance.abs() > 0.01 {
+                    slide.snap = Some((now, distance, 0.));
+                }
+            }
+        }
+        let Some((start, distance, applied)) = slide.snap else { return false };
+        let progress = (now.duration_since(start).as_secs_f32() / 0.15).min(1.);
+        let next = distance * (1. - (1. - progress).powi(3));
+        slide.snap = if progress < 1. { Some((start, distance, next)) } else { None };
+        if progress < 1. {
+            tx.wake_after(Duration::from_millis(8));
+        }
+        self.scroll_calendar_horizontally(next - applied, tx);
         true
     }
 }
@@ -389,7 +586,7 @@ impl State {
                         && point[1] >= rect[1]
                         && point[1] < rect[1] + rect[3]
                 })
-                .map(|(date, _)| *date)
+                .map(|((_, date), _)| *date)
                 .unwrap_or(from);
             self.database_views.calendar.drag = Some(CalendarDrag {
                 record_id: record.id.clone(),
@@ -421,7 +618,7 @@ impl State {
                     && point[1] >= rect[1]
                     && point[1] < rect[1] + rect[3]
             })
-            .map(|(date, _)| *date);
+            .map(|((_, date), _)| *date);
         if let Some(drag) = &mut calendar.drag {
             drag.moved |= event.dx.abs().max(event.dy.abs()) >= 5.;
             drag.target = target;
@@ -551,14 +748,22 @@ impl CalendarState {
                         )
                         .map_err(|e| e.to_string())
                 })();
-                if responses
-                    .send(Response {
-                        key: request.key,
-                        result,
-                    })
-                    .is_err()
-                {
+                if responses.send(Response {
+                    key: request.key.clone(), id: request.id, start: request.start, adjacent: false, result,
+                }).is_err() {
                     break;
+                }
+                for (start, end) in request.adjacent {
+                    if stop.load(Ordering::Acquire) { break; }
+                    let result = match store.as_ref() {
+                        Some(store) => store.query_calendar(
+                            &request.database, &request.view, &request.search, "", start, end, 0,
+                        ).map_err(|e| e.to_string()),
+                        None => Err("Calendar reader is unavailable.".into()),
+                    };
+                    if responses.send(Response {
+                        key: request.key.clone(), id: request.id, start, adjacent: true, result,
+                    }).is_err() { break; }
                 }
             }
         }));
@@ -587,7 +792,11 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
         if view.kind != ViewKind::Calendar || date_property(db, view).is_none() {
             return None;
         }
-        let (start, end) = bounds(tab, view, s.prefs.start_week_on_monday)?;
+        let (start, end) = bounds(tab, view, s.prefs.week_start())?;
+        let adjacent: Vec<_> = [false, true].into_iter()
+            .filter_map(|forward| adjacent_period(tab.calendar_month, view, forward))
+            .filter_map(|period| bounds_for(period, view, s.prefs.week_start()))
+            .collect();
         Some((
             db.id.clone(),
             view.id.clone(),
@@ -596,6 +805,7 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
             end,
             view.config.clone(),
             view.query.clone(),
+            adjacent,
         ))
     });
     let undated_search = if s.undated_open {
@@ -606,13 +816,22 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
     let path = s.path.clone();
     let generation = s.store.local_change_count();
     let state = &mut s.database_views.calendar;
-    let Some((database, view, search, start, end, config, query)) = context else {
+    let Some((database, view, search, start, end, config, query, adjacent)) = context else {
         state.key.clear();
         state.projection = None;
         state.pending = None;
         state.loading = false;
         state.drag = None;
         state.schedule = None;
+        state.slide.active = false;
+        state.slide.pending = 0.;
+        state.slide.phased = false;
+        state.slide.snap_deadline = None;
+        state.slide.snap = None;
+        state.slide.offset.set([0., 0.]);
+        state.prefetch_pending = 0;
+        state.adjacent.clear();
+        state.cache_scope.clear();
         return false;
     };
     if state
@@ -620,7 +839,7 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
         .as_ref()
         .is_some_and(|drag| drag.context.0 == database && drag.context.1 == view)
     {
-        if state.loading {
+        if state.loading || state.prefetch_pending > 0 {
             tx.wake_after(Duration::from_millis(16));
         }
         return false;
@@ -643,6 +862,31 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
                 }
             }
         }
+        let scope = format!("{database}/{view}/{search}/{config}/{query:?}/{}", s.prefs.week_start());
+        if state.cache_scope != scope {
+            state.adjacent.clear();
+            state.slide.active = false;
+            state.slide.pending = 0.;
+            state.slide.phased = false;
+            state.slide.snap_deadline = None;
+            state.slide.snap = None;
+            state.slide.offset.set([0., 0.]);
+            state.cache_scope = scope;
+            state.projection_start = None;
+        } else if state.offset == 0 && state.projection_start != Some(start) {
+            if let Some(cached) = state.adjacent.remove(&start) {
+                if let (Some(old_start), Some(old)) = (state.projection_start, state.projection.take()) {
+                    state.adjacent.insert(old_start, old);
+                }
+                state.projection = Some(cached);
+                state.projection_start = Some(start);
+                state.projection_key = key.clone();
+            }
+        }
+        if state.offset == 0 && state.projection_start == Some(start) {
+            state.projection_key = key.clone();
+        }
+        state.adjacent.retain(|date, _| adjacent.iter().any(|(first, _)| first == date));
         if state.database != database || state.view != view {
             state.projection = None;
             state.day_rects.clear();
@@ -652,12 +896,15 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
         state.key = key.clone();
         state.error = None;
         state.loading = true;
+        state.prefetch_pending = adjacent.len();
+        state.request_id = state.request_id.wrapping_add(1);
         state
             .day_rects
-            .retain(|date, _| *date >= start && *date <= end);
+            .retain(|(_, date), _| *date >= start && *date <= end);
         state.start(path);
         state.pending = Some(Request {
             key,
+            id: state.request_id,
             database,
             view,
             search,
@@ -665,12 +912,22 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
             start,
             end,
             offset: state.offset,
+            adjacent,
         });
     }
     let mut changed = false;
     if let Some(receiver) = &state.receiver {
         while let Ok(response) = receiver.try_recv() {
-            if response.key != state.key {
+            if response.key != state.key || response.id != state.request_id {
+                continue;
+            }
+            if response.adjacent {
+                state.prefetch_pending = state.prefetch_pending.saturating_sub(1);
+                match response.result {
+                    Ok(projection) => { state.adjacent.insert(response.start, projection); }
+                    Err(error) => { state.error = Some(format!("Adjacent period could not be loaded: {error}")); }
+                }
+                changed = true;
                 continue;
             }
             state.loading = false;
@@ -681,6 +938,7 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
                         state.key.clear();
                     }
                     state.projection = Some(projection);
+                    state.projection_start = Some(response.start);
                     state.projection_key = response.key;
                 }
                 Err(error) => {
@@ -698,13 +956,19 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
                 Err(mpsc::TrySendError::Full(request)) => state.pending = Some(request),
                 Err(mpsc::TrySendError::Disconnected(_)) => {
                     state.loading = false;
+                    state.prefetch_pending = 0;
                     state.error = Some("Calendar reader stopped.".into());
                 }
             }
         }
     }
-    if state.loading || state.pending.is_some() {
+    if state.loading || state.pending.is_some() || state.prefetch_pending > 0 {
         tx.wake_after(Duration::from_millis(16));
     }
-    changed
+    let pending = state.slide.pending;
+    if changed && pending.abs() > 0.01 {
+        state.slide.pending = 0.;
+        s.scroll_calendar_horizontally(pending, tx);
+    }
+    s.advance_calendar_snap(tx) || changed
 }

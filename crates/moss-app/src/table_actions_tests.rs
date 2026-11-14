@@ -429,3 +429,186 @@ fn removing_property_filter_keeps_unrelated_filters() {
     drop(s);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn table_columns_resize_and_reorder_with_pointer() {
+    let (mut s, path) = fixture();
+    s.new_page(true, None);
+    let db = s.tab().unwrap().database.as_ref().unwrap().clone();
+    let db = s.store.add_property(&db.id, "Extra", PropertyKind::Text).unwrap();
+    let title = db.properties.iter().find(|p| p.kind == PropertyKind::Title).unwrap().id.clone();
+    let other = db.properties.iter().find(|p| p.kind != PropertyKind::Title).unwrap().id.clone();
+    s.tabs[s.active].database = Some(db.clone());
+    s.store.create_record(&db.id, "Page", &Default::default()).unwrap();
+    assert!(s.query_records());
+    let mut rt = Runtime::with_text(s, ui::view, (1200., 700.), Env { system_dark: false, scale: 1. }, rune::text::TextSystem::new(fonts::all(), fonts::FAMILIES));
+    rt.on_key = Some(key);
+    rt.frame(0.);
+    let rect = |rt: &Runtime<State>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("missing {key}")).rect;
+    let generation = rt.state.tab().unwrap().table_window.as_ref().unwrap().generation;
+    let handle = rect(&rt, &format!("table-resize-{title}"));
+    let x = handle[0] + handle[2] / 2.;
+    let y = handle[1] + handle[3] / 2.;
+    rt.pointer_move(x, y);
+    for _ in 0..5 { rt.frame(1. / 60.); }
+    let line = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(&format!("table-resize-line-{title}"))).unwrap();
+    assert!(line.opacity > 0.9, "resize line should appear on hover");
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 60., y);
+    rt.frame(1. / 60.);
+    assert!((rect(&rt, "table-header-title")[2] - 340.).abs() < 1.);
+    assert!((rect(&rt, "cell-0-title")[2] - 340.).abs() < 1.);
+    rt.pointer_up(x + 60., y);
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.store.get_database(&db.id).unwrap().unwrap().views[0].config["column_widths"][&title], json!(340.));
+    assert_eq!(rt.state.tab().unwrap().table_window.as_ref().unwrap().generation, generation, "resize should keep the loaded record window");
+    assert!(rt.state.database_property_editor.is_none());
+
+    let from = rect(&rt, &format!("table-header-{other}"));
+    let to = rect(&rt, "table-header-title");
+    let (cancel_x, cancel_y) = (from[0] + 30., from[1] + from[3] / 2.);
+    rt.pointer_down(cancel_x, cancel_y);
+    rt.pointer_move(to[0] + 10., cancel_y);
+    rt.frame(1. / 60.);
+    assert!(rt.state.database_views.table_move.as_ref().is_some_and(|m| m.active));
+    press(&mut rt, Key::Escape);
+    rt.pointer_up(to[0] + 10., cancel_y);
+    rt.frame(1. / 60.);
+    assert!(rt.state.database_views.table_move.is_none());
+    let saved = rt.state.store.get_database(&db.id).unwrap().unwrap();
+    assert_eq!(moss_core::record_layout::columns_for_view(&saved, 0)[0].id, title);
+    let from = rect(&rt, &format!("table-header-{other}"));
+    let to = rect(&rt, "table-header-title");
+    let (x, y) = (from[0] + 30., from[1] + from[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x - 10., y);
+    rt.frame(1. / 60.);
+    rt.pointer_move(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    let in_motion = rect(&rt, "table-header-title");
+    assert!(in_motion[0] > to[0] && in_motion[0] < to[0] + 199., "other column should animate aside: {in_motion:?}");
+    let moving = rect(&rt, &format!("table-header-{other}"));
+    let moving_cell = rect(&rt, &format!("cell-0-{other}"));
+    assert!((moving[0] - (to[0] + 10. - 30.)).abs() < 2., "header should follow pointer: {moving:?}");
+    assert!((moving_cell[0] - moving[0]).abs() < 2., "whole column should follow header");
+    for _ in 0..30 { rt.frame(1. / 60.); }
+    let displaced = rect(&rt, "table-header-title");
+    let displaced_cell = rect(&rt, "cell-0-title");
+    assert!(displaced[0] > to[0] + 150., "other column should slide aside: {displaced:?}");
+    assert!((displaced_cell[0] - displaced[0]).abs() < 2., "other column cells should stay aligned");
+    rt.pointer_up(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    assert_eq!(rt.state.tab().unwrap().table_window.as_ref().unwrap().generation, generation, "reordering should keep the loaded record window");
+    let saved = rt.state.store.get_database(&db.id).unwrap().unwrap();
+    let columns = moss_core::record_layout::columns_for_view(&saved, 0);
+    assert_eq!(columns[0].id, other);
+    assert_eq!(columns[1].id, title);
+    assert!(rect(&rt, &format!("table-header-{other}"))[0] < rect(&rt, "table-header-title")[0]);
+    assert!(rt.state.database_property_editor.is_none());
+    let from = rect(&rt, "table-header-title");
+    let to = rect(&rt, &format!("table-header-{other}"));
+    let (x, y) = (from[0] + 30., from[1] + from[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x - 10., y);
+    rt.frame(1. / 60.);
+    rt.pointer_move(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    rt.pointer_up(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    let saved = rt.state.store.get_database(&db.id).unwrap().unwrap();
+    assert_eq!(moss_core::record_layout::columns_for_view(&saved, 0)[0].id, title);
+    click(&mut rt, "table-header-title");
+    assert!(rt.state.database_property_editor.is_some(), "click after dragging opens the property menu");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn column_changes_preserve_property_order_and_reject_stale_writes() {
+    let (mut s, path) = fixture();
+    s.new_page(true, None);
+    let db = s.tab().unwrap().database.as_ref().unwrap().clone();
+    let db = s.store.add_property(&db.id, "Extra", PropertyKind::Text).unwrap();
+    let view = &db.views[0];
+    let properties = moss_core::record_layout::properties(&db);
+    let first = properties[0].id.clone();
+    let last = properties.last().unwrap().id.clone();
+    let columns: Vec<_> = moss_core::record_layout::columns_for_view(&db, 0).iter().map(|p| p.id.clone()).collect();
+    let reordered = s.store.reorder_table_column(&db.id, &view.id, &last, Some(&first), moss_core::record_layout::saved(&db).cloned(), None, &columns).unwrap();
+    assert_eq!(moss_core::record_layout::properties(&reordered)[0].id, last);
+    assert!(s.store.reorder_table_column(&db.id, &view.id, &first, Some(&last), moss_core::record_layout::saved(&db).cloned(), None, &columns).is_err());
+    s.store.set_table_column_width(&db.id, &view.id, &first, None, 250.).unwrap();
+    assert!(s.store.set_table_column_width(&db.id, &view.id, &first, None, 300.).is_err());
+    assert_eq!(s.store.get_database(&db.id).unwrap().unwrap().views[0].config["column_widths"][&first], json!(250.));
+    drop(s);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn table_column_drag_respects_reduced_motion() {
+    let (mut s, path) = fixture();
+    s.new_page(true, None);
+    let db = s.tab().unwrap().database.as_ref().unwrap().clone();
+    let other = db.properties.iter().find(|p| p.kind != PropertyKind::Title).unwrap().id.clone();
+    let mut rt = Runtime::with_text(s, ui::view, (1200., 700.), Env { system_dark: true, scale: 2. }, rune::text::TextSystem::new(fonts::all(), fonts::FAMILIES));
+    rt.set_system_reduced_motion(true);
+    rt.frame(0.);
+    let rect = |rt: &Runtime<State>, key: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect;
+    let from = rect(&rt, &format!("table-header-{other}"));
+    let to = rect(&rt, "table-header-title");
+    let (x, y) = (from[0] + 30., from[1] + from[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_move(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    assert!((rect(&rt, "table-header-title")[0] - to[0] - from[2]).abs() < 1.);
+    rt.pointer_up(to[0] + 10., y);
+    rt.frame(1. / 60.);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn resize_refreshes_records_when_another_editor_changed_the_view() {
+    let (mut rt, path) = database_runtime(0);
+    let db = rt.state.tab().unwrap().database.clone().unwrap();
+    let title = db.properties.iter().find(|p| p.kind == PropertyKind::Title).unwrap().id.clone();
+    rt.state.store.edit_view_config(&db.id, &db.views[0].id, db.views[0].kind, |config| {
+        config["wrap_cells"] = json!(true);
+        Ok(())
+    }).unwrap();
+    let handle = rt.presented(&format!("table-resize-{title}")).unwrap().0;
+    let (x, y) = (handle[0] + handle[2] / 2., handle[1] + handle[3] / 2.);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 40., y);
+    rt.frame(1. / 60.);
+    rt.pointer_up(x + 40., y);
+    rt.frame(1. / 60.);
+    let tab = rt.state.tab().unwrap();
+    assert_eq!(tab.database.as_ref().unwrap().views[0].config["wrap_cells"], true);
+    assert!(tab.table_window.is_none(), "a changed query layout needs a full refresh");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn cached_table_rows_refresh_when_values_and_icons_change() {
+    let (mut rt, path) = database_runtime(0);
+    rt.poll = None;
+    let database = rt.state.tab().unwrap().database.as_ref().unwrap().id.clone();
+    let db = rt.state.store.add_property(&database, "Note", PropertyKind::Text).unwrap();
+    let property = db.properties.iter().find(|p| p.name == "Note").unwrap().id.clone();
+    rt.state.tabs[rt.state.active].database = Some(db);
+    let record = rt.state.store.create_record(&database, "Cached row", &Default::default()).unwrap();
+    assert!(rt.state.query_records());
+    rt.invalidate();
+    rt.frame(0.);
+    rt.state.tabs[rt.state.active].records[0].values.insert(property.clone(), json!("Updated value"));
+    rt.state.tabs[rt.state.active].record_icons.insert(record.id, "🐝".into());
+    rt.invalidate();
+    rt.frame(1. / 60.);
+    let cells = rt.elements();
+    assert!(cells.iter().any(|e| e.key.as_deref() == Some(&format!("cell-text-0-{property}")) && e.text.as_deref() == Some("Updated value")), "cell: {:?}", cells.iter().filter(|e| e.key.as_deref() == Some(&format!("cell-text-0-{property}"))).map(|e| (&e.key, &e.text, &e.label)).collect::<Vec<_>>());
+    assert!(cells.iter().any(|e| e.key.as_deref() == Some("record-icon-table-0") && e.label.as_deref() == Some("Page icon 🐝")));
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}

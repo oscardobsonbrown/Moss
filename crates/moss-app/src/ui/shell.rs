@@ -211,6 +211,7 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
                 .absolute(insets.leading + 8., (super::CHROME_EDGE - 28.) / 2.)
                 .w((sidebar_width - insets.leading - 16.).max(0.))
                 .h(28.)
+                .pr(8.)
                 .center_y()
                 .child(
                     shell_icon(
@@ -240,7 +241,7 @@ fn nav(key: &str, icon: &'static Icon, name: &str, compact: bool, t: Theme) -> E
     row()
         .key(key)
         .h(30.)
-        .px(10.)
+        .px(12.)
         .gap(9.)
         .center_y()
         .radius(5.)
@@ -253,12 +254,13 @@ fn nav(key: &str, icon: &'static Icon, name: &str, compact: bool, t: Theme) -> E
             rune::icon(icon, 18.)
                 .color(t.muted)
                 .w(20.)
-                .offset(if compact { -6. } else { 0. }, 0.)
+                .offset(if compact { -8. } else { 0. }, 0.)
                 .offset_motion(tok::motion::SNAP_EXIT)
                 .key(format!("sidebar-icon-{key}")),
         )
         .child(
             label(name, t.muted)
+                .font(TextStyle::new(14., 500.).family(Family::Sans))
                 .key(format!("sidebar-label-{key}"))
                 .opacity(if compact { 0. } else { 1. })
                 .opacity_motion(tok::motion::SNAP_EXIT),
@@ -281,7 +283,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .key("search-button")
                 .w_full()
                 .h(32.)
-                .px(10.)
+                .px(12.)
                 .gap(8.)
                 .center_y()
                 .radius(6.)
@@ -291,15 +293,16 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .label("Search")
                 .focusable(true)
                 .child(
-                    rune::icon(&super::phosphor::MAGNIFYING_GLASS, 16.)
-                        .color(t.muted)
+                    rune::icon(&super::sidebar_actions::SEARCH, 16.)
+                        .color(t.faint)
                         .key("sidebar-search-icon")
-                        .offset(if compact { -6. } else { 0. }, 0.)
+                        .offset(if compact { -8. } else { 0. }, 0.)
                         .offset_motion(tok::motion::SNAP_EXIT)
                         .w(20.),
                 )
                 .child(
                     t.label("Search", t.faint)
+                        .font(TextStyle::new(14., 500.).family(Family::Sans))
                         .key("sidebar-search-label")
                         .grow(1.)
                         .opacity(if compact { 0. } else { 1. })
@@ -341,7 +344,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
         .child(
             nav(
                 "settings-button",
-                &super::phosphor::GEAR_SIX,
+                &super::sidebar_actions::GEAR,
                 "Settings",
                 compact,
                 t,
@@ -350,16 +353,22 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
             .on_press(|s: &mut State| s.modal = Some(Modal::Settings)),
         )
         .child(
-            nav("trash-button", &super::phosphor::TRASH, "Trash", compact, t)
-                .w_full()
-                .on_press(|s: &mut State| s.open_trash()),
+            nav(
+                "trash-button",
+                &super::sidebar_actions::TRASH,
+                "Trash",
+                compact,
+                t,
+            )
+            .w_full()
+            .on_press(|s: &mut State| s.open_trash()),
         )
         .child(
             row()
                 .key("workspace-picker")
                 .h(40.)
                 .w_full()
-                .px(10.)
+                .px(12.)
                 .gap(8.)
                 .center_y()
                 .radius(5.)
@@ -376,7 +385,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .child(
                     el().key("sidebar-workspace-icon")
                         .size(20., 24.)
-                        .offset(if compact { -6. } else { 0. }, 0.)
+                        .offset(if compact { -8. } else { 0. }, 0.)
                         .offset_motion(tok::motion::SNAP_EXIT)
                         .center()
                         .child(super::theme::sized_label(&s.workspace.icon, 16., t.text)),
@@ -384,7 +393,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 .child(
                     text(&s.workspace.name)
                         .key("sidebar-workspace-name")
-                        .font(TextStyle::new(14., 600.))
+                        .font(TextStyle::new(14., 500.))
                         .color(t.text)
                         .truncate()
                         .grow(1.)
@@ -393,9 +402,9 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                         .opacity_motion(tok::motion::SNAP_EXIT),
                 )
                 .child(
-                    rune::icon(&super::phosphor::CARET_DOWN, 16.)
+                    rune::icon(&super::view_icons::TOOLBAR_CARET, 16.)
                         .key("sidebar-workspace-chevron")
-                        .color(t.muted)
+                        .color(t.text)
                         .opacity(if compact { 0. } else { 1. })
                         .opacity_motion(tok::motion::SNAP_EXIT),
                 )
@@ -483,9 +492,18 @@ pub fn content(s: &State, t: Theme, width: f32) -> El {
                 ),
             ),
     };
-    col()
-        .key("content")
-        .instant_changes()
+    let content = col().key("content");
+    let content = if s
+        .database_views
+        .table_move
+        .as_ref()
+        .is_some_and(|drag| drag.active)
+    {
+        content
+    } else {
+        content.instant_changes()
+    };
+    content
         .grow(1.)
         .min_w(0.)
         .h_full()

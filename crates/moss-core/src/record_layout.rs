@@ -82,6 +82,22 @@ pub fn columns(db: &Database) -> Vec<&Property> {
         .collect()
 }
 
+pub fn columns_for_view(db: &Database, view: usize) -> Vec<&Property> {
+    let mut columns = columns(db);
+    if let Some(position) = db
+        .views
+        .get(view)
+        .and_then(|v| v.config.get("title_position"))
+        .and_then(Value::as_u64)
+    {
+        if let Some(index) = columns.iter().position(|p| p.kind == PropertyKind::Title) {
+            let title = columns.remove(index);
+            columns.insert((position as usize).min(columns.len()), title);
+        }
+    }
+    columns
+}
+
 pub fn visible(db: &Database, property: &Property, record: &Record) -> bool {
     layout(db).unwrap_or_default().visible(property, record)
 }
@@ -102,6 +118,84 @@ impl RecordLayout {
 }
 
 impl Store {
+    pub fn reorder_table_column(
+        &mut self,
+        database_id: &str,
+        view_id: &str,
+        property_id: &str,
+        before: Option<&str>,
+        expected_layout: Option<Value>,
+        expected_title: Option<Value>,
+        expected_columns: &[String],
+    ) -> Result<Database> {
+        with_database(self, database_id, |_, db, _| {
+            let index = db
+                .views
+                .iter()
+                .position(|v| v.id == view_id && v.kind == crate::ViewKind::Table)
+                .ok_or_else(|| invalid("table view missing"))?;
+            if saved(db) != expected_layout.as_ref()
+                || db.views[index].config.get("title_position") != expected_title.as_ref()
+            {
+                return Err(invalid("column order changed in another window"));
+            }
+            let mut ids: Vec<String> = columns_for_view(db, index)
+                .iter()
+                .map(|p| p.id.clone())
+                .collect();
+            if ids != expected_columns {
+                return Err(invalid("columns changed in another window"));
+            }
+            let source = ids
+                .iter()
+                .position(|id| id == property_id)
+                .ok_or_else(|| invalid("property missing"))?;
+            let id = ids.remove(source);
+            let target = match before {
+                Some(before) => ids
+                    .iter()
+                    .position(|id| id == before)
+                    .ok_or_else(|| invalid("target property missing"))?,
+                None => ids.len(),
+            };
+            ids.insert(target, id);
+            let title_id = db
+                .properties
+                .iter()
+                .find(|p| p.kind == PropertyKind::Title)
+                .ok_or_else(|| invalid("title property missing"))?
+                .id
+                .clone();
+            let title_position = ids
+                .iter()
+                .position(|id| id == &title_id)
+                .ok_or_else(|| invalid("title property missing"))?;
+            let mut layout = layout(db).ok_or_else(|| invalid("invalid record layout"))?;
+            layout.order = ids.into_iter().filter(|id| id != &title_id).collect();
+            let title = db.properties.iter_mut().find(|p| p.id == title_id).unwrap();
+            if title.config.is_null() {
+                title.config = json!({});
+            }
+            title
+                .config
+                .as_object_mut()
+                .ok_or_else(|| invalid("invalid title configuration"))?
+                .insert(
+                    KEY.into(),
+                    serde_json::to_value(layout).map_err(|_| invalid("invalid record layout"))?,
+                );
+            let config = &mut db.views[index].config;
+            if config.is_null() {
+                *config = json!({});
+            }
+            config
+                .as_object_mut()
+                .ok_or_else(|| invalid("invalid view settings"))?
+                .insert("title_position".into(), json!(title_position));
+            Ok(())
+        })
+    }
+
     pub fn set_record_layout(
         &mut self,
         database_id: &str,

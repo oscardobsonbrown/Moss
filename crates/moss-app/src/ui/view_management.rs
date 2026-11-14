@@ -109,10 +109,43 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     .gap(8.)
                     .mb(8.)
                     .center_y()
-                    .child(menu::icon_slot(
-                        "view-name-icon",
-                        super::view_icons::element(editor.kind, 16., t.muted),
-                    ))
+                    .child(
+                        row()
+                            .key("view-name-icon")
+                            .size(32., 32.)
+                            .center()
+                            .radius(6.)
+                            .fill(t.bg)
+                            .border(1., t.line)
+                            .child(
+                                rune::icon(
+                                    editor
+                                        .expected
+                                        .as_ref()
+                                        .map(super::view_icons::for_view)
+                                        .unwrap_or_else(|| {
+                                            super::view_icons::toolbar_icon(editor.kind)
+                                        }),
+                                    16.,
+                                )
+                                .color(t.muted),
+                            )
+                            .role("button")
+                            .label("Change view icon")
+                            .focusable(true)
+                            .radius(4.)
+                            .hover(t.hover)
+                            .on_press(|s: &mut State| {
+                                if !s.autosave_view_name(true) {
+                                    return;
+                                }
+                                if let Some(editor) = &mut s.view_management {
+                                    editor.icon_search = TextEdit::new("");
+                                    editor.icon_search.focused = true;
+                                    editor.pane = ViewPane::Icons;
+                                }
+                            }),
+                    )
                     .child(
                         super::inputs::field(&s.view_name_input, "view-name-input", "View name", t)
                             .grow(1.)
@@ -148,6 +181,20 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     }
                 }),
             );
+            if editor.kind == ViewKind::Calendar {
+                body = body.child(
+                    item("calendar-no-date", "Pages without dates", "", &super::phosphor::CALENDAR_BLANK, t.text, t)
+                        .on_press_tx(|s: &mut State, tx| {
+                            if !s.autosave_view_name(true) { return; }
+                            s.view_management = None;
+                            s.database_views.calendar.suppress_press = false;
+                            s.undated_open = true;
+                            s.undated_search = TextEdit::new("");
+                            s.undated_search.focused = true;
+                            if tx.focused().is_some() { tx.instant(); }
+                        }),
+                );
+            }
             if KINDS.contains(&editor.kind) {
                 body = body.child(
                     item("view-properties", "Properties", "›", &menu::EYE, t.text, t)
@@ -308,6 +355,101 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
         | ViewPane::BoardSubgroupProperty
         | ViewPane::BoardProperties) => {
             body = super::board_settings::body(s, pane, t)?;
+        }
+        ViewPane::Icons => {
+            let query = editor.icon_search.text.to_lowercase().replace(' ', "-");
+            let matches: std::rc::Rc<Vec<usize>> = std::rc::Rc::new(
+                super::view_icons::catalog()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, (name, _))| name.contains(&query).then_some(index))
+                    .collect(),
+            );
+            let rows = matches.len().div_ceil(8);
+            let no_results = matches.is_empty();
+            let keys = matches.clone();
+            body = body
+                .child(
+                    item("view-icon-back", "Back", "", &menu::BACK, t.text, t).on_press(
+                        |s: &mut State| {
+                            if let Some(editor) = &mut s.view_management {
+                                editor.pane = ViewPane::Main;
+                            }
+                        },
+                    ),
+                )
+                .child(
+                    super::inputs::field(
+                        &editor.icon_search,
+                        "view-icon-search",
+                        "Filter icons…",
+                        t,
+                    )
+                    .on_edit(|s: &mut State| &mut s.view_management.as_mut().unwrap().icon_search)
+                    .on_input_change(|_: &mut State, tx| tx.instant()),
+                )
+                .child(
+                    item(
+                        "view-icon-remove",
+                        "Use default icon",
+                        "",
+                        &menu::CLOSE,
+                        t.text,
+                        t,
+                    )
+                    .on_press(|s: &mut State| s.set_view_icon(None)),
+                )
+                .child(
+                    col()
+                        .key(format!("view-icon-scroll-{query}"))
+                        .w_full()
+                        .h(280.)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .children(
+                            no_results.then(|| t.label("No icons found", t.muted).px(8.).py(8.)),
+                        )
+                        .child(
+                            col()
+                                .w_full()
+                                .growth(GrowthSpec::default())
+                                .virtual_rows::<State>(
+                                    rows,
+                                    32.,
+                                    move |_, row| {
+                                        format!(
+                                            "view-icon-row-{}",
+                                            keys.get(row * 8).copied().unwrap_or(0)
+                                        )
+                                        .into()
+                                    },
+                                    move |_, row_index| {
+                                        let mut row = row().w_full().h(32.).center_y();
+                                        for index in matches.iter().skip(row_index * 8).take(8) {
+                                            let (name, icon) =
+                                                &super::view_icons::catalog()[*index];
+                                            let name = *name;
+                                            row = row.child(
+                                                el().key(format!("view-icon-{name}"))
+                                                    .size(32., 32.)
+                                                    .center()
+                                                    .radius(4.)
+                                                    .hover(t.hover)
+                                                    .role("button")
+                                                    .label(name.replace('-', " "))
+                                                    .focusable(true)
+                                                    .child(rune::icon(icon, 18.).color(t.text))
+                                                    .on_press(move |s: &mut State| {
+                                                        s.set_view_icon(Some(name))
+                                                    }),
+                                            );
+                                        }
+                                        row
+                                    },
+                                ),
+                        ),
+                );
         }
         ViewPane::CalendarLayout => {
             let tab = s.tab()?;

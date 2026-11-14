@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn view_icon_picker_searches_saves_and_resets() {
+    let (mut state, path) = fixture();
+    state.new_page(true, None);
+    let db_id = state.tab().unwrap().database.as_ref().unwrap().id.clone();
+    let mut rt = Runtime::new(state, ui::view, (1200., 800.), Env { system_dark: false, scale: 1. });
+    rt.on_key = Some(key);
+    rt.frame(0.);
+    click(&mut rt, "db-view-settings");
+    rt.frame(1.);
+    click(&mut rt, "view-name-icon");
+    rt.frame(1.);
+    click(&mut rt, "view-icon-search");
+    press(&mut rt, Key::Text("anchor".into()));
+    rt.frame(0.);
+    assert!(rt.find("view-icon-anchor").is_some());
+    rt.frame(1.);
+    click(&mut rt, "view-icon-anchor");
+    assert_eq!(rt.state.tab().unwrap().database.as_ref().unwrap().views[0].config["icon"], "anchor");
+    assert_eq!(rt.state.store.get_database(&db_id).unwrap().unwrap().views[0].config["icon"], "anchor");
+    click(&mut rt, "view-name-icon");
+    rt.frame(1.);
+    click(&mut rt, "view-icon-remove");
+    assert!(rt.state.store.get_database(&db_id).unwrap().unwrap().views[0].config.get("icon").is_none());
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn view_icon_change_does_not_overwrite_another_window() {
+    let (mut state, path) = fixture();
+    state.new_page(true, None);
+    let db = state.tab().unwrap().database.clone().unwrap();
+    state.open_view_settings();
+    let mut other = moss_core::Store::open(path.join("workspace.sqlite3")).unwrap();
+    other.edit_view_config(&db.id, &db.views[0].id, db.views[0].kind, |config| {
+        config.as_object_mut().unwrap().insert("icon".into(), "anchor".into());
+        Ok(())
+    }).unwrap();
+    state.set_view_icon(Some("airplane"));
+    assert!(state.view_management.as_ref().unwrap().error.is_some());
+    assert_eq!(other.get_database(&db.id).unwrap().unwrap().views[0].config["icon"], "anchor");
+    drop(other);
+    drop(state);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn view_menu_rows_share_columns_across_panes_themes_and_scales() {
     fn rows(rt: &Runtime<State>, keys: &[String]) {
         for key in keys {
