@@ -115,9 +115,21 @@ pub fn page_row(
     let action_icon = icon_key.clone();
     let child_id = id.clone();
     let disclosure_id = id.clone();
-    let marker = s.sidebar_sections.page_drag.as_ref().is_some_and(|drag| {
-        drag.target.as_deref() == Some(source) && drag.before.as_deref() == Some(id.as_str())
+    let drop = s
+        .sidebar_sections
+        .page_drag
+        .as_ref()
+        .filter(|drag| drag.target.as_deref() == Some(source));
+    let over = drop.is_some_and(|drag| {
+        source == "private" && drag.source == "private" && drag.over.as_deref() == Some(id.as_str())
     });
+    let inside = over && drop.is_some_and(|drag| drag.inside);
+    let marker = if source == "private" && drop.is_some_and(|drag| drag.source == "private") {
+        over && !inside
+    } else {
+        drop.is_some_and(|drag| drag.before.as_deref() == Some(id.as_str()))
+    };
+    let marker_after = over && drop.is_some_and(|drag| drag.after);
     let mut item = row()
         .key(format!("{prefix}-highlight-{id}"))
         .w_full()
@@ -127,7 +139,7 @@ pub fn page_row(
         .gap(7.)
         .center_y()
         .radius(7.)
-        .fill(if active && !compact {
+        .fill(if (active && !compact) || inside {
             t.selected
         } else {
             t.sidebar
@@ -329,11 +341,12 @@ pub fn page_row(
         )
         .children(marker.then(|| {
             el().key("sidebar-page-drop-marker")
-                .absolute(0., 0.)
+                .absolute(0., if marker_after { 26. } else { 0. })
                 .w_full()
                 .h(2.)
                 .fill(t.blue)
-        }));
+        }))
+        .children(inside.then(|| el().absolute(0., 4.).w(2.).h(20.).fill(t.blue)));
     item = draggable(item, page, source, zones, viewport);
     row().w_full().h(30.).px(7.).center_y().child(item)
 }
@@ -352,7 +365,6 @@ fn draggable(
     let drag_source = source.to_owned();
     let drag_title = page.title.clone();
     let drag_icon = page.icon.clone();
-    let drag_parent = page.parent_id.clone();
     item.on_drag(move |s: &mut State, drag, tx| {
         if drag.phase == Phase::Down {
             s.sidebar_sections.suppress_page_press = false;
@@ -367,80 +379,74 @@ fn draggable(
         }
         if (drag.dx.abs() >= 4. || drag.dy.abs() >= 4.) && !drag.cancelled() {
             let point = drag.window_point();
-            let destination = drop_at(
-                &zones,
-                viewport,
-                point,
-                &drag_source,
-                drag_parent.as_deref(),
-            );
+            let destination = drop_at(&zones, viewport, point, &drag_source);
             s.sidebar_sections.suppress_page_press = true;
             s.sidebar_sections.page_drag = Some(crate::sidebar_sections::SidebarPageDrag {
                 page_id: drag_id.clone(),
                 source: drag_source.clone(),
-                target: destination.as_ref().map(|(section, _)| section.clone()),
-                before: destination.and_then(|(_, before)| before),
+                target: destination.as_ref().map(|d| d.section.clone()),
+                before: destination.as_ref().and_then(|d| d.before.clone()),
+                parent: destination.as_ref().and_then(|d| d.parent.clone()),
+                over: destination.as_ref().and_then(|d| d.over.clone()),
+                inside: destination.as_ref().is_some_and(|d| d.inside),
+                after: destination.as_ref().is_some_and(|d| d.after),
                 title: drag_title.clone(),
                 icon: drag_icon.clone(),
                 point,
                 viewport,
             });
             if drag.phase == Phase::Up {
-                if let Some(mut drag) = s.sidebar_sections.page_drag.take() {
-                    if let Some(target) = drag.target {
-                        if drag.source == "private" && target == "private" && drag.before.is_none()
-                        {
-                            if let Some(index) = zones.iter().position(|z| {
-                                point[1] >= z.rect[1] - 2. && point[1] < z.rect[1] + z.rect[3] + 2.
-                            }) {
-                                if zones[index].page.is_some() {
-                                    if let Some(previous) = zones[..=index].iter().rev().find(|z| {
-                                        z.section == "private"
-                                            && z.page.is_some()
-                                            && z.parent == drag_parent
-                                    }) {
-                                        let next = (|| -> Result<Option<String>, String> {
-                                            let page = s
-                                                .store
-                                                .get_page(previous.page.as_deref().unwrap())
-                                                .map_err(|e| e.to_string())?
-                                                .ok_or("Page no longer exists")?;
-                                            let group = s
-                                                .store
-                                                .page_children(
-                                                    &s.workspace.id,
-                                                    drag_parent.as_deref(),
-                                                    moss_core::PagePosition::After(
-                                                        &moss_core::PageCursor::from(&page),
-                                                    ),
-                                                    1,
-                                                )
-                                                .map_err(|e| e.to_string())?;
-                                            Ok(group
-                                                .items
-                                                .into_iter()
-                                                .next()
-                                                .map(|item| item.page.id))
-                                        })();
-                                        match next {
-                                            Ok(next) => drag.before = next,
-                                            Err(error) => {
-                                                s.error = Some(format!(
-                                                    "Could not reorder page: {error}"
-                                                ));
-                                                return;
-                                            }
+                if let Some(mut drop) = s.sidebar_sections.page_drag.take() {
+                    if let Some(target) = drop.target.clone() {
+                        if drop.source == "private" && target == "private" {
+                            // The next sibling can be outside the loaded sidebar page.
+                            if drop.after && drop.before.is_none() {
+                                if let Some(over) = &drop.over {
+                                    let next = (|| -> Result<Option<String>, String> {
+                                        let page = s
+                                            .store
+                                            .get_page(over)
+                                            .map_err(|e| e.to_string())?
+                                            .ok_or("Page no longer exists")?;
+                                        let group = s
+                                            .store
+                                            .page_children(
+                                                &s.workspace.id,
+                                                drop.parent.as_deref(),
+                                                moss_core::PagePosition::After(
+                                                    &moss_core::PageCursor::from(&page),
+                                                ),
+                                                2,
+                                            )
+                                            .map_err(|e| e.to_string())?;
+                                        Ok(group
+                                            .items
+                                            .into_iter()
+                                            .map(|item| item.page.id)
+                                            .find(|id| id != &drop.page_id))
+                                    })();
+                                    match next {
+                                        Ok(next) => drop.before = next,
+                                        Err(error) => {
+                                            s.error = Some(format!("Could not move page: {error}"));
+                                            return;
                                         }
                                     }
                                 }
                             }
+                            s.reparent_sidebar_page(
+                                &drop.page_id,
+                                drop.parent.as_deref(),
+                                drop.before.as_deref(),
+                            );
+                        } else {
+                            s.move_sidebar_page(
+                                &drop.page_id,
+                                &drop.source,
+                                &target,
+                                drop.before.as_deref(),
+                            );
                         }
-                        s.move_sidebar_page(
-                            &drag.page_id,
-                            &drag.source,
-                            &target,
-                            drag.before.as_deref(),
-                        );
                     }
                 }
             }
@@ -452,13 +458,21 @@ fn draggable(
     })
 }
 
+struct DropLocation {
+    section: String,
+    parent: Option<String>,
+    before: Option<String>,
+    over: Option<String>,
+    inside: bool,
+    after: bool,
+}
+
 fn drop_at(
     zones: &[PageDropZone],
     viewport: [f32; 4],
     point: [f32; 2],
     source: &str,
-    parent: Option<&str>,
-) -> Option<(String, Option<String>)> {
+) -> Option<DropLocation> {
     let [x, y] = point;
     let [left, top, width, height] = viewport;
     if x < left || x > left + width || y < top || y > top + height {
@@ -471,19 +485,36 @@ fn drop_at(
     if zone.section == "recents" {
         return None;
     }
-    if source == "private" && zone.section == "private" && zone.page.is_some() {
-        let start = index
-            + usize::from(
-                zone.parent.as_deref() != parent || y >= zone.rect[1] + zone.rect[3] / 2.,
-            );
-        let before = zones[start..]
-            .iter()
-            .take_while(|z| z.section == "private")
-            .find(|z| z.page.is_some() && z.parent.as_deref() == parent)
-            .and_then(|z| z.page.clone());
-        return Some((zone.section.clone(), before));
+    let after = y >= zone.rect[1] + zone.rect[3] / 2.;
+    if source == "private" && zone.section == "private" {
+        let inside =
+            zone.page.is_some() && y >= zone.rect[1] + 7. && y < zone.rect[1] + zone.rect[3] - 7.;
+        let parent = if inside {
+            zone.page.clone()
+        } else {
+            zone.parent.clone()
+        };
+        let before = if inside {
+            None
+        } else if !after {
+            zone.page.clone()
+        } else {
+            zones[index + 1..]
+                .iter()
+                .take_while(|z| z.section == "private")
+                .find(|z| z.page.is_some() && z.parent == parent)
+                .and_then(|z| z.page.clone())
+        };
+        return Some(DropLocation {
+            section: zone.section.clone(),
+            parent,
+            before,
+            over: zone.page.clone(),
+            inside,
+            after: after && !inside,
+        });
     }
-    let before = if zone.page.is_some() && y >= zone.rect[1] + zone.rect[3] / 2. {
+    let before = if zone.page.is_some() && after {
         zones
             .get(index + 1)
             .filter(|next| next.section == zone.section)
@@ -491,7 +522,14 @@ fn drop_at(
     } else {
         zone.page.clone()
     };
-    Some((zone.section.clone(), before))
+    Some(DropLocation {
+        section: zone.section.clone(),
+        parent: None,
+        before,
+        over: zone.page.clone(),
+        inside: false,
+        after,
+    })
 }
 
 use super::sidebar_actions::{MORE, RIGHT};

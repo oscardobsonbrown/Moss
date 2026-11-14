@@ -16,6 +16,107 @@ fn click(rt: &mut Runtime<State>, key: &str) {
     rt.frame(1. / 60.);
 }
 #[test]
+fn add_figure_from_a_saved_view() {
+    let path =
+        std::env::temp_dir().join(format!("moss-dashboard-add-figure-{}", moss_core::new_id()));
+    let mut s = State::open(path.clone(), None).unwrap();
+    s.new_page(true, None);
+    let db = s.tab().unwrap().database.clone().unwrap();
+    let db = s
+        .store
+        .create_view(&db.id, "Dashboard", ViewKind::Dashboard)
+        .unwrap();
+    let index = db
+        .views
+        .iter()
+        .position(|v| v.kind == ViewKind::Dashboard)
+        .unwrap();
+    let source = db.views[0].clone();
+    s.tabs[s.active].database = Some(db.clone());
+    s.tabs[s.active].view = index;
+    s.database_views.dashboard.candidates = vec![db.clone()];
+    let mut rt = Runtime::with_text(
+        s,
+        surface,
+        (1440., 900.),
+        Env {
+            system_dark: false,
+            scale: 1.,
+        },
+        rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
+    );
+    rt.frame(0.);
+    click(&mut rt, "dashboard-add");
+    click(&mut rt, &format!("dashboard-figure-{}", source.id));
+    let config = DashboardConfig::read(
+        &rt.state.tab().unwrap().database.as_ref().unwrap().views[index].config,
+    )
+    .unwrap();
+    assert_eq!(config.widgets.len(), 1);
+    assert_eq!(config.widgets[0].view_id, source.id);
+    assert_eq!(config.widgets[0].layout["chart"]["kind"], "number");
+    assert!(rt.state.database_views.dashboard.editing);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
+fn chart_settings_change_a_dashboard_figure() {
+    let path =
+        std::env::temp_dir().join(format!("moss-dashboard-settings-{}", moss_core::new_id()));
+    let mut s = State::open(path.clone(), None).unwrap();
+    s.new_page(true, None);
+    let db = s.tab().unwrap().database.clone().unwrap();
+    let db = s
+        .store
+        .create_view(&db.id, "Dashboard", ViewKind::Dashboard)
+        .unwrap();
+    let index = db
+        .views
+        .iter()
+        .position(|v| v.kind == ViewKind::Dashboard)
+        .unwrap();
+    let source = db.views[0].clone();
+    s.tabs[s.active].database = Some(db.clone());
+    s.tabs[s.active].view = index;
+    s.dashboard_add_figure(db.id.clone(), source.id.clone());
+    let config =
+        DashboardConfig::read(&s.tab().unwrap().database.as_ref().unwrap().views[index].config)
+            .unwrap();
+    let id = config.widgets[0].id.clone();
+    s.database_views
+        .dashboard
+        .widgets
+        .insert(id.clone(), Err("Too many chart groups.".into()));
+    let mut rt = Runtime::with_text(
+        s,
+        surface,
+        (1440., 900.),
+        Env {
+            system_dark: false,
+            scale: 1.,
+        },
+        rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
+    );
+    rt.frame(0.);
+    click(&mut rt, "dashboard-edit");
+    click(&mut rt, &format!("dashboard-chart-settings-{id}"));
+    let number = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(format!("dashboard-chart-type-{id}-number").as_str()))
+        .unwrap();
+    assert_eq!(number.role, "radio");
+    click(&mut rt, &format!("dashboard-chart-type-{id}-bar"));
+    let changed = DashboardConfig::read(
+        &rt.state.tab().unwrap().database.as_ref().unwrap().views[index].config,
+    )
+    .unwrap();
+    assert_eq!(changed.widgets[0].layout["chart"]["kind"], "vertical_bar");
+    assert!(changed.widgets[0].layout["chart"]["category_property_id"].is_string());
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+#[test]
 fn widget_record_open_uses_source_identity() {
     let path = std::env::temp_dir().join(format!("moss-dashboard-ui-{}", moss_core::new_id()));
     let mut s = State::open(path.clone(), None).unwrap();

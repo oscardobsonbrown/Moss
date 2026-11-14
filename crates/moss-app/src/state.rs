@@ -59,6 +59,7 @@ pub struct RecordPeek {
     pub page: Page,
     pub title: TextEdit,
     pub blocks: Vec<EditableBlock>,
+    pub page_links: BTreeMap<String, Page>,
     pub mode: PeekMode,
     pub dirty_title: bool,
     pub dirty_blocks: bool,
@@ -114,8 +115,14 @@ impl Preferences {
     }
 }
 pub struct State {
+    pub editor_selection: Option<crate::editor_selection::Selection>,
+    pub editor_drag: Option<crate::editor_drag::BlockDrag>,
+    pub editor_column_resize: Option<crate::editor_drag::ColumnResize>,
+    pub editor_drag_cancelled: bool,
+    pub editor_drag_suppress_press: bool,
     pub page_appearance: crate::page_appearance::PageAppearance,
     pub page_cover: crate::page_covers::CoverState,
+    pub archive_transfer: crate::archive_transfer::ArchiveTransfer,
     pub simple_table: crate::simple_table::SimpleTableState,
     pub database_views: crate::database_views::DatabaseViews,
     pub summary_jobs: crate::table_summaries::SummaryJobs,
@@ -248,8 +255,14 @@ impl State {
         let restore = prefs.tabs.get(&workspace.id).cloned().unwrap_or_default();
         let active = *prefs.active.get(&workspace.id).unwrap_or(&0);
         let mut s = Self {
+            editor_selection: None,
+            editor_drag: None,
+            editor_column_resize: None,
+            editor_drag_cancelled: false,
+            editor_drag_suppress_press: false,
             page_appearance: Default::default(),
             page_cover: Default::default(),
+            archive_transfer: Default::default(),
             simple_table: Default::default(),
             database_views: Default::default(),
             summary_jobs: Default::default(),
@@ -533,7 +546,13 @@ impl State {
         self.open_page(&id, false);
         self.navigating_history = false;
         if self.tab().is_some_and(|tab| tab.page.id == id) {
-            if let Some((position, _)) = self.navigation_history.iter().enumerate().filter(|(_, page)| **page == id).min_by_key(|(position, _)| position.abs_diff(target)) {
+            if let Some((position, _)) = self
+                .navigation_history
+                .iter()
+                .enumerate()
+                .filter(|(_, page)| **page == id)
+                .min_by_key(|(position, _)| position.abs_diff(target))
+            {
                 self.navigation_position = position;
             }
         }
@@ -690,8 +709,9 @@ impl State {
             })
             .collect();
         let page_id = tab.page.id.clone();
-        match self.store.save_blocks(&page_id, &blocks) {
-            Ok(()) => {
+        match self.store.save_editor_blocks(&page_id, &blocks) {
+            Ok(blocks) => {
+                crate::page_covers::sync_saved_image_assets(&mut tab.blocks, &blocks);
                 tab.dirty_blocks = false;
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
@@ -726,6 +746,7 @@ impl State {
         edit.set_caret(0);
         edit.focused = true;
         let mut block = Block::paragraph(&tab.page.id, "", after as i64 + 1);
+        crate::editor_drag::copy_column(&tab.blocks[after].block, &mut block);
         let oldkind = tab.blocks[after].block.kind;
         if matches!(
             oldkind,

@@ -73,6 +73,7 @@ fn empty_block_hint_requires_hover_or_focus_and_typing_stays_visible() {
             let hint = format!("block-hint-{id}");
             let mut rt = runtime(state, 850., dark, scale);
             click(&mut rt, &format!("title-{page}"));
+            assert!(rt.state.tab().unwrap().title.focused);
             rt.pointer_move(840., 1390.);
             rt.frame(0.);
             assert!(info(&rt, &hint).opacity < 0.01);
@@ -242,12 +243,14 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
             let (mut state, path) = fixture();
             state.new_page(false, None);
             state.tabs[state.active].page.icon.clear();
+            state.tabs[state.active].title.focused = false;
             let page = state.tab().unwrap().page.id.clone();
             let icon = format!("page-header-icon-{page}");
             let cover = format!("page-cover-open-{page}-document");
             let mut rt = runtime(state, 850., dark, scale);
             rt.pointer_move(840., 1390.);
-            rt.frame(0.);
+            rt.frame(0.3);
+            assert!(info(&rt, &cover).opacity < 0.01);
             let title = info(&rt, &format!("title-{page}")).rect;
             let icon_label = info(&rt, &format!("{icon}-label"));
             let cover_label = info(&rt, &format!("{cover}-label"));
@@ -261,8 +264,13 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
             rt.pointer_move(button[0] + button[2] / 2., button[1] + button[3] / 2.);
             rt.frame(0.);
             assert!(info(&rt, &icon).hover > 0.99);
+            assert!(info(&rt, &cover).opacity > 0.99);
+            click(&mut rt, &format!("title-{page}"));
             rt.pointer_move(840., 1390.);
             rt.frame(0.2);
+            assert!(info(&rt, &cover).opacity > 0.99);
+            let block_id = rt.state.tab().unwrap().blocks[0].block.id.clone();
+            click(&mut rt, &format!("block-input-{block_id}"));
             rt.set_full_keyboard_access(true);
             for _ in 0..100 {
                 if info(&rt, &cover).focused {
@@ -272,6 +280,7 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
             }
             let focused = info(&rt, &cover);
             assert!(focused.focused && focused.focus_visible, "{focused:?}");
+            assert!(focused.opacity > 0.99, "{focused:?}");
             drop(rt);
             std::fs::remove_dir_all(path).unwrap();
         }
@@ -287,11 +296,24 @@ fn record_page_customization_controls_align_with_title() {
     rt.invalidate();
     rt.frame(0.3);
     let page = rt.state.record_peek.as_ref().unwrap().page.id.clone();
+    rt.state.record_peek.as_mut().unwrap().title.focused = false;
+    rt.invalidate();
+    rt.pointer_move(5., 5.);
+    rt.frame(0.3);
+    let cover_key = format!("page-cover-open-{page}-peek");
+    assert!(info(&rt, &cover_key).opacity < 0.01);
     let title = info(&rt, &format!("peek-title-{page}")).rect;
     let icon = info(&rt, &format!("peek-icon-{page}-label")).rect;
     let cover = info(&rt, &format!("page-cover-open-{page}-peek-label")).rect;
     assert!((icon[0] - title[0]).abs() < 1., "{icon:?} {title:?}");
     assert!((icon[1] - cover[1]).abs() < 1.);
+    rt.pointer_move(title[0] + 2., title[1] + title[3] / 2.);
+    rt.frame(0.3);
+    assert!(info(&rt, &cover_key).opacity > 0.99);
+    click(&mut rt, &format!("peek-title-{page}"));
+    rt.pointer_move(5., 5.);
+    rt.frame(0.3);
+    assert!(info(&rt, &cover_key).opacity > 0.99);
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }

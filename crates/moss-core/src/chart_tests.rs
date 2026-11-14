@@ -48,6 +48,32 @@ fn fixture() -> (Store, String) {
     (s, db.id)
 }
 #[test]
+fn number_count_ignores_stale_unused_properties() {
+    let (mut store, id) = fixture();
+    store.create_record(&id, "First", &BTreeMap::new()).unwrap();
+    let config = ChartConfig {
+        kind: ChartType::Number,
+        category_property_id: Some("deleted-category".into()),
+        series_property_id: Some("deleted-series".into()),
+        value_property_id: Some("deleted-value".into()),
+        aggregation: Aggregate::Count,
+        ..Default::default()
+    };
+    let result = store
+        .chart_projection(&id, "chart", &config, None, "")
+        .unwrap();
+    assert_eq!(result.total, 1);
+    assert_eq!(result.points[0].value, Some(1.));
+    assert_eq!(
+        store
+            .chart_records(&id, "chart", &config, None, "", None, None, None)
+            .unwrap()
+            .records
+            .len(),
+        1
+    );
+}
+#[test]
 fn chart_streams_full_filtered_query_and_buckets_dates() {
     let (mut s, id) = fixture();
     for i in 0..150 {

@@ -206,6 +206,39 @@ mod tests {
         );
     }
     #[test]
+    fn image_blocks_round_trip_with_their_managed_asset() {
+        let path = std::env::temp_dir().join(format!("moss-image-block-{}", new_id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut store = Store::open(path.join("source.sqlite3")).unwrap();
+        let workspace = store.create_workspace("Images", "").unwrap();
+        let page = store
+            .create_page(&workspace.id, None, "Pictures", "", PageKind::Document)
+            .unwrap();
+        let mut output = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(3, 2)
+            .write_to(&mut output, image::ImageFormat::Png)
+            .unwrap();
+        let png = output.into_inner();
+        let asset = store.import_cover_image(&png).unwrap();
+        let mut block = crate::Block::paragraph(&page.id, "", 0);
+        block.kind = crate::BlockKind::Image;
+        block.config = serde_json::json!({"asset": asset});
+        store.save_blocks(&page.id, &[block]).unwrap();
+        let archive = store.export_workspace(&workspace.id).unwrap();
+        let destination = path.join("destination");
+        std::fs::create_dir_all(&destination).unwrap();
+        let mut imported = Store::open(destination.join("workspace.sqlite3")).unwrap();
+        let workspace = imported.import_workspace(&archive).unwrap();
+        let page = imported.list_pages(&workspace.id).unwrap().remove(0);
+        let block = imported.get_blocks(&page.id).unwrap().remove(0);
+        assert_eq!(block.kind, crate::BlockKind::Image);
+        let digest = block.config["asset"].as_str().unwrap();
+        assert_eq!(imported.read_cover_image(digest).unwrap(), png);
+        drop(imported);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
     fn cover_images_round_trip_with_archive_and_are_content_addressed() {
         let path = std::env::temp_dir().join(format!("moss-cover-{}", new_id()));
         std::fs::create_dir_all(&path).unwrap();

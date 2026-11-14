@@ -116,6 +116,9 @@ impl State {
                             }
                         }
                     }
+                    if !pages.items.is_empty() {
+                        self.tabs[index].choosing_type = false;
+                    }
                     self.tabs[index].child_pages = Some(pages);
                     if self.error.as_deref().is_some_and(|e| {
                         e.starts_with("Could not load child pages:")

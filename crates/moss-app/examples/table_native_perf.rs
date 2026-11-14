@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #[path = "../src/advanced_properties.rs"]
 mod advanced_properties;
+#[path = "../src/archive_transfer.rs"]
+mod archive_transfer;
 #[path = "../src/block_commands.rs"]
 mod block_commands;
 #[path = "../src/board_interaction.rs"]
@@ -10,8 +12,6 @@ mod board_interaction;
 mod board_view;
 #[path = "../src/calendar_view.rs"]
 mod calendar_view;
-#[path = "../src/drafts.rs"]
-mod drafts;
 #[path = "../src/caret.rs"]
 mod caret;
 #[path = "../src/chart_view.rs"]
@@ -26,12 +26,20 @@ mod dashboard_view;
 mod database_properties;
 #[path = "../src/database_views.rs"]
 mod database_views;
+#[path = "../src/drafts.rs"]
+mod drafts;
 #[path = "../src/editor_commands.rs"]
 mod editor_commands;
+#[path = "../src/editor_drag.rs"]
+mod editor_drag;
+#[path = "../src/editor_selection.rs"]
+mod editor_selection;
 #[path = "../src/emoji_catalog.rs"]
 mod emoji_catalog;
 #[path = "../src/fonts.rs"]
 mod fonts;
+#[path = "../src/inline_links.rs"]
+mod inline_links;
 #[path = "../src/map_clusters.rs"]
 mod map_clusters;
 #[path = "../src/map_interaction.rs"]
@@ -252,12 +260,20 @@ fn poll(state: &mut State, time: f64, tx: &mut Tx) -> bool {
                 }
             }
         } else {
-            let max = state.tab().and_then(|tab| tab.table_window.as_ref())
+            let max = state
+                .tab()
+                .and_then(|tab| tab.table_window.as_ref())
                 .map_or(0., |window| window.scroll.get().max[1]);
             if max > 0. {
                 let travel = ((time - 0.5) * 160_000.) as f32 % (2. * max);
-                if travel <= max { travel } else { 2. * max - travel }
-            } else { 0. }
+                if travel <= max {
+                    travel
+                } else {
+                    2. * max - travel
+                }
+            } else {
+                0.
+            }
         };
         tx.scroll_to_instant("db-body", (distance / 4.) % 400., distance);
     }

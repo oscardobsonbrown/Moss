@@ -108,6 +108,61 @@ impl SidebarTree {
 }
 
 impl State {
+    pub fn reparent_sidebar_page(
+        &mut self,
+        id: &str,
+        parent: Option<&str>,
+        before: Option<&str>,
+    ) -> bool {
+        if !self.flush_current() {
+            return false;
+        }
+        let old_parent = match self.store.get_page(id) {
+            Ok(Some(page)) => page.parent_id,
+            Ok(None) => {
+                self.error = Some("Page not found.".into());
+                return false;
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not move page: {error}"));
+                return false;
+            }
+        };
+        if let Err(error) = self
+            .store
+            .move_sidebar_page(&self.workspace.id, id, parent, before)
+        {
+            self.error = Some(format!("Could not move page: {error}"));
+            return false;
+        }
+        if let Ok(Some(page)) = self.store.get_page(id) {
+            for tab in &mut self.tabs {
+                if tab.page.id == id {
+                    tab.page.parent_id = page.parent_id.clone();
+                    tab.page.sidebar_order = page.sidebar_order.clone();
+                }
+            }
+            self.update_child_page(&page);
+        }
+        self.refresh_sidebar_tree();
+        if let Some(parent) = parent {
+            if !self
+                .sidebar_tree
+                .groups
+                .contains_key(&Some(parent.to_owned()))
+            {
+                self.toggle_sidebar_page(parent);
+            }
+        }
+        if let Some(old) = old_parent.as_deref() {
+            self.refresh_child_pages(old);
+        }
+        if let Some(parent) = parent {
+            self.refresh_child_pages(parent);
+        }
+        true
+    }
+
     pub fn refresh_sidebar_tree(&mut self) {
         let saved: BTreeSet<String> = self
             .prefs
@@ -442,6 +497,59 @@ mod tests {
         );
         assert!(!s.sidebar_tree.positions.contains_key(&None));
         drop(s);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod imported_parent_tests {
+    use crate::state::State;
+    use moss_core::{PageKind, new_id};
+
+    #[test]
+    fn empty_page_with_subpages_opens_as_a_page() {
+        let path = std::env::temp_dir().join(format!("moss-parent-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        let parent = state
+            .store
+            .create_page(&state.workspace.id, None, "Parent", "", PageKind::Document)
+            .unwrap();
+        state
+            .store
+            .create_page(
+                &state.workspace.id,
+                Some(&parent.id),
+                "Child",
+                "",
+                PageKind::Document,
+            )
+            .unwrap();
+        state.open_page(&parent.id, false);
+        let tab = state.tab().unwrap();
+        assert!(!tab.choosing_type);
+        assert_eq!(tab.child_pages.as_ref().unwrap().items.len(), 1);
+        drop(state);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn moving_into_open_empty_page_shows_the_subpage() {
+        let path = std::env::temp_dir().join(format!("moss-parent-move-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        let parent = state
+            .store
+            .create_page(&state.workspace.id, None, "Parent", "", PageKind::Document)
+            .unwrap();
+        let child = state
+            .store
+            .create_page(&state.workspace.id, None, "Child", "", PageKind::Document)
+            .unwrap();
+        state.open_page(&parent.id, false);
+        assert!(state.tab().unwrap().choosing_type);
+        assert!(state.reparent_sidebar_page(&child.id, Some(&parent.id), None));
+        let tab = state.tab().unwrap();
+        assert!(!tab.choosing_type);
+        assert_eq!(tab.child_pages.as_ref().unwrap().items[0].page.id, child.id);
+        drop(state);
         std::fs::remove_dir_all(path).unwrap();
     }
 }

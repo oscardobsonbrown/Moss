@@ -20,7 +20,7 @@ impl State {
         let result = (|| -> Result<Tab, Box<dyn std::error::Error>> {
             let page = self.store.get_page(id)?.ok_or("Page was not found")?;
             let mut blocks = self.store.get_blocks(id)?;
-            let choosing_type = blocks.is_empty() && page.kind == PageKind::Document;
+            let empty_document = blocks.is_empty() && page.kind == PageKind::Document;
             if blocks.is_empty() {
                 blocks.push(Block::paragraph(id, "", 0));
             }
@@ -40,6 +40,10 @@ impl State {
             } else {
                 None
             };
+            let choosing_type = empty_document
+                && child_pages
+                    .as_ref()
+                    .is_some_and(|pages| pages.items.is_empty());
             let database = self.store.get_database_by_page(id)?;
             let record_context = if page.kind == PageKind::Record {
                 match self.store.get_record_by_page(id)? {
@@ -230,16 +234,34 @@ impl State {
         match result {
             Ok(mut tab) => {
                 if !new_tab {
-                    if let Some(old_id) = self.tab().map(|tab| tab.page.id.clone()).filter(|old_id| old_id != id) {
-                        let link = self.new_item_drafts.get(&old_id).and_then(|draft| draft.created_link.as_ref()).filter(|link| link.page_id == tab.page.id).map(|link| link.id.clone());
-                        if !self.discard_draft_for_page(&old_id) { return; }
+                    if let Some(old_id) = self
+                        .tab()
+                        .map(|tab| tab.page.id.clone())
+                        .filter(|old_id| old_id != id)
+                    {
+                        let link = self
+                            .new_item_drafts
+                            .get(&old_id)
+                            .and_then(|draft| draft.created_link.as_ref())
+                            .filter(|link| link.page_id == tab.page.id)
+                            .map(|link| link.id.clone());
+                        if !self.discard_draft_for_page(&old_id) {
+                            return;
+                        }
                         if let Some(link) = link {
-                            if self.store.get_page(&old_id).is_ok_and(|page| page.is_none()) {
+                            if self
+                                .store
+                                .get_page(&old_id)
+                                .is_ok_and(|page| page.is_none())
+                            {
                                 tab.blocks.retain(|block| block.block.id != link);
                                 tab.page_links.remove(&old_id);
                                 if tab.blocks.is_empty() {
                                     let block = Block::paragraph(&tab.page.id, "", 0);
-                                    tab.blocks.push(EditableBlock { edit: crate::rich_text::load(&block), block });
+                                    tab.blocks.push(EditableBlock {
+                                        edit: crate::rich_text::load(&block),
+                                        block,
+                                    });
                                 }
                             }
                         }

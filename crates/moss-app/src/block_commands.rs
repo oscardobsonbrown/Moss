@@ -16,9 +16,12 @@ pub struct BlockCommands {
     pub mode: BlockCommandMode,
     pub selected: usize,
     pub error: Option<String>,
+    pub peek: bool,
+    pub link_picker: bool,
+    pub link_results: Vec<moss_core::SearchHit>,
 }
 
-pub const COMMANDS: [(BlockKind, &str, &str); 13] = [
+pub const COMMANDS: [(BlockKind, &str, &str); 15] = [
     (BlockKind::Paragraph, "Text", "paragraph"),
     (BlockKind::Heading1, "Heading 1", "h1"),
     (BlockKind::Heading2, "Heading 2", "h2"),
@@ -32,6 +35,12 @@ pub const COMMANDS: [(BlockKind, &str, &str); 13] = [
     (BlockKind::Code, "Code", "code block"),
     (BlockKind::ChildPage, "Page", "child subpage"),
     (BlockKind::SimpleTable, "Table", "simple table"),
+    (BlockKind::Image, "Image", "photo picture"),
+    (
+        BlockKind::Bookmark,
+        "Link to page or website",
+        "link bookmark",
+    ),
 ];
 pub const DIVIDER: (BlockKind, &str, &str) = (BlockKind::Divider, "Divider", "line separator");
 
@@ -76,13 +85,106 @@ impl State {
             mode,
             selected: 0,
             error: None,
+            peek: false,
+            link_picker: false,
+            link_results: Vec::new(),
         });
+    }
+    pub fn open_peek_block_commands(
+        &mut self,
+        block_id: &str,
+        anchor: &str,
+        mode: BlockCommandMode,
+    ) {
+        if self
+            .block_commands
+            .as_ref()
+            .is_some_and(|menu| menu.error.is_some())
+        {
+            return;
+        }
+        let Some(peek) = &self.record_peek else {
+            return;
+        };
+        let Some(block) = peek.blocks.iter().find(|b| b.block.id == block_id) else {
+            return;
+        };
+        if mode == BlockCommandMode::Slash && (!block.edit.text.is_empty() || !block.edit.focused) {
+            return;
+        }
+        let page_id = peek.page.id.clone();
+        self.block_command_search = TextEdit::new("");
+        self.block_command_search.focused = true;
+        self.block_commands = Some(BlockCommands {
+            page_id,
+            block_id: block_id.into(),
+            anchor: anchor.into(),
+            mode,
+            selected: 0,
+            error: None,
+            peek: true,
+            link_picker: false,
+            link_results: Vec::new(),
+        });
+    }
+    pub fn block_command_matches(&self) -> Vec<(BlockKind, &'static str)> {
+        let mut results = matches(&self.block_command_search.text);
+        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
+            results.retain(|(kind, _)| matches!(kind, BlockKind::Bookmark | BlockKind::Image));
+        }
+        results
     }
     pub fn dismiss_block_commands(&mut self) {
         let Some(menu) = &self.block_commands else {
             return;
         };
         if menu.error.is_some() {
+            return;
+        }
+        if menu.link_picker {
+            self.block_commands.as_mut().unwrap().link_picker = false;
+            self.block_command_search.replace_text("link");
+            return;
+        }
+        if menu.peek {
+            let (page, block, mode) = (menu.page_id.clone(), menu.block_id.clone(), menu.mode);
+            if mode == BlockCommandMode::Slash {
+                let literal = format!("/{}", self.block_command_search.text);
+                let Some(target) = self
+                    .record_peek
+                    .as_mut()
+                    .filter(|peek| peek.page.id == page)
+                    .and_then(|peek| peek.blocks.iter_mut().find(|b| b.block.id == block))
+                else {
+                    return;
+                };
+                target.edit.insert(&literal);
+                target.edit.focused = true;
+                if let Some(menu) = &mut self.block_commands {
+                    menu.mode = BlockCommandMode::Change;
+                }
+                self.save_peek_blocks();
+                if self
+                    .record_peek
+                    .as_ref()
+                    .is_some_and(|peek| peek.dirty_blocks)
+                {
+                    if let Some(menu) = &mut self.block_commands {
+                        menu.error = Some("Block text is not saved. Retry to keep it.".into());
+                    }
+                    return;
+                }
+            }
+            if let Some(block) = self
+                .record_peek
+                .as_mut()
+                .filter(|peek| peek.page.id == page)
+                .and_then(|peek| peek.blocks.iter_mut().find(|b| b.block.id == block))
+            {
+                block.edit.focused = true;
+            }
+            self.block_commands = None;
+            self.block_command_search.focused = false;
             return;
         }
         let return_page = menu.page_id.clone();
@@ -130,6 +232,21 @@ impl State {
         self.block_command_search.focused = false;
     }
     pub fn apply_block_command(&mut self, kind: BlockKind) {
+        if kind == BlockKind::Bookmark {
+            if let Some(menu) = &mut self.block_commands {
+                menu.link_picker = true;
+                menu.selected = 0;
+            }
+            self.block_command_search.replace_text("");
+            self.refresh_block_link_results();
+            return;
+        }
+        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
+            if kind == BlockKind::Image {
+                self.insert_peek_image();
+            }
+            return;
+        }
         if kind == BlockKind::ChildPage {
             self.insert_child_page_block();
             return;
@@ -179,11 +296,15 @@ impl State {
         // the Divider after it, even when the user chose Change.
         let insert = (mode == BlockCommandMode::InsertAfter && !reuse_empty)
             || (mode == BlockCommandMode::Change
-                && matches!(kind, BlockKind::Divider | BlockKind::SimpleTable)
+                && matches!(
+                    kind,
+                    BlockKind::Divider | BlockKind::SimpleTable | BlockKind::Image
+                )
                 && !tab.blocks[index].edit.text.is_empty());
         let target_index = if insert {
             tab.blocks[index].edit.focused = false;
             let mut block = Block::paragraph(&page_id, "", (index + 1) as i64);
+            crate::editor_drag::copy_column(&tab.blocks[index].block, &mut block);
             block.kind = kind;
             let mut edit = TextEdit::new("").rich();
             edit.focused = true;
@@ -248,10 +369,11 @@ impl State {
             self.retry_block_command();
             return;
         }
-        if let Some((kind, _)) = matches(&self.block_command_search.text)
-            .get(menu.selected)
-            .copied()
-        {
+        if menu.link_picker {
+            self.submit_block_link();
+            return;
+        }
+        if let Some((kind, _)) = self.block_command_matches().get(menu.selected).copied() {
             self.apply_block_command(kind);
         }
     }
@@ -259,6 +381,25 @@ impl State {
         let Some(menu) = &self.block_commands else {
             return;
         };
+        if menu.peek {
+            if !self
+                .record_peek
+                .as_ref()
+                .is_some_and(|peek| peek.page.id == menu.page_id)
+            {
+                return;
+            }
+            self.save_peek_blocks();
+            if self
+                .record_peek
+                .as_ref()
+                .is_some_and(|peek| !peek.dirty_blocks)
+            {
+                self.block_commands = None;
+                self.block_command_search.focused = false;
+            }
+            return;
+        }
         if !self.tab().is_some_and(|tab| tab.page.id == menu.page_id) {
             return;
         }
@@ -334,6 +475,7 @@ impl State {
             tab.blocks.insert(index + 1, EditableBlock { block, edit });
         } else if tab.blocks.len() > 1 {
             tab.blocks.remove(index);
+            crate::editor_drag::normalize(&mut tab.blocks);
             if let Some(menu) = &mut self.block_commands {
                 menu.anchor = "page-toolbar".into();
             }

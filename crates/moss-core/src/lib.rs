@@ -5,6 +5,8 @@ mod board_copy;
 mod board_settings;
 mod calculation;
 pub mod calendar;
+mod image_blocks;
+mod imported_links;
 pub mod record_layout;
 pub use calculation::calculation_error;
 pub mod chart;

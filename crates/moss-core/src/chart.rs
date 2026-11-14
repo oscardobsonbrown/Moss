@@ -185,8 +185,16 @@ impl Store {
         if view.kind != ViewKind::Chart {
             return Err(invalid("View is not a chart."));
         }
-        let axis = property(&db, &config.category_property_id)?;
-        let series = property(&db, &config.series_property_id)?;
+        let axis = if config.kind == ChartType::Number {
+            None
+        } else {
+            property(&db, &config.category_property_id)?
+        };
+        let series = if config.kind == ChartType::Number {
+            None
+        } else {
+            property(&db, &config.series_property_id)?
+        };
         if config.kind != ChartType::Number && axis.is_none() {
             return Err(invalid("Choose a category property."));
         }
@@ -287,12 +295,24 @@ impl Store {
             .iter()
             .find(|v| v.id == view_id)
             .ok_or_else(|| invalid("View missing."))?;
-        if view.kind != ViewKind::Chart {
-            return Err(invalid("View is not a chart."));
+        if view.kind == ViewKind::Dashboard {
+            return Err(invalid("A dashboard cannot be a chart source."));
         }
-        let axis = property(&db, &config.category_property_id)?;
-        let series = property(&db, &config.series_property_id)?;
-        let value = property(&db, &config.value_property_id)?;
+        let axis = if config.kind == ChartType::Number {
+            None
+        } else {
+            property(&db, &config.category_property_id)?
+        };
+        let series = if config.kind == ChartType::Number {
+            None
+        } else {
+            property(&db, &config.series_property_id)?
+        };
+        let value = if config.aggregation == Aggregate::Count {
+            None
+        } else {
+            property(&db, &config.value_property_id)?
+        };
         if config.kind != ChartType::Number && axis.is_none() {
             return Err(invalid("Choose a category property."));
         }
