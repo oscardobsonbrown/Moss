@@ -5,6 +5,7 @@ use crate::{
 };
 use moss_core::{
     Database, ViewKind,
+    chart::{Aggregate, ChartType, DateBucket},
     dashboard::{DashboardConfig, DashboardWidget},
 };
 use rune::*;
@@ -26,17 +27,18 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         .on_press(|s: &mut State| {
             s.database_views.dashboard.editing = !s.database_views.dashboard.editing;
             s.database_views.dashboard.adding = false;
+            s.database_views.dashboard.chart_settings = None;
+            s.database_views.dashboard.chart_settings_source = None;
         }),
     );
-    if state.editing {
-        bar = bar.child(
-            button("dashboard-add", "Add widget", t)
-                .instant_changes()
-                .on_press(|s: &mut State| {
-                    s.database_views.dashboard.adding = !s.database_views.dashboard.adding
-                }),
-        );
-    }
+    bar = bar.child(
+        button("dashboard-add", "Add widget", t)
+            .instant_changes()
+            .on_press(|s: &mut State| {
+                s.database_views.dashboard.editing = true;
+                s.database_views.dashboard.adding = !s.database_views.dashboard.adding;
+            }),
+    );
     bar = bar.child(
         button("dashboard-global-filter", "Filter widgets", t).on_press(|s: &mut State| {
             s.database_views.dashboard.filter_widget = None;
@@ -174,19 +176,48 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
             {
                 let db_id = source.id.clone();
                 let view_id = saved.id.clone();
+                let chart_db = db_id.clone();
+                let chart_view = view_id.clone();
                 sources = sources.child(
-                    button(
-                        format!("dashboard-source-{view_id}"),
-                        format!("{} · {}", saved.name, saved.kind.label()),
-                        t,
-                    )
-                    .on_press(move |s: &mut State| {
-                        s.dashboard_add_widget(db_id.clone(), view_id.clone())
-                    }),
+                    row()
+                        .w_full()
+                        .center_y()
+                        .gap(6.)
+                        .child(
+                            button(
+                                format!("dashboard-source-{view_id}"),
+                                format!("{} · {}", saved.name, saved.kind.label()),
+                                t,
+                            )
+                            .on_press(move |s: &mut State| {
+                                s.dashboard_add_widget(db_id.clone(), view_id.clone())
+                            }),
+                        )
+                        .child(
+                            button(format!("dashboard-figure-{chart_view}"), "Add figure", t)
+                                .on_press(move |s: &mut State| {
+                                    s.dashboard_add_figure(chart_db.clone(), chart_view.clone())
+                                }),
+                        ),
                 );
             }
         }
         body = body.child(sources);
+    }
+    if config.widgets.is_empty() && !state.adding {
+        body = body.child(
+            col()
+                .w_full()
+                .padding(24.)
+                .gap(6.)
+                .border(1., t.line)
+                .radius(8.)
+                .child(t.label("Build your dashboard", t.text))
+                .child(t.label(
+                    "Add a database view or a figure to see your data here.",
+                    t.muted,
+                )),
+        );
     }
     let mut grid = row()
         .key("dashboard-widgets")
@@ -205,7 +236,43 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
     let data = s.database_views.dashboard.widgets.get(&id);
     let title = data
         .and_then(|v| v.as_ref().ok())
-        .map(|d| format!("{} · {}", d.database.name, d.view.name))
+        .map(|d| {
+            if let Some(chart) = &d.chart {
+                let measure = match chart.config.aggregation {
+                    Aggregate::Count => "Count".to_owned(),
+                    aggregation => {
+                        let label = match aggregation {
+                            Aggregate::Sum => "Sum",
+                            Aggregate::Average => "Average",
+                            Aggregate::Min => "Min",
+                            Aggregate::Max => "Max",
+                            Aggregate::Count => unreachable!(),
+                        };
+                        let property = d
+                            .database
+                            .properties
+                            .iter()
+                            .find(|p| Some(&p.id) == chart.config.value_property_id.as_ref())
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("value");
+                        format!("{label} {property}")
+                    }
+                };
+                let category = d
+                    .database
+                    .properties
+                    .iter()
+                    .find(|p| Some(&p.id) == chart.config.category_property_id.as_ref());
+                if chart.config.kind != ChartType::Number {
+                    if let Some(category) = category {
+                        return format!("{} · {} by {}", d.database.name, measure, category.name);
+                    }
+                }
+                format!("{} · {}", d.database.name, measure)
+            } else {
+                format!("{} · {}", d.database.name, d.view.name)
+            }
+        })
         .unwrap_or_else(|| "Widget".into());
     let mut header = row()
         .w_full()
@@ -253,6 +320,15 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
             tx.instant();
         });
         let filter_id = id.clone();
+        let settings_id = id.clone();
+        controls = controls.child(
+            button(
+                format!("dashboard-chart-settings-{id}"),
+                "Chart settings",
+                t,
+            )
+            .on_press(move |s: &mut State| s.dashboard_toggle_chart_settings(&settings_id)),
+        );
         controls = controls.child(
             button(format!("dashboard-widget-filter-{id}"), "Filter", t).on_press(
                 move |s: &mut State| {
@@ -304,6 +380,7 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
     }
     let mut card = col()
         .key(format!("dashboard-widget-{id}"))
+        .instant_changes()
         .w(170. * f32::from(widget.width))
         .max_w(680.)
         .min_w(0.)
@@ -317,6 +394,184 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
         .radius(6.)
         .child(header)
         .child(controls);
+    if s.database_views.dashboard.editing
+        && s.database_views.dashboard.chart_settings.as_deref() == Some(&id)
+    {
+        if let Some(database) = &s.database_views.dashboard.chart_settings_source {
+            let source = database.views.iter().find(|v| v.id == widget.view_id);
+            let configured = widget.layout.get("chart").is_some()
+                || source.is_some_and(|view| view.kind == ViewKind::Chart);
+            let chart_value = if widget.layout.get("chart").is_some() {
+                &widget.layout
+            } else if let Some(view) = source {
+                &view.config
+            } else {
+                &widget.layout
+            };
+            if let Ok(chart) = crate::chart_view::config(chart_value) {
+                let mut settings = col().w_full().gap(4.).child(t.label("Display", t.muted));
+                let mut types = row().w_full().flex_wrap().gap(4.);
+                for (kind, label, key) in [
+                    (ChartType::Number, "Number", "number"),
+                    (ChartType::VerticalBar, "Bar", "bar"),
+                    (ChartType::HorizontalBar, "Horizontal", "horizontal"),
+                    (ChartType::Line, "Line", "line"),
+                    (ChartType::Donut, "Donut", "donut"),
+                ] {
+                    let chart_id = id.clone();
+                    let selected = configured && chart.kind == kind;
+                    types = types.child(
+                        button(format!("dashboard-chart-type-{id}-{key}"), label, t)
+                            .role("radio")
+                            .checked(selected)
+                            .fill(if selected {
+                                t.selected
+                            } else {
+                                Color::TRANSPARENT
+                            })
+                            .on_press(move |s: &mut State| s.dashboard_chart_kind(&chart_id, kind)),
+                    );
+                }
+                settings = settings.child(types);
+                if configured && chart.kind != ChartType::Number {
+                    let mut categories = row().w_full().flex_wrap().gap(4.);
+                    for property in database.properties.iter().filter(|p| {
+                        matches!(
+                            p.kind,
+                            moss_core::PropertyKind::Title
+                                | moss_core::PropertyKind::Text
+                                | moss_core::PropertyKind::Number
+                                | moss_core::PropertyKind::Select
+                                | moss_core::PropertyKind::Status
+                                | moss_core::PropertyKind::Date
+                                | moss_core::PropertyKind::Checkbox
+                                | moss_core::PropertyKind::Url
+                                | moss_core::PropertyKind::Email
+                                | moss_core::PropertyKind::Phone
+                        )
+                    }) {
+                        let chart_id = id.clone();
+                        let property_id = property.id.clone();
+                        let selected =
+                            chart.category_property_id.as_deref() == Some(property.id.as_str());
+                        categories = categories.child(
+                            button(
+                                format!("dashboard-chart-category-{id}-{}", property.id),
+                                &property.name,
+                                t,
+                            )
+                            .role("radio")
+                            .checked(selected)
+                            .fill(if selected {
+                                t.selected
+                            } else {
+                                Color::TRANSPARENT
+                            })
+                            .on_press(move |s: &mut State| {
+                                s.dashboard_chart_category(&chart_id, property_id.clone())
+                            }),
+                        );
+                    }
+                    settings = settings
+                        .child(t.label("Group by", t.muted))
+                        .child(categories);
+                    if database.properties.iter().any(|p| {
+                        p.kind == moss_core::PropertyKind::Date
+                            && chart.category_property_id.as_deref() == Some(p.id.as_str())
+                    }) {
+                        let mut buckets = row().w_full().flex_wrap().gap(4.);
+                        for (bucket, label, key) in [
+                            (DateBucket::Day, "Day", "day"),
+                            (DateBucket::Week, "Week", "week"),
+                            (DateBucket::Month, "Month", "month"),
+                            (DateBucket::Quarter, "Quarter", "quarter"),
+                            (DateBucket::Year, "Year", "year"),
+                        ] {
+                            let chart_id = id.clone();
+                            let selected = chart.date_bucket == bucket;
+                            buckets = buckets.child(
+                                button(format!("dashboard-chart-bucket-{id}-{key}"), label, t)
+                                    .role("radio")
+                                    .checked(selected)
+                                    .fill(if selected {
+                                        t.selected
+                                    } else {
+                                        Color::TRANSPARENT
+                                    })
+                                    .on_press(move |s: &mut State| {
+                                        s.dashboard_chart_bucket(&chart_id, bucket)
+                                    }),
+                            );
+                        }
+                        settings = settings.child(t.label("Interval", t.muted)).child(buckets);
+                    }
+                }
+                let mut aggregates = row().w_full().flex_wrap().gap(4.);
+                let chart_id = id.clone();
+                let selected = configured && chart.aggregation == Aggregate::Count;
+                aggregates = aggregates.child(
+                    button(format!("dashboard-chart-count-{id}"), "Count", t)
+                        .role("radio")
+                        .checked(selected)
+                        .fill(if selected {
+                            t.selected
+                        } else {
+                            Color::TRANSPARENT
+                        })
+                        .on_press(move |s: &mut State| {
+                            s.dashboard_chart_aggregate(&chart_id, Aggregate::Count, None)
+                        }),
+                );
+                for property in database.properties.iter().filter(|p| {
+                    matches!(
+                        p.kind,
+                        moss_core::PropertyKind::Number
+                            | moss_core::PropertyKind::Formula
+                            | moss_core::PropertyKind::Rollup
+                    )
+                }) {
+                    for (aggregation, label, key) in [
+                        (Aggregate::Sum, "Sum", "sum"),
+                        (Aggregate::Average, "Average", "average"),
+                        (Aggregate::Min, "Min", "min"),
+                        (Aggregate::Max, "Max", "max"),
+                    ] {
+                        let chart_id = id.clone();
+                        let property_id = property.id.clone();
+                        let selected = configured
+                            && chart.aggregation == aggregation
+                            && chart.value_property_id.as_deref() == Some(property.id.as_str());
+                        aggregates = aggregates.child(
+                            button(
+                                format!("dashboard-chart-{key}-{id}-{}", property.id),
+                                format!("{label} {}", property.name),
+                                t,
+                            )
+                            .role("radio")
+                            .checked(selected)
+                            .fill(if selected {
+                                t.selected
+                            } else {
+                                Color::TRANSPARENT
+                            })
+                            .on_press(move |s: &mut State| {
+                                s.dashboard_chart_aggregate(
+                                    &chart_id,
+                                    aggregation,
+                                    Some(property_id.clone()),
+                                )
+                            }),
+                        );
+                    }
+                }
+                card = card.child(
+                    settings
+                        .child(t.label("Measure", t.muted))
+                        .child(aggregates),
+                );
+            }
+        }
+    }
     card = match data {
         None => card.child(t.label("Loading…", t.muted)),
         Some(Err(error)) => card.child(t.label(error, t.error)).child(

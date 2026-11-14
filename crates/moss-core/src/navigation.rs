@@ -90,24 +90,64 @@ impl Store {
         id: &str,
         before: Option<&str>,
     ) -> Result<()> {
+        self.move_sidebar_page_inner(workspace_id, id, None, before)
+    }
+
+    /// Move a page to a new parent and position in one transaction.
+    pub fn move_sidebar_page(
+        &mut self,
+        workspace_id: &str,
+        id: &str,
+        parent: Option<&str>,
+        before: Option<&str>,
+    ) -> Result<()> {
+        self.move_sidebar_page_inner(workspace_id, id, Some(parent), before)
+    }
+
+    fn move_sidebar_page_inner(
+        &mut self,
+        workspace_id: &str,
+        id: &str,
+        parent: Option<Option<&str>>,
+        before: Option<&str>,
+    ) -> Result<()> {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let page = crate::search::page(&tx, id)?.ok_or_else(|| invalid("page does not exist"))?;
+        let parent = parent.unwrap_or(page.parent_id.as_deref());
         if page.workspace_id != workspace_id
             || page.deleted_at.is_some()
             || page.kind == crate::PageKind::Record
         {
             return Err(invalid("page is outside the live workspace"));
         }
+        if let Some(parent_id) = parent {
+            let target = crate::search::page(&tx, parent_id)?
+                .ok_or_else(|| invalid("parent page does not exist"))?;
+            if target.workspace_id != workspace_id || target.deleted_at.is_some() {
+                return Err(invalid("parent is outside the live workspace"));
+            }
+            let cycle: bool = tx.query_row(
+                "WITH RECURSIVE ancestors(id,parent_id) AS (SELECT id,parent_id FROM pages WHERE id=?1 UNION ALL SELECT p.id,p.parent_id FROM pages p JOIN ancestors a ON p.id=a.parent_id) SELECT EXISTS(SELECT 1 FROM ancestors WHERE id=?2)",
+                params![parent_id, id], |row| row.get(0),
+            )?;
+            if cycle {
+                return Err(invalid("parent cycle"));
+            }
+        }
         if before == Some(id) {
-            return Ok(());
+            return if page.parent_id.as_deref() == parent {
+                Ok(())
+            } else {
+                Err(invalid("target is not a sibling"))
+            };
         }
         let target = if let Some(id) = before {
             let target = crate::search::page(&tx, id)?
                 .ok_or_else(|| invalid("target page does not exist"))?;
             if target.workspace_id != workspace_id
-                || target.parent_id != page.parent_id
+                || target.parent_id.as_deref() != parent
                 || target.deleted_at.is_some()
                 || target.kind == crate::PageKind::Record
             {
@@ -129,23 +169,21 @@ impl Store {
         let previous: Option<String> = if let Some(target) = &target {
             tx.query_row(
                 &sql,
-                params![workspace_id, page.parent_id, id, target.sort_key, target.id],
+                params![workspace_id, parent, id, target.sort_key, target.id],
                 |row| row.get(0),
             )
             .optional()?
         } else {
-            tx.query_row(&sql, params![workspace_id, page.parent_id, id], |row| {
-                row.get(0)
-            })
-            .optional()?
+            tx.query_row(&sql, params![workspace_id, parent, id], |row| row.get(0))
+                .optional()?
         };
         let key = between(
             previous.as_deref().unwrap_or(""),
             target.as_ref().map(|c| c.sort_key.as_str()),
         )?;
         tx.execute(
-            "UPDATE pages SET data=json_set(data,'$.sidebar_order',?1) WHERE id=?2",
-            params![key, id],
+            "UPDATE pages SET parent_id=?1,data=json_set(data,'$.parent_id',?1,'$.sidebar_order',?2) WHERE id=?3",
+            params![parent, key, id],
         )?;
         tx.commit()
     }

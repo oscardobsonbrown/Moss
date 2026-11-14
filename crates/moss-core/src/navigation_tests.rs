@@ -309,3 +309,86 @@ fn suggestions_include_nested_pages_but_exclude_trash_and_record_pages() {
         .unwrap();
     assert!(!roots.items[0].has_children);
 }
+
+#[test]
+fn move_page_between_parents_and_root_is_atomic_and_rejects_cycles() {
+    let mut store = Store::in_memory().unwrap();
+    let ws = store.create_workspace("Move", "").unwrap();
+    let other = store.create_workspace("Other", "").unwrap();
+    let a = store
+        .create_page(&ws.id, None, "A", "🌱", PageKind::Document)
+        .unwrap();
+    let b = store
+        .create_page(&ws.id, None, "B", "", PageKind::Document)
+        .unwrap();
+    let child = store
+        .create_page(&ws.id, Some(&a.id), "Child", "📝", PageKind::Document)
+        .unwrap();
+    let grandchild = store
+        .create_page(
+            &ws.id,
+            Some(&child.id),
+            "Grandchild",
+            "",
+            PageKind::Document,
+        )
+        .unwrap();
+    let existing = store
+        .create_page(&ws.id, Some(&b.id), "Existing", "", PageKind::Document)
+        .unwrap();
+    let foreign = store
+        .create_page(&other.id, None, "Foreign", "", PageKind::Document)
+        .unwrap();
+    let content = Block::paragraph(&child.id, "Keep this", 0);
+    store
+        .save_blocks(&child.id, std::slice::from_ref(&content))
+        .unwrap();
+    assert!(
+        store
+            .move_sidebar_page(&ws.id, &a.id, Some(&grandchild.id), None)
+            .is_err()
+    );
+    assert!(
+        store
+            .move_sidebar_page(&ws.id, &child.id, Some(&foreign.id), None)
+            .is_err()
+    );
+    assert!(
+        store
+            .move_sidebar_page(&ws.id, &child.id, Some(&b.id), Some(&a.id))
+            .is_err()
+    );
+    assert_eq!(
+        store.get_page(&child.id).unwrap().unwrap().parent_id,
+        Some(a.id.clone())
+    );
+    store
+        .move_sidebar_page(&ws.id, &child.id, Some(&b.id), Some(&existing.id))
+        .unwrap();
+    let children = store
+        .page_children(&ws.id, Some(&b.id), PagePosition::Start, 50)
+        .unwrap();
+    assert_eq!(children.items[0].page.id, child.id);
+    assert_eq!(children.items[1].page.id, existing.id);
+    assert_eq!(
+        store.get_page(&grandchild.id).unwrap().unwrap().parent_id,
+        Some(child.id.clone())
+    );
+    assert_eq!(store.get_blocks(&child.id).unwrap(), vec![content]);
+    assert_eq!(store.get_page(&child.id).unwrap().unwrap().icon, "📝");
+    store
+        .move_sidebar_page(&ws.id, &child.id, None, Some(&b.id))
+        .unwrap();
+    let roots = store
+        .page_children(&ws.id, None, PagePosition::Start, 50)
+        .unwrap();
+    assert!(
+        roots
+            .items
+            .iter()
+            .position(|p| p.page.id == child.id)
+            .unwrap()
+            < roots.items.iter().position(|p| p.page.id == b.id).unwrap()
+    );
+    assert_eq!(store.get_page(&child.id).unwrap().unwrap().parent_id, None);
+}

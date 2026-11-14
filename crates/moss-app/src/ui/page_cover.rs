@@ -119,7 +119,7 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
     banner
 }
 
-pub fn controls(_s: &State, page: &Page, t: Theme, surface: &str) -> El {
+pub fn controls(s: &State, page: &Page, t: Theme, surface: &str, title_focused: bool) -> El {
     let page_copy = page.clone();
     let key = format!("page-cover-open-{}-{surface}", page.id);
     let anchor = key.clone();
@@ -131,6 +131,20 @@ pub fn controls(_s: &State, page: &Page, t: Theme, surface: &str) -> El {
             "Add cover"
         },
         t,
+    )
+    .group_opacity(
+        if title_focused
+            || s.sidebar_keyboard_controls
+            || s.page_cover
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.page_id == page.id)
+        {
+            1.
+        } else {
+            0.
+        },
+        1.,
     )
     .on_press(move |s: &mut State| s.open_page_cover(&page_copy, &anchor))
 }

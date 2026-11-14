@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
+#[path = "archive_file.rs"]
+mod file_archive;
+
 const FORMAT: &str = "moss-workspace";
 const VERSION: u32 = 1;
 const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
@@ -18,6 +21,8 @@ pub enum ArchiveError {
     Database(#[from] rusqlite::Error),
     #[error("invalid archive JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("archive file error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("invalid archive: {0}")]
     Invalid(String),
     #[error("attachments are not supported in this archive version")]
@@ -90,7 +95,7 @@ fn decode_rows<T: serde::de::DeserializeOwned>(
 fn media(kind: BlockKind) -> bool {
     matches!(
         kind,
-        BlockKind::Image | BlockKind::Video | BlockKind::Audio | BlockKind::Pdf | BlockKind::File
+        BlockKind::Video | BlockKind::Audio | BlockKind::Pdf | BlockKind::File
     )
 }
 fn unsupported(p: &Payload) -> bool {
@@ -113,8 +118,31 @@ fn unsupported(p: &Payload) -> bool {
 
 impl Store {
     /// Export one workspace as version 1 JSON, up to 64 MiB.
-    /// File and media attachments and external relations are not supported.
+    /// Non-image media attachments and external relations are not supported.
     pub fn export_workspace(&self, workspace_id: &str) -> Result<String, ArchiveError> {
+        let (mut payload, asset_ids) = self.collect_archive_payload(workspace_id)?;
+        for digest in asset_ids {
+            let bytes = self.read_cover_image(&digest)?;
+            payload.cover_assets.push(CoverAsset { digest, bytes });
+        }
+        validate(&payload)?;
+        let envelope = Envelope {
+            format: FORMAT.into(),
+            version: VERSION,
+            checksum_sha256: checksum(&payload)?,
+            payload,
+        };
+        let result = serde_json::to_string(&envelope)?;
+        if result.len() > MAX_ARCHIVE_BYTES {
+            return Err(invalid("archive exceeds size limit"));
+        }
+        Ok(result)
+    }
+
+    fn collect_archive_payload(
+        &self,
+        workspace_id: &str,
+    ) -> Result<(Payload, Vec<String>), ArchiveError> {
         let raw: Option<String> = self
             .conn
             .query_row(
@@ -141,7 +169,7 @@ impl Store {
             })
             .collect::<Result<Vec<_>, ArchiveError>>()?
         };
-        let blocks=decode_rows(&mut self.conn.prepare("SELECT b.data FROM blocks b JOIN pages p ON p.id=b.page_id WHERE p.workspace_id=?1 ORDER BY b.id")?,workspace_id)?;
+        let blocks: Vec<Block>=decode_rows(&mut self.conn.prepare("SELECT b.data FROM blocks b JOIN pages p ON p.id=b.page_id WHERE p.workspace_id=?1 ORDER BY b.id")?,workspace_id)?;
         let databases=decode_rows(&mut self.conn.prepare("SELECT d.data FROM databases d JOIN pages p ON p.id=d.page_id WHERE p.workspace_id=?1 ORDER BY d.id")?,workspace_id)?;
         let records=decode_rows(&mut self.conn.prepare("SELECT r.data FROM records r JOIN databases d ON d.id=r.database_id JOIN pages p ON p.id=d.page_id WHERE p.workspace_id=?1 ORDER BY r.id")?,workspace_id)?;
         let record_trash_roots = {
@@ -166,17 +194,6 @@ impl Store {
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
-        let mut cover_ids = std::collections::BTreeSet::new();
-        for item in &pages {
-            if let Some(crate::PageCover::Image { asset, .. }) = &item.page.cover {
-                cover_ids.insert(asset.clone());
-            }
-        }
-        let mut cover_assets = Vec::new();
-        for digest in cover_ids {
-            let bytes = self.read_cover_image(&digest)?;
-            cover_assets.push(CoverAsset { digest, bytes });
-        }
         let payload = Payload {
             workspace,
             pages,
@@ -185,20 +202,10 @@ impl Store {
             records,
             board_order,
             record_trash_roots,
-            cover_assets,
+            cover_assets: Vec::new(),
         };
-        validate(&payload)?;
-        let envelope = Envelope {
-            format: FORMAT.into(),
-            version: VERSION,
-            checksum_sha256: checksum(&payload)?,
-            payload,
-        };
-        let result = serde_json::to_string(&envelope)?;
-        if result.len() > MAX_ARCHIVE_BYTES {
-            return Err(invalid("archive exceeds size limit"));
-        }
-        Ok(result)
+        let ids = asset_ids(&payload)?;
+        Ok((payload, ids))
     }
 
     /// Validate and import an archive as a new workspace in one transaction.
@@ -208,7 +215,7 @@ impl Store {
         if input.len() > MAX_ARCHIVE_BYTES {
             return Err(invalid("archive exceeds size limit"));
         }
-        let mut envelope: Envelope = serde_json::from_str(input)?;
+        let envelope: Envelope = serde_json::from_str(input)?;
         if envelope.format != FORMAT || envelope.version != VERSION {
             return Err(invalid("unsupported format or version"));
         }
@@ -222,16 +229,18 @@ impl Store {
                 return Err(invalid("cover asset checksum mismatch"));
             }
         }
+        self.import_archive_payload(envelope.payload)
+    }
+
+    fn import_archive_payload(&mut self, mut payload: Payload) -> Result<Workspace, ArchiveError> {
         // Untouched cards use their original ID as the order key. Retain that key when IDs change.
-        let mut ranked: HashSet<_> = envelope
-            .payload
+        let mut ranked: HashSet<_> = payload
             .board_order
             .iter()
             .map(|row| (row.view_id.clone(), row.record_id.clone()))
             .collect();
-        for record in &envelope.payload.records {
-            if let Some(db) = envelope
-                .payload
+        for record in &payload.records {
+            if let Some(db) = payload
                 .databases
                 .iter()
                 .find(|db| db.id == record.database_id)
@@ -242,7 +251,7 @@ impl Store {
                     .filter(|view| view.kind == crate::ViewKind::Board)
                 {
                     if ranked.insert((view.id.clone(), record.id.clone())) {
-                        envelope.payload.board_order.push(ArchivedBoardOrder {
+                        payload.board_order.push(ArchivedBoardOrder {
                             view_id: view.id.clone(),
                             record_id: record.id.clone(),
                             rank: record.id.as_bytes().to_vec(),
@@ -251,9 +260,8 @@ impl Store {
                 }
             }
         }
-        let map = make_map(&envelope.payload);
-        remap(&mut envelope.payload, &map);
-        let payload = envelope.payload;
+        let map = make_map(&payload);
+        remap(&mut payload, &map);
         let tx = self.conn.transaction()?;
         tx.execute(
             "INSERT INTO workspaces(id,data) VALUES(?1,?2)",
@@ -370,6 +378,45 @@ fn make_map(p: &Payload) -> HashMap<String, String> {
 }
 
 fn validate(p: &Payload) -> Result<(), ArchiveError> {
+    let mut assets = HashSet::new();
+    for asset in &p.cover_assets {
+        if !crate::page_covers::valid_digest(&asset.digest)
+            || !crate::page_covers::validate_image(&asset.bytes)
+            || format!("{:x}", Sha256::digest(&asset.bytes)) != asset.digest
+            || !assets.insert(asset.digest.as_str())
+        {
+            return Err(invalid("invalid cover asset"));
+        }
+    }
+    validate_with_assets(p, &assets)
+}
+
+fn asset_ids(p: &Payload) -> Result<Vec<String>, ArchiveError> {
+    let mut ids = std::collections::BTreeSet::new();
+    for item in &p.pages {
+        if let Some(crate::PageCover::Image { asset, .. }) = &item.page.cover {
+            ids.insert(asset.clone());
+        }
+    }
+    for block in &p.blocks {
+        if block.kind == BlockKind::Image {
+            if let Some(asset) = block.config.get("asset") {
+                ids.insert(
+                    asset
+                        .as_str()
+                        .ok_or_else(|| invalid("invalid image asset"))?
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    if ids.iter().any(|id| !crate::page_covers::valid_digest(id)) {
+        return Err(invalid("invalid asset digest"));
+    }
+    Ok(ids.into_iter().collect())
+}
+
+fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), ArchiveError> {
     let records: HashMap<_, _> = p
         .records
         .iter()
@@ -397,16 +444,7 @@ fn validate(p: &Payload) -> Result<(), ArchiveError> {
             return Err(invalid("invalid Board card order"));
         }
     }
-    let mut assets = HashSet::new();
-    for asset in &p.cover_assets {
-        if !crate::page_covers::valid_digest(&asset.digest)
-            || !crate::page_covers::validate_image(&asset.bytes)
-            || format!("{:x}", Sha256::digest(&asset.bytes)) != asset.digest
-            || !assets.insert(asset.digest.as_str())
-        {
-            return Err(invalid("invalid cover asset"));
-        }
-    }
+
     for item in &p.pages {
         if let Some(cover) = &item.page.cover {
             if !crate::page_covers::valid_cover(cover) {
@@ -415,6 +453,18 @@ fn validate(p: &Payload) -> Result<(), ArchiveError> {
             if let crate::PageCover::Image { asset, .. } = cover {
                 if !assets.contains(asset.as_str()) {
                     return Err(invalid("cover asset missing"));
+                }
+            }
+        }
+    }
+    for block in &p.blocks {
+        if block.kind == BlockKind::Image {
+            if let Some(asset) = block.config.get("asset") {
+                let asset = asset
+                    .as_str()
+                    .ok_or_else(|| invalid("invalid image asset"))?;
+                if !assets.contains(asset) {
+                    return Err(invalid("image asset missing"));
                 }
             }
         }

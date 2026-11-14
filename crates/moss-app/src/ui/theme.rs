@@ -39,6 +39,14 @@ impl Theme {
             .color(color)
     }
 
+    pub fn link_label(self, s: impl Into<String>, size: f32) -> El {
+        let s = s.into();
+        let underline = Span::new(0, s.len()).underline(self.muted);
+        rich(s, vec![underline])
+            .font(TextStyle::new(size * self.text_scale, 400.).family(self.family))
+            .color(self.text)
+    }
+
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
@@ -101,6 +109,21 @@ pub fn button(key: impl Into<String>, title: impl Into<String>, t: Theme) -> El 
         .press(t.selected)
         .center_y()
         .child(t.label(title, t.text))
+}
+pub fn link_button(key: impl Into<String>, title: impl Into<String>, t: Theme) -> El {
+    let title = title.into();
+    row()
+        .key(key)
+        .role("link")
+        .label(&title)
+        .focusable(true)
+        .h(30.)
+        .px(9.)
+        .radius(4.)
+        .hover(t.hover)
+        .press(t.selected)
+        .center_y()
+        .child(t.link_label(title, 14.))
 }
 pub fn icon_button(key: impl Into<String>, title: &str, icon: &str, t: Theme) -> El {
     row()

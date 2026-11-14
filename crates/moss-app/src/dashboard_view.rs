@@ -43,6 +43,8 @@ pub struct DashboardState {
     pub error: Option<String>,
     pub filtering: bool,
     pub chart_drilldown: Option<(String, usize)>,
+    pub chart_settings: Option<String>,
+    pub chart_settings_source: Option<Database>,
     pub filter_widget: Option<String>,
     pub filter_property: Option<(String, moss_core::PropertyKind)>,
     pub filter_input: rune::TextEdit,
@@ -74,6 +76,8 @@ impl Default for DashboardState {
             error: None,
             filtering: false,
             chart_drilldown: None,
+            chart_settings: None,
+            chart_settings_source: None,
             filter_widget: None,
             filter_property: None,
             filter_input: rune::TextEdit::new(""),
@@ -330,6 +334,136 @@ impl State {
             self.database_views.dashboard.adding = false;
         }
     }
+    pub fn dashboard_add_figure(&mut self, database_id: String, view_id: String) {
+        let Some((_, _, mut config)) = self.dashboard_target() else {
+            return;
+        };
+        let chart = moss_core::chart::ChartConfig {
+            kind: moss_core::chart::ChartType::Number,
+            ..Default::default()
+        };
+        config.widgets.push(DashboardWidget {
+            id: moss_core::new_id(),
+            database_id,
+            view_id,
+            width: 2,
+            height: 300,
+            query: None,
+            layout: serde_json::json!({"chart": chart}),
+            extra: Default::default(),
+        });
+        if self.dashboard_save(config) {
+            self.database_views.dashboard.adding = false;
+        }
+    }
+    pub fn dashboard_toggle_chart_settings(&mut self, id: &str) {
+        if self.database_views.dashboard.chart_settings.as_deref() == Some(id) {
+            self.database_views.dashboard.chart_settings = None;
+            self.database_views.dashboard.chart_settings_source = None;
+            return;
+        }
+        let Some((_, _, config)) = self.dashboard_target() else {
+            return;
+        };
+        let Some(widget) = config.widgets.iter().find(|w| w.id == id) else {
+            return;
+        };
+        match self.store.get_database(&widget.database_id) {
+            Ok(Some(db))
+                if self
+                    .store
+                    .get_page(&db.page_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|page| {
+                        page.workspace_id == self.workspace.id && page.deleted_at.is_none()
+                    })
+                    && db.views.iter().any(|view| {
+                        view.id == widget.view_id && view.kind != ViewKind::Dashboard
+                    }) =>
+            {
+                self.database_views.dashboard.chart_settings = Some(id.to_owned());
+                self.database_views.dashboard.chart_settings_source = Some(db);
+            }
+            Ok(_) => {
+                self.database_views.dashboard.error = Some("Widget database is unavailable.".into())
+            }
+            Err(error) => self.database_views.dashboard.error = Some(error.to_string()),
+        }
+    }
+    fn dashboard_edit_chart(
+        &mut self,
+        id: &str,
+        edit: impl FnOnce(&Database, &mut moss_core::chart::ChartConfig),
+    ) {
+        let Some((_, _, mut config)) = self.dashboard_target() else {
+            return;
+        };
+        let Some(widget) = config.widgets.iter_mut().find(|w| w.id == id) else {
+            return;
+        };
+        let Ok(Some(db)) = self.store.get_database(&widget.database_id) else {
+            return;
+        };
+        let source = db.views.iter().find(|v| v.id == widget.view_id);
+        let chart_source = if widget.layout.get("chart").is_some() {
+            &widget.layout
+        } else if let Some(view) = source {
+            &view.config
+        } else {
+            return;
+        };
+        let Ok(mut chart) = crate::chart_view::config(chart_source) else {
+            return;
+        };
+        edit(&db, &mut chart);
+        if !widget.layout.is_object() {
+            widget.layout = serde_json::json!({});
+        }
+        widget.layout["chart"] = serde_json::json!(chart);
+        self.dashboard_save(config);
+    }
+    pub fn dashboard_chart_kind(&mut self, id: &str, kind: moss_core::chart::ChartType) {
+        self.dashboard_edit_chart(id, |db, chart| {
+            chart.kind = kind;
+            if kind != moss_core::chart::ChartType::Number && chart.category_property_id.is_none() {
+                chart.category_property_id = db
+                    .properties
+                    .iter()
+                    .find(|p| {
+                        matches!(
+                            p.kind,
+                            moss_core::PropertyKind::Status
+                                | moss_core::PropertyKind::Select
+                                | moss_core::PropertyKind::Date
+                        )
+                    })
+                    .or_else(|| {
+                        db.properties
+                            .iter()
+                            .find(|p| p.kind == moss_core::PropertyKind::Title)
+                    })
+                    .map(|p| p.id.clone());
+            }
+        });
+    }
+    pub fn dashboard_chart_category(&mut self, id: &str, property: String) {
+        self.dashboard_edit_chart(id, |_, chart| chart.category_property_id = Some(property));
+    }
+    pub fn dashboard_chart_bucket(&mut self, id: &str, bucket: moss_core::chart::DateBucket) {
+        self.dashboard_edit_chart(id, |_, chart| chart.date_bucket = bucket);
+    }
+    pub fn dashboard_chart_aggregate(
+        &mut self,
+        id: &str,
+        aggregation: moss_core::chart::Aggregate,
+        property: Option<String>,
+    ) {
+        self.dashboard_edit_chart(id, |_, chart| {
+            chart.aggregation = aggregation;
+            chart.value_property_id = property;
+        });
+    }
     pub fn dashboard_remove_widget(&mut self, id: &str) {
         if let Some((_, _, mut c)) = self.dashboard_target() {
             c.widgets.retain(|w| w.id != id);
@@ -456,7 +590,8 @@ fn load(
                         None => extra,
                     });
                 }
-                let chart = if view.kind == ViewKind::Chart {
+                let chart = if view.kind == ViewKind::Chart || widget.layout.get("chart").is_some()
+                {
                     let chart_config =
                         crate::chart_view::config(if widget.layout.get("chart").is_some() {
                             &widget.layout
@@ -479,11 +614,11 @@ fn load(
                 } else {
                     None
                 };
-                let map_base = (view.kind == ViewKind::Map).then(|| {
+                let map_base = (view.kind == ViewKind::Map && chart.is_none()).then(|| {
                     crate::map_view::MapViewport::from_config(&view.config)
                         .with_config(&widget.layout)
                 });
-                let map = if view.kind == ViewKind::Map {
+                let map = if view.kind == ViewKind::Map && chart.is_none() {
                     let place = widget
                         .layout
                         .get("map_place_property")

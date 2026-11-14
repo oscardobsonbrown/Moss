@@ -1,4 +1,5 @@
 mod advanced_properties;
+mod archive_transfer;
 mod block_commands;
 mod board_interaction;
 mod board_view;
@@ -12,8 +13,11 @@ mod database_properties;
 mod database_views;
 mod drafts;
 mod editor_commands;
+mod editor_drag;
+mod editor_selection;
 mod emoji_catalog;
 mod fonts;
+mod inline_links;
 mod map_clusters;
 mod map_interaction;
 mod map_view;
@@ -49,6 +53,20 @@ fn init() -> State {
     State::open(State::data_path(), None).expect("Could not open Moss data")
 }
 fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
+    if s.editor_selection_key(event, tx) {
+        return true;
+    }
+    if event.key == Key::Escape && s.editor_column_resize.is_some() {
+        s.editor_column_resize = None;
+        tx.instant();
+        return true;
+    }
+    if event.key == Key::Escape && s.editor_drag.is_some() {
+        s.editor_drag = None;
+        s.editor_drag_cancelled = true;
+        tx.instant();
+        return true;
+    }
     if event.key == Key::Escape && s.sidebar_sections.page_drag.is_some() {
         s.sidebar_sections.page_drag = None;
         s.sidebar_sections.page_drag_cancelled = true;
@@ -178,9 +196,10 @@ fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
     let sidebar_drag = sidebar_sections::poll(s, time, tx);
     let views = database_views::poll(s, time, tx);
     let covers = page_covers::poll(s, time, tx);
+    let archives = archive_transfer::poll(s, time, tx);
     let place = place_property::poll(s, tx);
     let appearance = page_appearance::poll(s, time, tx);
-    records || sidebar || sidebar_drag || views || covers || appearance || place
+    records || sidebar || sidebar_drag || views || covers || archives || appearance || place
 }
 fn spec() -> AppSpec<State> {
     AppSpec {
@@ -190,7 +209,8 @@ fn spec() -> AppSpec<State> {
         setup: Some(|s, wake| {
             s.database_views.map.set_waker(wake.clone());
             s.database_views.dashboard.set_waker(wake.clone());
-            s.page_cover.set_waker(wake);
+            s.page_cover.set_waker(wake.clone());
+            s.archive_transfer.set_waker(wake);
         }),
         fonts: fonts::all(),
         families: fonts::FAMILIES,
@@ -231,7 +251,9 @@ fn main() {
             }
         })
         .on_close(|s, _| {
-            if s.flush_current() { s.discard_all_drafts(); }
+            if s.flush_current() {
+                s.discard_all_drafts();
+            }
             s.save_preferences();
         });
     handles
@@ -262,7 +284,9 @@ fn main() {
                         }
                     })
                     .on_close(|s, _| {
-                        if s.flush_current() { s.discard_all_drafts(); }
+                        if s.flush_current() {
+                            s.discard_all_drafts();
+                        }
                         s.save_preferences();
                     });
                 let (handle, _) = app.window(WindowSpec::from_app(id.clone(), secondary));

@@ -353,12 +353,35 @@ impl Store {
             [page_id],
         )
     }
+    /// Replace blocks exactly as provided, including explicit image-asset changes.
+    /// Editors with potentially stale image state must use `save_editor_blocks`.
     pub fn save_blocks(&mut self, page_id: &str, blocks: &[Block]) -> Result<()> {
-        let page =
-            search::page(&self.conn, page_id)?.ok_or_else(|| invalid("page does not exist"))?;
-        if page.deleted_at.is_some() {
-            return Err(invalid("page is in trash"));
+        self.write_blocks(page_id, blocks, false).map(|_| ())
+    }
+    /// Save text and layout edits while keeping current assets for existing image blocks.
+    /// Use the guarded image attachment methods to replace or clear an image.
+    pub fn save_editor_blocks(&mut self, page_id: &str, blocks: &[Block]) -> Result<Vec<Block>> {
+        self.write_blocks(page_id, blocks, true)
+    }
+    /// Update a task without rewriting or reindexing the page's other blocks.
+    pub fn set_todo_checked(&mut self, page_id: &str, block_id: &str, checked: bool) -> Result<()> {
+        nonempty(page_id)?;
+        nonempty(block_id)?;
+        let changed = self.conn.execute(
+            "UPDATE blocks SET data=json_set(data,'$.checked',json(?3)) WHERE id=?1 AND page_id=?2 AND json_extract(data,'$.kind')='todo' AND EXISTS(SELECT 1 FROM pages WHERE id=?2 AND deleted_at IS NULL)",
+            params![block_id, page_id, if checked { "true" } else { "false" }],
+        )?;
+        if changed != 1 {
+            return Err(invalid("task or page is not available"));
         }
+        Ok(())
+    }
+    fn write_blocks(
+        &mut self,
+        page_id: &str,
+        blocks: &[Block],
+        preserve_images: bool,
+    ) -> Result<Vec<Block>> {
         let mut ids = std::collections::HashSet::new();
         for b in blocks {
             nonempty(&b.id)?;
@@ -366,9 +389,50 @@ impl Store {
                 return Err(invalid("invalid or duplicate block"));
             }
         }
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let page = search::page(&tx, page_id)?.ok_or_else(|| invalid("page does not exist"))?;
+        if page.deleted_at.is_some() {
+            return Err(invalid("page is in trash"));
+        }
+        let mut saved = blocks.to_vec();
+        if preserve_images && saved.iter().any(|b| b.kind == crate::BlockKind::Image) {
+            let mut statement = tx.prepare(
+                "SELECT data FROM blocks WHERE page_id=?1 AND json_extract(data,'$.kind')='image'",
+            )?;
+            let existing = statement
+                .query_map([page_id], |row| decode::<Block>(row.get(0)?))?
+                .collect::<Result<Vec<_>>>()?;
+            let existing: std::collections::HashMap<_, _> = existing
+                .into_iter()
+                .map(|block| (block.id.clone(), block))
+                .collect();
+            for block in saved
+                .iter_mut()
+                .filter(|b| b.kind == crate::BlockKind::Image)
+            {
+                if let Some(previous) = existing.get(&block.id) {
+                    if block.config.is_null() {
+                        block.config = serde_json::json!({});
+                    }
+                    let config = block
+                        .config
+                        .as_object_mut()
+                        .ok_or_else(|| invalid("invalid image block settings"))?;
+                    match previous.config.get("asset") {
+                        Some(asset) => {
+                            config.insert("asset".into(), asset.clone());
+                        }
+                        None => {
+                            config.remove("asset");
+                        }
+                    }
+                }
+            }
+        }
         tx.execute("DELETE FROM blocks WHERE page_id=?1", [page_id])?;
-        for b in blocks {
+        for b in &saved {
             tx.execute(
                 "INSERT INTO blocks(id,page_id,sort_order,data) VALUES(?1,?2,?3,?4)",
                 params![b.id, page_id, b.sort_order, encode(b)?],
@@ -380,7 +444,8 @@ impl Store {
                 &format!("{} {}", b.text, b.config),
             )?;
         }
-        tx.commit()
+        tx.commit()?;
+        Ok(saved)
     }
     pub fn get_database(&self, id: &str) -> Result<Option<Database>> {
         let raw: Option<String> = self

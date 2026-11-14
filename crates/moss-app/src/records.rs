@@ -369,10 +369,14 @@ impl State {
         if !self.finish_cell(false) || !self.close_peek() {
             return;
         }
-        let full_page = self.tab()
+        let full_page = self
+            .tab()
             .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-            .and_then(|view| view.config.get("open_mode").and_then(Value::as_str)) == Some("full");
-        if full_page && !self.flush_current() { return; }
+            .and_then(|view| view.config.get("open_mode").and_then(Value::as_str))
+            == Some("full");
+        if full_page && !self.flush_current() {
+            return;
+        }
         if let Some(record) = self.create_item(values) {
             self.open_record_id(&record.id);
         }
@@ -407,14 +411,27 @@ impl State {
         self.open_database_record(&database_id, id, &mode);
     }
     pub(crate) fn sync_record(&mut self, record: &Record) {
-        if self.new_item_drafts.get(&record.id).and_then(|draft| draft.record.as_ref()).is_some_and(|original| original != record) {
+        if self
+            .new_item_drafts
+            .get(&record.id)
+            .and_then(|draft| draft.record.as_ref())
+            .is_some_and(|original| original != record)
+        {
             self.new_item_drafts.remove(&record.id);
             self.pending_empty_items.retain(|id| id != &record.id);
         }
         self.sidebar_sections.update_record_title(record);
         let calendar = &mut self.database_views.calendar;
-        for projection in calendar.projection.iter_mut().chain(calendar.adjacent.values_mut()) {
-            for current in projection.records.iter_mut().chain(projection.undated.iter_mut()) {
+        for projection in calendar
+            .projection
+            .iter_mut()
+            .chain(calendar.adjacent.values_mut())
+        {
+            for current in projection
+                .records
+                .iter_mut()
+                .chain(projection.undated.iter_mut())
+            {
                 if current.id == record.id {
                     *current = record.clone();
                 }
@@ -704,7 +721,13 @@ impl State {
         let id = target.record_id.clone();
         let property = target.property_id.clone();
         let expected_value = target.expected_value.clone();
-        if property.is_none() && self.new_item_drafts.get(&id).and_then(|draft| draft.record.as_ref()).is_some_and(|record| record.title == self.cell.text) {
+        if property.is_none()
+            && self
+                .new_item_drafts
+                .get(&id)
+                .and_then(|draft| draft.record.as_ref())
+                .is_some_and(|record| record.title == self.cell.text)
+        {
             return true;
         }
         let result = (|| -> Result<Record, String> {
@@ -810,7 +833,9 @@ impl State {
         }
         let target = self.editing_cell.take();
         if let Some(target) = &target {
-            if self.new_item_drafts.contains_key(&target.record_id) && !self.pending_empty_items.contains(&target.record_id) {
+            if self.new_item_drafts.contains_key(&target.record_id)
+                && !self.pending_empty_items.contains(&target.record_id)
+            {
                 self.pending_empty_items.push(target.record_id.clone());
             }
         }
@@ -876,8 +901,9 @@ impl State {
                 b.block.clone()
             })
             .collect();
-        match self.store.save_blocks(&peek.page.id, &blocks) {
-            Ok(()) => {
+        match self.store.save_editor_blocks(&peek.page.id, &blocks) {
+            Ok(blocks) => {
+                crate::page_covers::sync_saved_image_assets(&mut peek.blocks, &blocks);
                 peek.dirty_blocks = false;
                 let page_id = peek.page.id.clone();
                 for tab in &mut self.tabs {
@@ -917,7 +943,8 @@ impl State {
         edit.focused = false;
         suffix.set_caret(0);
         suffix.focused = true;
-        let block = Block::paragraph(&peek.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&peek.page.id, "", after as i64 + 1);
+        crate::editor_drag::copy_column(&peek.blocks[after].block, &mut block);
         peek.blocks.insert(
             after + 1,
             EditableBlock {
@@ -928,6 +955,18 @@ impl State {
         self.save_peek_blocks();
     }
     pub fn close_peek(&mut self) -> bool {
+        for _ in 0..2 {
+            let Some(menu) = self.block_commands.as_ref().filter(|menu| menu.peek) else {
+                break;
+            };
+            if menu.error.is_some() {
+                return false;
+            }
+            self.dismiss_block_commands();
+        }
+        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
+            return false;
+        }
         self.dismiss_place_picker();
         if !self.finish_map_interaction() {
             return false;
@@ -962,7 +1001,9 @@ impl State {
             return false;
         }
         if let Some(id) = self.record_peek.as_ref().map(|peek| peek.record.id.clone()) {
-            if !self.discard_draft(&id) { return false; }
+            if !self.discard_draft(&id) {
+                return false;
+            }
         }
         self.record_peek = None;
         true
@@ -974,7 +1015,9 @@ impl State {
         let record_id = self.record_peek.as_ref().unwrap().record.id.clone();
         let draft = self.new_item_drafts.remove(&record_id);
         let closed = self.close_peek();
-        if let Some(draft) = draft { self.new_item_drafts.insert(record_id, draft); }
+        if let Some(draft) = draft {
+            self.new_item_drafts.insert(record_id, draft);
+        }
         if closed {
             self.open_page(&id, true);
         }

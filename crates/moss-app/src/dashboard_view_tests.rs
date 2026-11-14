@@ -247,6 +247,131 @@ fn widget_lifecycle_persists_and_keeps_stable_ids() {
     drop(reopened);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn figures_use_saved_view_filters_and_support_chart_settings_without_changing_source() {
+    use moss_core::chart::{Aggregate, ChartType, DateBucket};
+    let path = std::env::temp_dir().join(format!("moss-dashboard-figure-{}", new_id()));
+    let mut state = State::open(path.clone(), None).unwrap();
+    state.new_page(true, None);
+    let initial = state.tab().unwrap().database.clone().unwrap();
+    let updated = state
+        .store
+        .add_property(&initial.id, "Amount", PropertyKind::Number)
+        .unwrap();
+    let amount = updated
+        .properties
+        .iter()
+        .find(|p| p.name == "Amount")
+        .unwrap()
+        .id
+        .clone();
+    let updated = state
+        .store
+        .save_advanced_property(
+            &updated.id,
+            None,
+            "Double",
+            PropertyKind::Formula,
+            json!({"expression":"prop(\"Amount\") * 2"}),
+            None,
+        )
+        .unwrap();
+    let double = updated
+        .properties
+        .iter()
+        .find(|p| p.name == "Double")
+        .unwrap()
+        .id
+        .clone();
+    let date = updated
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Date)
+        .unwrap()
+        .id
+        .clone();
+    let status = updated
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Status)
+        .unwrap()
+        .id
+        .clone();
+    for (name, value) in [("First", 4), ("Second", 6)] {
+        state
+            .store
+            .create_record(
+                &updated.id,
+                name,
+                &BTreeMap::from([
+                    (amount.clone(), json!(value)),
+                    (status.clone(), json!("Done")),
+                ]),
+            )
+            .unwrap();
+    }
+    let filter = FilterExpr::Rule(moss_core::FilterRule {
+        property_id: updated.properties[0].id.clone(),
+        op: FilterOp::Eq,
+        value: json!("First"),
+    });
+    let filtered = state
+        .store
+        .set_view_filter(&updated.id, &updated.views[0].id, None, Some(filter))
+        .unwrap();
+    let source = filtered.views[0].clone();
+    let updated = state
+        .store
+        .create_view(&filtered.id, "Dashboard", ViewKind::Dashboard)
+        .unwrap();
+    let dashboard = updated
+        .views
+        .iter()
+        .position(|v| v.kind == ViewKind::Dashboard)
+        .unwrap();
+    state.tabs[state.active].database = Some(updated.clone());
+    state.tabs[state.active].view = dashboard;
+    state.dashboard_add_figure(updated.id.clone(), source.id.clone());
+    let widget_id = state.dashboard_target().unwrap().2.widgets[0].id.clone();
+    state.dashboard_chart_kind(&widget_id, ChartType::VerticalBar);
+    state.dashboard_chart_category(&widget_id, status.clone());
+    state.dashboard_chart_aggregate(&widget_id, Aggregate::Sum, Some(double));
+    let config = state.dashboard_target().unwrap().2;
+    let (_, data) = load(
+        &state.store,
+        &state.workspace.id,
+        "",
+        &config,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &|| false,
+    );
+    let chart = data[&widget_id].as_ref().unwrap().chart.as_ref().unwrap();
+    assert_eq!(chart.total, 1);
+    assert_eq!(chart.points[0].value, Some(8.));
+    assert_eq!(
+        chart.config.category_property_id.as_deref(),
+        Some(status.as_str())
+    );
+    assert_eq!(
+        state
+            .store
+            .get_database(&updated.id)
+            .unwrap()
+            .unwrap()
+            .views[0],
+        source
+    );
+    state.dashboard_chart_category(&widget_id, date);
+    state.dashboard_chart_bucket(&widget_id, DateBucket::Week);
+    assert_eq!(
+        state.dashboard_target().unwrap().2.widgets[0].layout["chart"]["date_bucket"],
+        "week"
+    );
+    drop(state);
+    std::fs::remove_dir_all(path).unwrap();
+}
 #[test]
 fn leaving_and_returning_discards_cancelled_worker_and_reloads() {
     let path = std::env::temp_dir().join(format!("moss-dashboard-switch-{}", new_id()));

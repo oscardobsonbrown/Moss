@@ -3,6 +3,72 @@ use moss_core::{Block, BlockKind};
 use rune::TextEdit;
 
 impl State {
+    pub fn toggle_todo(&mut self, block_id: &str, peek: bool) {
+        let (page_id, checked, was_dirty) = if peek {
+            let Some(page) = self.record_peek.as_mut() else {
+                return;
+            };
+            let Some(block) = page
+                .blocks
+                .iter_mut()
+                .find(|b| b.block.id == block_id && b.block.kind == BlockKind::Todo)
+            else {
+                return;
+            };
+            block.block.checked = !block.block.checked;
+            (page.page.id.clone(), block.block.checked, page.dirty_blocks)
+        } else {
+            let Some(page) = self.tabs.get_mut(self.active) else {
+                return;
+            };
+            let Some(block) = page
+                .blocks
+                .iter_mut()
+                .find(|b| b.block.id == block_id && b.block.kind == BlockKind::Todo)
+            else {
+                return;
+            };
+            block.block.checked = !block.block.checked;
+            (page.page.id.clone(), block.block.checked, page.dirty_blocks)
+        };
+        if was_dirty {
+            if peek {
+                self.save_peek_blocks()
+            } else {
+                self.save_blocks()
+            }
+            return;
+        }
+        if let Err(error) = self.store.set_todo_checked(&page_id, block_id, checked) {
+            if peek {
+                self.record_peek.as_mut().unwrap().dirty_blocks = true;
+            } else {
+                self.tabs[self.active].dirty_blocks = true;
+            }
+            self.error = Some(format!(
+                "Changes are not saved. Keep this page open and try again: {error}"
+            ));
+            return;
+        }
+        for page in &mut self.tabs {
+            if page.page.id == page_id && !page.dirty_blocks {
+                if let Some(block) = page.blocks.iter_mut().find(|b| b.block.id == block_id) {
+                    block.block.checked = checked;
+                }
+            }
+        }
+        if let Some(page) = self
+            .record_peek
+            .as_mut()
+            .filter(|p| p.page.id == page_id && !p.dirty_blocks)
+        {
+            if let Some(block) = page.blocks.iter_mut().find(|b| b.block.id == block_id) {
+                block.block.checked = checked;
+            }
+        }
+        self.keep_draft_for_page(&page_id);
+    }
+
     pub fn editor_backspace_empty(&mut self, block_id: &str) -> bool {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return false;
@@ -40,6 +106,7 @@ impl State {
             edit.focused = true;
             edit.set_caret(edit.text.len());
         }
+        crate::editor_drag::normalize(&mut tab.blocks);
         self.save_blocks();
         true
     }
@@ -137,6 +204,39 @@ impl State {
             self.add_block(index);
         } else {
             self.save_blocks();
+        }
+        true
+    }
+    pub fn editor_markdown_divider(&mut self, block_id: &str, peek: bool) -> bool {
+        let blocks = if peek {
+            let Some(page) = self.record_peek.as_mut() else {
+                return false;
+            };
+            &mut page.blocks
+        } else {
+            let Some(page) = self.tabs.get_mut(self.active) else {
+                return false;
+            };
+            &mut page.blocks
+        };
+        let Some(index) = blocks.iter().position(|block| block.block.id == block_id) else {
+            return false;
+        };
+        let block = &mut blocks[index];
+        if block.block.kind != BlockKind::Paragraph
+            || block.edit.text != "--"
+            || block.edit.range() != (2, 2)
+            || block.edit.preedit.is_some()
+        {
+            return false;
+        }
+        block.edit.set_selection(0, 2);
+        block.edit.insert("");
+        block.block.kind = BlockKind::Divider;
+        if peek {
+            self.add_peek_block(index)
+        } else {
+            self.add_block(index)
         }
         true
     }

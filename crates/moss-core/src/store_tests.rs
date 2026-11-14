@@ -31,6 +31,48 @@ fn database(store: &mut Store, workspace: &str) -> Database {
 }
 
 #[test]
+fn checking_a_todo_updates_only_that_block_and_validates_its_owner() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Tasks", "").unwrap();
+    let page = store
+        .create_page(&workspace.id, None, "Page", "", PageKind::Document)
+        .unwrap();
+    let other = store
+        .create_page(&workspace.id, None, "Other", "", PageKind::Document)
+        .unwrap();
+    let mut todo = Block::paragraph(&page.id, "Keep this text", 0);
+    todo.kind = BlockKind::Todo;
+    todo.config = json!({"custom": "keep"});
+    let paragraph = Block::paragraph(&page.id, "Other block", 1);
+    store
+        .save_blocks(&page.id, &[todo.clone(), paragraph.clone()])
+        .unwrap();
+    let changes = store.local_change_count();
+    store.set_todo_checked(&page.id, &todo.id, true).unwrap();
+    assert_eq!(store.local_change_count() - changes, 1);
+    todo.checked = true;
+    assert_eq!(
+        store.get_blocks(&page.id).unwrap(),
+        vec![todo.clone(), paragraph.clone()]
+    );
+    assert!(store.set_todo_checked(&other.id, &todo.id, false).is_err());
+    assert!(
+        store
+            .set_todo_checked(&page.id, &paragraph.id, true)
+            .is_err()
+    );
+    assert!(store.set_todo_checked(&page.id, "missing", true).is_err());
+    store
+        .conn
+        .execute(
+            "UPDATE pages SET deleted_at='2026-01-01' WHERE id=?1",
+            [&page.id],
+        )
+        .unwrap();
+    assert!(store.set_todo_checked(&page.id, &todo.id, false).is_err());
+}
+
+#[test]
 fn gallery_previews_are_bounded_ordered_and_workspace_scoped() {
     let mut store = Store::in_memory().unwrap();
     let workspace = store.create_workspace("Preview", "").unwrap();

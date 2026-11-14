@@ -955,3 +955,73 @@ fn many_section_shortcuts_keep_mounted_rows_bounded() {
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn dragging_pages_between_parents_and_to_root_survives_restart() {
+    for (dark, scale) in [(false, 1.), (true, 2.)] {
+        let (mut state, path) = fixture();
+        let a = new_page(&mut state, None, "Parent A");
+        let b = new_page(&mut state, None, "Parent B");
+        let child = new_page(&mut state, Some(&a.id), "Movable page");
+        state.refresh_pages();
+        state.toggle_sidebar_page(&a.id);
+        let workspace = state.workspace.id.clone();
+        let mut rt = make_runtime(state, dark, scale);
+        let source = format!("page-open-{}", child.id);
+        let target = format!("page-highlight-{}", b.id);
+        let (x, y) = rt.find(&source).unwrap();
+        let rect = rt.presented(&target).unwrap().0;
+        rt.pointer_down(x, y);
+        rt.pointer_move(rect[0] + 30., rect[1] + rect[3] / 2.);
+        rt.frame(0.02);
+        assert!(
+            rt.state
+                .sidebar_sections
+                .page_drag
+                .as_ref()
+                .is_some_and(|d| d.inside && d.parent.as_deref() == Some(&b.id))
+        );
+        rt.pointer_up(rect[0] + 30., rect[1] + rect[3] / 2.);
+        settle(&mut rt);
+        assert_eq!(
+            rt.state
+                .store
+                .get_page(&child.id)
+                .unwrap()
+                .unwrap()
+                .parent_id
+                .as_deref(),
+            Some(b.id.as_str())
+        );
+        assert!(rt.find(&source).is_some());
+        let (x, y) = rt.find(&source).unwrap();
+        let rect = rt.presented(&format!("page-highlight-{}", a.id)).unwrap().0;
+        rt.pointer_down(x, y);
+        rt.pointer_move(rect[0] + 30., rect[1] + 3.);
+        rt.frame(0.02);
+        rt.pointer_up(rect[0] + 30., rect[1] + 3.);
+        settle(&mut rt);
+        assert_eq!(
+            rt.state
+                .store
+                .get_page(&child.id)
+                .unwrap()
+                .unwrap()
+                .parent_id,
+            None
+        );
+        drop(rt);
+        let reopened = State::open(path.clone(), Some(&workspace)).unwrap();
+        assert_eq!(
+            reopened
+                .store
+                .get_page(&child.id)
+                .unwrap()
+                .unwrap()
+                .parent_id,
+            None
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}

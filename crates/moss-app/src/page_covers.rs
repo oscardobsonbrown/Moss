@@ -36,6 +36,12 @@ pub struct CoverState {
 enum CoverResult {
     Loaded(String, Result<Vec<u8>, String>),
     Uploaded(String, u64, Option<PageCover>, Result<String, String>),
+    BlockUploaded(
+        String,
+        String,
+        Option<String>,
+        Result<moss_core::Block, String>,
+    ),
 }
 impl CoverState {
     pub fn set_waker(&mut self, wake: Waker) {
@@ -185,6 +191,42 @@ impl State {
             }
         }
     }
+    pub fn upload_block_image(
+        &mut self,
+        page_id: &str,
+        block_id: &str,
+        expected: Option<String>,
+        path: PathBuf,
+    ) {
+        let Some(sender) = self.page_cover.result_tx.clone() else {
+            self.error = Some("Image worker is unavailable.".into());
+            return;
+        };
+        let (workspace, page_id, block_id) = (
+            self.workspace.id.clone(),
+            page_id.to_owned(),
+            block_id.to_owned(),
+        );
+        let db = self.path.join("workspace.sqlite3");
+        let wake = self.page_cover.wake.clone();
+        std::thread::spawn(move || {
+            let result = Store::import_block_image_file(
+                &db,
+                &workspace,
+                &page_id,
+                &block_id,
+                expected.as_deref(),
+                &path,
+            )
+            .map_err(|e| e.to_string());
+            let _ = sender.send(CoverResult::BlockUploaded(
+                page_id, block_id, expected, result,
+            ));
+            if let Some(wake) = wake {
+                wake();
+            }
+        });
+    }
     pub fn retry_cover_image(&mut self, asset: &str) {
         self.page_cover.image_errors.remove(asset);
     }
@@ -238,6 +280,38 @@ impl State {
         });
     }
 }
+/// Reconcile only image assets; keep the editor's current text and other settings.
+pub(crate) fn sync_saved_image_assets(
+    editable: &mut [crate::state::EditableBlock],
+    saved: &[moss_core::Block],
+) {
+    let assets: std::collections::HashMap<_, _> = saved
+        .iter()
+        .filter(|block| block.kind == moss_core::BlockKind::Image)
+        .map(|block| (block.id.as_str(), block.config.get("asset")))
+        .collect();
+    for block in editable
+        .iter_mut()
+        .filter(|b| b.block.kind == moss_core::BlockKind::Image)
+    {
+        let Some(asset) = assets.get(block.block.id.as_str()) else {
+            continue;
+        };
+        if block.block.config.is_null() {
+            block.block.config = serde_json::json!({});
+        }
+        if let Some(config) = block.block.config.as_object_mut() {
+            match asset {
+                Some(asset) => {
+                    config.insert("asset".into(), (*asset).clone());
+                }
+                None => {
+                    config.remove("asset");
+                }
+            }
+        }
+    }
+}
 pub fn poll(s: &mut State, _time: f64, _tx: &mut Tx) -> bool {
     let mut wanted = Vec::new();
     if let Some(tab) = s.tab() {
@@ -245,10 +319,36 @@ pub fn poll(s: &mut State, _time: f64, _tx: &mut Tx) -> bool {
             wanted.push(asset.clone());
         }
     }
+    if let Some(tab) = s.tab() {
+        wanted.extend(
+            tab.blocks
+                .iter()
+                .filter(|b| b.block.kind == moss_core::BlockKind::Image)
+                .filter_map(|b| {
+                    b.block
+                        .config
+                        .get("asset")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                }),
+        );
+    }
     if let Some(peek) = &s.record_peek {
         if let Some(PageCover::Image { asset, .. }) = &peek.page.cover {
             wanted.push(asset.clone());
         }
+        wanted.extend(
+            peek.blocks
+                .iter()
+                .filter(|b| b.block.kind == moss_core::BlockKind::Image)
+                .filter_map(|b| {
+                    b.block
+                        .config
+                        .get("asset")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                }),
+        );
     }
     if let Some(tab) = s.tab() {
         if let Some(view) = tab
@@ -372,6 +472,50 @@ pub fn poll(s: &mut State, _time: f64, _tx: &mut Tx) -> bool {
                     }
                 }
             }
+            CoverResult::BlockUploaded(page_id, block_id, expected, result) => match result {
+                Ok(saved) => {
+                    let asset = saved.config.get("asset").cloned();
+                    let update = |block: &mut crate::state::EditableBlock| {
+                        if block.block.kind != moss_core::BlockKind::Image
+                            || block
+                                .block
+                                .config
+                                .get("asset")
+                                .and_then(serde_json::Value::as_str)
+                                != expected.as_deref()
+                        {
+                            return;
+                        }
+                        if block.block.config.is_null() {
+                            block.block.config = serde_json::json!({});
+                        }
+                        if let (Some(config), Some(asset)) =
+                            (block.block.config.as_object_mut(), asset.as_ref())
+                        {
+                            config.insert("asset".into(), asset.clone());
+                        }
+                    };
+                    for tab in &mut s.tabs {
+                        if tab.page.id == page_id {
+                            if let Some(block) =
+                                tab.blocks.iter_mut().find(|b| b.block.id == block_id)
+                            {
+                                update(block);
+                            }
+                        }
+                    }
+                    if let Some(peek) = &mut s.record_peek {
+                        if peek.page.id == page_id {
+                            if let Some(block) =
+                                peek.blocks.iter_mut().find(|b| b.block.id == block_id)
+                            {
+                                update(block);
+                            }
+                        }
+                    }
+                }
+                Err(error) => s.error = Some(format!("Image is not imported: {error}")),
+            },
             CoverResult::Uploaded(page_id, generation, expected, result) => {
                 s.page_cover.loading = false;
                 if s.page_cover.editor.as_ref().is_some_and(|e| {
@@ -442,6 +586,8 @@ mod tests {
         rt.frame(0.);
         let click = |rt: &mut Runtime<State>, key: &str| {
             let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.frame(1. / 60.);
             rt.pointer_down(x, y);
             rt.pointer_up(x, y);
             rt.frame(1. / 60.);
@@ -507,6 +653,215 @@ mod tests {
         assert!(!rt.state.page_cover.editor.as_ref().unwrap().reposition);
         drop(rt);
         let _ = std::fs::remove_dir_all(path);
+    }
+    #[test]
+    fn editor_save_between_worker_commit_and_poll_preserves_the_image_and_other_edits() {
+        use rune::{Env, Runtime};
+        use std::sync::Arc;
+        let path = std::env::temp_dir().join(format!("moss-image-save-race-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        state.new_page(false, None);
+        let page = state.tab().unwrap().page.id.clone();
+        let id = state.tab().unwrap().blocks[0].block.id.clone();
+        state.tabs[state.active].blocks[0].block.kind = moss_core::BlockKind::Image;
+        state.tabs[state.active].blocks[0].block.config = serde_json::json!({"note":"before"});
+        state.save_blocks();
+        let png = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+            130,
+        ];
+        let asset = state.store.import_cover_image(&png).unwrap();
+        state.page_cover.set_waker(Arc::new(|| {}));
+        let saved = state
+            .store
+            .set_block_image_if_unchanged(&state.workspace.id, &page, &id, None, &asset)
+            .unwrap();
+        state
+            .page_cover
+            .result_tx
+            .as_ref()
+            .unwrap()
+            .send(CoverResult::BlockUploaded(
+                page.clone(),
+                id.clone(),
+                None,
+                Ok(saved),
+            ))
+            .unwrap();
+        assert!(
+            state.tab().unwrap().blocks[0]
+                .block
+                .config
+                .get("asset")
+                .is_none()
+        );
+        state.tabs[state.active].blocks[0]
+            .edit
+            .replace_text("new caption");
+        state.tabs[state.active].blocks[0].block.config["note"] = serde_json::json!("new setting");
+        state.save_blocks();
+        let stored = state.store.get_blocks(&page).unwrap().remove(0);
+        assert_eq!(stored.text, "new caption");
+        assert_eq!(stored.config["note"], "new setting");
+        assert_eq!(stored.config["asset"], asset);
+        assert_eq!(state.tab().unwrap().blocks[0].block.config["asset"], asset);
+        let mut rt = Runtime::new(state, crate::ui::view, (1000., 800.), Env::default());
+        rt.poll = Some(crate::poll);
+        rt.frame(0.);
+        assert_eq!(rt.state.tab().unwrap().blocks[0].edit.text, "new caption");
+        assert_eq!(
+            rt.state.tab().unwrap().blocks[0].block.config["note"],
+            "new setting"
+        );
+        assert_eq!(
+            rt.state.tab().unwrap().blocks[0].block.config["asset"],
+            asset
+        );
+        drop(rt);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn image_file_read_waits_in_worker_not_the_ui() {
+        use std::{
+            io::Write,
+            sync::{Arc, mpsc},
+            time::Duration,
+        };
+        let path = std::env::temp_dir().join(format!("moss-image-nonblocking-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        state.new_page(false, None);
+        let page = state.tab().unwrap().page.id.clone();
+        let id = state.tab().unwrap().blocks[0].block.id.clone();
+        state.tabs[state.active].blocks[0].block.kind = moss_core::BlockKind::Image;
+        state.save_blocks();
+        state.page_cover.set_waker(Arc::new(|| {}));
+        let fifo = path.join("delayed-image");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (release, wait) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let released = wait.recv_timeout(Duration::from_secs(3)).is_ok();
+            let png = [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
+                1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99,
+                248, 207, 192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68,
+                174, 66, 96, 130,
+            ];
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(fifo)
+                .unwrap()
+                .write_all(&png)
+                .unwrap();
+            released
+        });
+        state.upload_block_image(&page, &id, None, path.join("delayed-image"));
+        release.send(()).unwrap();
+        assert!(
+            writer.join().unwrap(),
+            "image reading blocked the UI thread"
+        );
+        let result = state
+            .page_cover
+            .result_rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(result, CoverResult::BlockUploaded(_, _, _, Ok(_))));
+        assert!(
+            state.store.get_blocks(&page).unwrap()[0]
+                .config
+                .get("asset")
+                .is_some()
+        );
+        drop(state);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn image_block_upload_persists_and_displays() {
+        use rune::{Env, Runtime};
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        let path = std::env::temp_dir().join(format!("moss-image-upload-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        state.new_page(false, None);
+        let page = state.tab().unwrap().page.id.clone();
+        let id = state.tab().unwrap().blocks[0].block.id.clone();
+        let other = state
+            .store
+            .create_page(
+                &state.workspace.id,
+                None,
+                "Other",
+                "",
+                moss_core::PageKind::Document,
+            )
+            .unwrap();
+        state.tabs[state.active].blocks[0].block.kind = moss_core::BlockKind::Image;
+        state.save_blocks();
+        state.page_cover.set_waker(Arc::new(|| {}));
+        let png = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96,
+            130,
+        ];
+        let image_path = path.join("test.png");
+        std::fs::write(&image_path, png).unwrap();
+        let mut rt = Runtime::new(state, crate::ui::view, (1000., 800.), Env::default());
+        rt.poll = Some(crate::poll);
+        rt.frame(0.);
+        let (x, y) = rt.find(&format!("image-upload-{id}")).unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1. / 60.);
+        rt.resolve_file_dialog(Some(image_path)).unwrap();
+        rt.state.open_page(&other.id, false);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rt.state.store.get_blocks(&page).unwrap()[0]
+            .config
+            .get("asset")
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "image upload did not finish");
+            rt.frame(1. / 60.);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let asset = rt.state.store.get_blocks(&page).unwrap()[0].config["asset"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        rt.state.open_page(&page, false);
+        assert_eq!(
+            rt.state.tab().unwrap().blocks[0].block.config["asset"],
+            asset
+        );
+        while !rt
+            .state
+            .page_cover
+            .images
+            .get(&asset)
+            .is_some_and(|image| image.size().is_some())
+        {
+            assert!(Instant::now() < deadline, "image did not load");
+            rt.frame(1. / 60.);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        rt.frame(1. / 60.);
+        assert!(rt.find(&format!("image-content-{id}")).is_some());
+        drop(rt);
+        std::fs::remove_dir_all(path).unwrap();
     }
     #[test]
     fn missing_image_waits_for_explicit_retry() {

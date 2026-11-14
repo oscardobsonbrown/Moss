@@ -66,6 +66,8 @@ impl State {
             if blocks.is_empty() {
                 blocks.push(Block::paragraph(&page.id, "", 0));
             }
+            let page_links =
+                crate::page_blocks::load_links(&self.store, &self.workspace.id, &blocks)?;
             let mut title = TextEdit::new(&record.title);
             title.focused = true;
             Ok(RecordPeek {
@@ -73,6 +75,7 @@ impl State {
                 record,
                 page,
                 title,
+                page_links,
                 mode: if matches!(open_mode, "center" | "center_peek") {
                     PeekMode::Center
                 } else {

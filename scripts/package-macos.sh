@@ -10,7 +10,7 @@ fi
 if [ "$profile" = debug ]; then
     cargo build -p moss --jobs 2
 else
-    cargo build --release -p moss --jobs 2
+    cargo build --profile "$profile" -p moss --jobs 2
 fi
 app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

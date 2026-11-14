@@ -228,26 +228,115 @@ fn settings(s: &State, t: Theme) -> El {
                 })
         }),
     );
-    col().w_full().gap(12.).child(label("Appearance",t.muted)).child(appearance)
+    col()
+        .w_full()
+        .gap(12.)
+        .child(label("Appearance", t.muted))
+        .child(appearance)
         .child(label("Start week on", t.muted))
-        .child(row().gap(4.).children(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].into_iter().enumerate().map(|(day, name)| {
-            button(format!("week-start-{}", name.to_lowercase()), &name[..3], t)
-                .role("radio")
-                .label(format!("Start week on {name}"))
-                .checked(s.prefs.week_start() == day as u8)
-                .fill(if s.prefs.week_start() == day as u8 { t.selected } else { t.bg })
-                .on_press(move |s: &mut State| s.set_week_start(day as u8))
-        })))
+        .child(
+            row().gap(4.).children(
+                [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(day, name)| {
+                    button(format!("week-start-{}", name.to_lowercase()), &name[..3], t)
+                        .role("radio")
+                        .label(format!("Start week on {name}"))
+                        .checked(s.prefs.week_start() == day as u8)
+                        .fill(if s.prefs.week_start() == day as u8 {
+                            t.selected
+                        } else {
+                            t.bg
+                        })
+                        .on_press(move |s: &mut State| s.set_week_start(day as u8))
+                }),
+            ),
+        )
         .child(el().h(1.).w_full().fill(t.line))
-        .child(label("Workspace",t.muted))
-        .child(button("export-workspace","Export workspace archive…",t).on_press_tx(|s:&mut State,tx|{
-            let name=format!("{}.moss",s.workspace.name);
-            tx.save_file(FileDialogOptions{title:"Export workspace".into(),file_name:Some(name),..Default::default()}.filter("Moss archive",&["moss"]),|s:&mut State,result,_|match result{
-                Ok(Some(path))=>match s.store.export_workspace(&s.workspace.id){Ok(data)=>if let Err(e)=std::fs::write(path,data){s.error=Some(e.to_string())},Err(e)=>s.error=Some(e.to_string())},Ok(None)=>{},Err(e)=>s.error=Some(e.to_string())});
+        .child(label("Workspace", t.muted))
+        .child(
+            button("export-workspace", "Export workspace archive…", t)
+                .disabled(s.archive_transfer.busy)
+                .on_press_tx(|s: &mut State, tx| {
+                    if s.archive_transfer.busy {
+                        return;
+                    }
+                    let name = format!("{}.moss", s.workspace.name);
+                    tx.save_file(
+                        FileDialogOptions {
+                            title: "Export workspace".into(),
+                            file_name: Some(name),
+                            ..Default::default()
+                        }
+                        .filter("Moss archive", &["moss"]),
+                        |s: &mut State, result, _| match result {
+                            Ok(Some(path)) => s.transfer_archive(path, false),
+                            Ok(None) => {}
+                            Err(e) => s.error = Some(e.to_string()),
+                        },
+                    );
+                }),
+        )
+        .child(
+            button("import-workspace", "Import workspace archive…", t)
+                .disabled(s.archive_transfer.busy)
+                .on_press_tx(|s: &mut State, tx| {
+                    if s.archive_transfer.busy {
+                        return;
+                    }
+                    tx.open_file(
+                        FileDialogOptions {
+                            title: "Import workspace".into(),
+                            ..Default::default()
+                        }
+                        .filter("Moss archive", &["moss"]),
+                        |s: &mut State, result, _| match result {
+                            Ok(Some(path)) => s.transfer_archive(path, true),
+                            Ok(None) => {}
+                            Err(e) => s.error = Some(e.to_string()),
+                        },
+                    );
+                }),
+        )
+        .children(s.archive_transfer.busy.then(|| {
+            button("cancel-archive-transfer", "Cancel transfer", t)
+                .on_press(|s: &mut State| s.cancel_archive_transfer())
         }))
-        .child(label("Archive export currently supports pages and databases. Files and media are not yet supported.",t.muted).wrap())
+        .children(
+            s.archive_transfer
+                .status
+                .as_ref()
+                .map(|status| label(status, t.muted).key("archive-transfer-status").wrap()),
+        )
+        .child(
+            label(
+                "Archives include images. Other file types are not yet supported.",
+                t.muted,
+            )
+            .wrap(),
+        )
         .child(el().h(1.).w_full().fill(t.line))
-        .child(label(format!("Moss {}{}", option_env!("MOSS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")), if cfg!(debug_assertions) { " · Local development build" } else { "" }),t.muted))
+        .child(label(
+            format!(
+                "Moss {}{}",
+                option_env!("MOSS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+                if cfg!(debug_assertions) {
+                    " · Local development build"
+                } else {
+                    ""
+                }
+            ),
+            t.muted,
+        ))
 }
 fn trash(s: &State, t: Theme) -> El {
     col()
