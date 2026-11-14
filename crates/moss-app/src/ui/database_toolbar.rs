@@ -1,4 +1,4 @@
-use super::theme::{Theme, button};
+use super::theme::Theme;
 use crate::state::State;
 use moss_core::ViewKind;
 use rune::*;
@@ -7,10 +7,29 @@ fn text_width(value: &str) -> f32 {
     rune::text::measure(
         value,
         &[],
-        TextStyle::new(14., 400.).family(Family::Sans),
+        TextStyle::new(14., 500.).family(Family::Sans),
         None,
     )
     .0
+}
+
+fn toolbar_button(key: &str, title: impl Into<String>, t: Theme) -> El {
+    let title = title.into();
+    row()
+        .key(key)
+        .role("button")
+        .label(&title)
+        .focusable(true)
+        .h(30.)
+        .px(9.)
+        .radius(4.)
+        .hover(t.hover)
+        .press(t.selected)
+        .center_y()
+        .child(
+            t.label(title, t.text)
+                .font(TextStyle::new(14., 500.).family(t.family)),
+        )
 }
 
 fn fitted_tabs(widths: &[f32], active: usize, available: f32) -> Vec<usize> {
@@ -99,6 +118,7 @@ pub fn view(s: &State, t: Theme) -> El {
     for index in indices {
         let item = &db.views[index];
         let active = index == tab.view;
+        let color = if active { t.text } else { t.muted };
         tabs = tabs.child(
             row()
                 .key(format!("db-view-{index}"))
@@ -118,9 +138,10 @@ pub fn view(s: &State, t: Theme) -> El {
                 .label(&item.name)
                 .focusable(true)
                 .focus_selected(active)
-                .child(super::view_icons::element(item.kind, 16., t.muted))
+                .child(rune::icon(super::view_icons::toolbar_icon(item.kind), 16.).color(color))
                 .child(
-                    t.label(&item.name, if active { t.text } else { t.muted })
+                    t.label(&item.name, color)
+                        .font(TextStyle::new(14., 500.).family(t.family))
                         .truncate()
                         .min_w(0.)
                         .grow(1.),
@@ -133,7 +154,7 @@ pub fn view(s: &State, t: Theme) -> El {
     }
     if hidden > 0 {
         tabs = tabs.child(
-            button("db-views", format!("{hidden} more…"), t)
+            toolbar_button("db-views", format!("{hidden} more…"), t)
                 .on_press(|s: &mut State| s.open_view_chooser()),
         );
     }
@@ -147,7 +168,7 @@ pub fn view(s: &State, t: Theme) -> El {
             .role("button")
             .label("Add view")
             .focusable(true)
-            .child(super::icons::glyph("+", 18., t.muted))
+            .child(rune::icon(&super::view_icons::TOOLBAR_PLUS, 18.).color(t.muted))
             .on_press(|s: &mut State| s.open_new_view()),
     );
     let search = super::inputs::field(&s.filter, "db-filter", "Search records", t)
@@ -175,15 +196,15 @@ pub fn view(s: &State, t: Theme) -> El {
                 .role("button")
                 .label("View settings")
                 .focusable(true)
-                .child(rune::icon(&super::view_icons::SETTINGS, 18.).color(t.muted))
+                .child(rune::icon(&super::view_icons::TOOLBAR_SETTINGS, 18.).color(t.muted))
                 .on_press(|s: &mut State| s.open_view_settings()),
         )
         .children(is_list.then(|| {
-            button("list-properties-button", "Properties", t)
+            toolbar_button("list-properties-button", "Properties", t)
                 .on_press(|s: &mut State| super::property_visibility::open(s))
         }))
         .children(is_gallery.then(|| {
-            button("gallery-settings-button", "Layout", t)
+            toolbar_button("gallery-settings-button", "Layout", t)
                 .on_press(|s: &mut State| s.gallery_settings_open = !s.gallery_settings_open)
         }))
         .child(super::database_new::button(s, t));

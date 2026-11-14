@@ -52,7 +52,7 @@ pub fn button(s: &State, t: Theme) -> El {
                 .label("New item options")
                 .expanded(s.database_new_open)
                 .focusable(true)
-                .child(super::icons::glyph("⌄", 24., Color::WHITE))
+                .child(rune::icon(&super::view_icons::TOOLBAR_CARET, 16.).color(Color::WHITE))
                 .on_press(|s: &mut State| {
                     s.dismiss_property_picker();
                     if s.property_picker.is_some() {
