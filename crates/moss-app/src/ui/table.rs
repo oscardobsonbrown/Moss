@@ -440,17 +440,18 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
 }
 
 fn visible_columns(db: &Database, view: usize) -> Vec<&moss_core::Property> {
-    db.properties
-        .iter()
+    moss_core::record_layout::columns(db)
+        .into_iter()
         .filter(|p| super::property_visibility::visible(db, view, &p.id))
         .collect()
 }
 
 fn frozen_column(db: &Database, view: usize, columns: &[&moss_core::Property]) -> Option<usize> {
     let id = db.views.get(view)?.config.get("freeze_through")?.as_str()?;
-    let anchor = db.properties.iter().position(|p| p.id == id)?;
+    let ordered = moss_core::record_layout::columns(db);
+    let anchor = ordered.iter().position(|p| p.id == id)?;
     columns.iter().rposition(|p| {
-        db.properties
+        ordered
             .iter()
             .position(|original| original.id == p.id)
             .is_some_and(|index| index <= anchor)

@@ -457,28 +457,13 @@ pub fn body(s: &State, pane: ViewPane, t: Theme) -> Option<El> {
             list.child(back(ViewPane::Main, t))
         }
         ViewPane::BoardProperties => {
-            let mut order: Vec<&Property> = config
-                .get("board_property_order")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str())
-                .filter_map(|id| {
-                    db.properties
-                        .iter()
-                        .find(|p| p.id == id && p.kind != PropertyKind::Title)
-                })
-                .collect();
-            for p in db
-                .properties
-                .iter()
-                .filter(|p| p.kind != PropertyKind::Title)
-            {
-                if !order.iter().any(|item| item.id == p.id) {
-                    order.push(p);
-                }
-            }
-            let mut list = col().w_full().child(heading("Property order", t));
+            let order = moss_core::record_layout::properties(db);
+            let mut list = col().w_full().child(heading("Property order", t)).child(
+                t.label("Applies to pages and all views", t.muted)
+                    .px(10.)
+                    .py(4.)
+                    .wrap(),
+            );
             for (index, p) in order.iter().enumerate() {
                 let up = p.id.clone();
                 let down = p.id.clone();

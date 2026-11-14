@@ -94,6 +94,235 @@ fn calendar_status_badge_fits_its_text() {
 }
 
 #[test]
+fn calendar_cards_align_properties_and_show_linked_pages() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    let mut db = rt.state.tab().unwrap().database.clone().unwrap();
+    let date = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Date)
+        .unwrap()
+        .id
+        .clone();
+    let relation = moss_core::Property {
+        id: moss_core::new_id(),
+        name: "Related".into(),
+        kind: PropertyKind::Relation,
+        config: json!({"target_database_id": db.id}),
+    };
+    db.properties.push(relation.clone());
+    rt.state.store.save_database(&db).unwrap();
+    rt.state.tabs[rt.state.active].database = Some(db.clone());
+    let first = rt
+        .state
+        .store
+        .create_record(&db.id, "Alpha", &Default::default())
+        .unwrap();
+    let second = rt
+        .state
+        .store
+        .create_record(&db.id, "Beta", &Default::default())
+        .unwrap();
+    let source = rt
+        .state
+        .store
+        .create_record(
+            &db.id,
+            "With links",
+            &[
+                (date.clone(), json!("2026-11-10")),
+                (relation.id.clone(), json!([first.id, second.id])),
+            ]
+            .into(),
+        )
+        .unwrap();
+    let other = rt
+        .state
+        .store
+        .create_record(&db.id, "Plain", &[(date, json!("2026-11-11"))].into())
+        .unwrap();
+    let page = rt.state.store.ensure_record_page(&source.id).unwrap();
+    rt.state
+        .store
+        .set_page_icon_if_unchanged(&rt.state.workspace.id, &page.id, "", "🌱")
+        .unwrap();
+    rt.state.tabs[rt.state.active].calendar_month =
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.state.query_records();
+    wait_calendar(&mut rt, |p| {
+        p.records.iter().any(|r| r.id == source.id) && p.records.iter().any(|r| r.id == other.id)
+    });
+    let projection = rt
+        .state
+        .database_views
+        .calendar
+        .projection
+        .as_ref()
+        .unwrap();
+    let source_index = projection
+        .records
+        .iter()
+        .position(|r| r.id == source.id)
+        .unwrap();
+    let other_index = projection
+        .records
+        .iter()
+        .position(|r| r.id == other.id)
+        .unwrap();
+    let a = rect(&rt, &format!("calendar-{source_index}"));
+    let b = rect(&rt, &format!("calendar-{other_index}"));
+    assert!((a[1] - b[1]).abs() < 1. && (a[3] - b[3]).abs() < 1.);
+    assert!(
+        rt.find(&format!("record-icon-calendar-{source_index}"))
+            .is_some()
+    );
+    assert!(
+        rt.find(&format!("record-icon-calendar-{other_index}"))
+            .is_none()
+    );
+    for index in 0..2 {
+        assert!(
+            rt.find(&format!("calendar-relation-{}-{index}", relation.id))
+                .is_some()
+        );
+    }
+    click(
+        &mut rt,
+        &format!("calendar-value-{}-{}-2026-11-10", source.id, relation.id),
+    );
+    assert!(rt.state.advanced_property.relation_picker.is_some());
+    assert!(rt.state.record_peek.is_none());
+    let related = rt
+        .state
+        .database_views
+        .calendar
+        .projection
+        .as_ref()
+        .unwrap()
+        .records
+        .iter()
+        .find(|r| r.id == source.id)
+        .unwrap();
+    assert_eq!(related.values[&relation.id].as_array().unwrap().len(), 2);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn calendar_edits_properties_and_respects_page_open_mode() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    let db = rt.state.tab().unwrap().database.clone().unwrap();
+    let date = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Date)
+        .unwrap()
+        .id
+        .clone();
+    let status = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Status)
+        .unwrap()
+        .id
+        .clone();
+    let item = rt
+        .state
+        .store
+        .create_record(
+            &db.id,
+            "Calendar item",
+            &[
+                (date.clone(), json!("2026-11-10")),
+                (status.clone(), json!("Not started")),
+            ]
+            .into(),
+        )
+        .unwrap();
+    rt.state.tabs[rt.state.active].calendar_month =
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.state.query_records();
+    wait_calendar(&mut rt, |p| p.records.iter().any(|r| r.id == item.id));
+    let anchor = format!("calendar-value-{}-{}-2026-11-10", item.id, status);
+    click(&mut rt, &anchor);
+    assert!(rt.find("property-picker").is_some());
+    assert!(rt.state.record_peek.is_none());
+    click(&mut rt, "property-option-1");
+    assert_eq!(
+        rt.state.store.get_record(&item.id).unwrap().unwrap().values[&status],
+        "In progress"
+    );
+    wait_calendar(&mut rt, |p| {
+        p.records
+            .iter()
+            .any(|r| r.id == item.id && r.values[&status] == "In progress")
+    });
+    let value = rect(&rt, &anchor);
+    let card = rect(&rt, "calendar-0");
+    let day = rect(&rt, "calendar-day-2026-11-12");
+    let start = [value[0] + 3., value[1] + value[3] / 2.];
+    let target = [day[0] + day[2] / 2., day[1] + 50.];
+    rt.pointer_down(start[0], start[1]);
+    rt.pointer_move(target[0], target[1]);
+    rt.frame(1. / 120.);
+    let preview = rect(&rt, "calendar-drag-preview");
+    assert!((preview[2] - card[2]).abs() < 1., "{preview:?} {card:?}");
+    assert!((preview[3] - card[3]).abs() < 1., "{preview:?} {card:?}");
+    assert!((preview[0] - card[0] - (target[0] - start[0])).abs() < 1.);
+    assert!((preview[1] - card[1] - (target[1] - start[1])).abs() < 1.);
+    assert!(rt.find(&format!("calendar-drag-value-{status}")).is_some());
+    assert!(rt.find(&format!("calendar-drag-value-{date}")).is_some());
+    rt.pointer_up(target[0], target[1]);
+    rt.frame(1. / 120.);
+    let saved = rt.state.store.get_record(&item.id).unwrap().unwrap();
+    assert_eq!(saved.values[&date], "2026-11-12");
+    assert_eq!(saved.values[&status], "In progress");
+    wait_calendar(&mut rt, |p| {
+        p.records
+            .iter()
+            .any(|r| r.id == item.id && r.values[&date] == "2026-11-12")
+    });
+    ui::property_visibility::set_visibility(&mut rt.state, Some(&status), true);
+    wait_calendar(&mut rt, |p| p.records.iter().any(|r| r.id == item.id));
+    let card = rect(&rt, "calendar-0");
+    rt.pointer_down(card[0] + 20., card[1] + 12.);
+    rt.pointer_move(card[0] + 40., card[1] + 12.);
+    rt.frame(1. / 120.);
+    assert!(rt.find(&format!("calendar-drag-value-{date}")).is_some());
+    assert!(rt.find(&format!("calendar-drag-value-{status}")).is_none());
+    press(&mut rt, Key::Escape);
+    rt.pointer_up(card[0] + 40., card[1] + 12.);
+    rt.frame(1. / 120.);
+    let view_id = db.views[2].id.clone();
+    let db = rt
+        .state
+        .store
+        .edit_view_config(&db.id, &view_id, ViewKind::Calendar, |config| {
+            config["open_mode"] = json!("side");
+            Ok(())
+        })
+        .unwrap();
+    ui::property_visibility::sync_database(&mut rt.state, &db);
+    rt.invalidate();
+    rt.frame(1. / 120.);
+    wait_calendar(&mut rt, |p| p.records.iter().any(|r| r.id == item.id));
+    let card = rect(&rt, "calendar-0");
+    rt.pointer_down(card[0] + 20., card[1] + 12.);
+    rt.pointer_up(card[0] + 20., card[1] + 12.);
+    rt.frame(1. / 120.);
+    assert!(
+        rt.state
+            .record_peek
+            .as_ref()
+            .is_some_and(|peek| peek.mode == crate::state::PeekMode::Side)
+    );
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn calendar_loads_all_matching_dates_and_supports_layout_settings() {
     let (mut rt, path) = database_runtime(2);
     rt.poll = Some(poll);
@@ -302,9 +531,11 @@ fn calendar_drag_moves_resizes_and_schedules_without_losing_date_details() {
     rt.pointer_down(card[0] + card[2] / 2., card[1] + 12.);
     rt.pointer_move(day[0] + day[2] / 2., day[1] + 50.);
     rt.frame(1. / 120.);
+    assert!(rt.find("calendar-drag-preview").is_some());
     press(&mut rt, Key::Escape);
     rt.pointer_up(day[0] + day[2] / 2., day[1] + 50.);
     rt.frame(1. / 120.);
+    assert!(rt.find("calendar-drag-preview").is_none());
     assert_eq!(
         rt.state.store.get_record(&item.id).unwrap().unwrap().values[&property],
         value
@@ -367,10 +598,21 @@ fn calendar_drag_moves_resizes_and_schedules_without_losing_date_details() {
             .values[&property],
         "2026-11-17"
     );
+    let status = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Status)
+        .unwrap()
+        .id
+        .clone();
     let another = rt
         .state
         .store
-        .create_record(&db.id, "Drag to date", &Default::default())
+        .create_record(
+            &db.id,
+            "Drag to date",
+            &[(status.clone(), json!("Done"))].into(),
+        )
         .unwrap();
     wait_calendar(&mut rt, |p| p.undated.iter().any(|r| r.id == another.id));
     click(&mut rt, "calendar-no-date");
@@ -388,11 +630,12 @@ fn calendar_drag_moves_resizes_and_schedules_without_losing_date_details() {
         .unwrap();
     let row = rect(&rt, &format!("calendar-undated-row-{idx}"));
     let day = rect(&rt, "calendar-day-2026-11-19");
-    drag(
-        &mut rt,
-        [row[0] + 30., row[1] + row[3] / 2.],
-        [day[0] + day[2] / 2., day[1] + 50.],
-    );
+    rt.pointer_down(row[0] + 30., row[1] + row[3] / 2.);
+    rt.pointer_move(day[0] + day[2] / 2., day[1] + 50.);
+    rt.frame(1. / 120.);
+    assert!(rt.find(&format!("calendar-drag-value-{status}")).is_some());
+    rt.pointer_up(day[0] + day[2] / 2., day[1] + 50.);
+    rt.frame(1. / 120.);
     assert_eq!(
         rt.state
             .store

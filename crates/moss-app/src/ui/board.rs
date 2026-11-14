@@ -316,6 +316,7 @@ fn column(
     s: &State,
     tab: &Tab,
     db: &Database,
+    properties: &[&Property],
     p: &BoardProjection,
     group: &Value,
     sub: &Value,
@@ -432,7 +433,16 @@ fn column(
             || editing
             || dragging
         {
-            cards = cards.child(board_card::view(s, tab, db, p, record, zones.clone(), t));
+            cards = cards.child(board_card::view(
+                s,
+                tab,
+                db,
+                properties,
+                p,
+                record,
+                zones.clone(),
+                t,
+            ));
         } else {
             cards = cards.child(
                 el().key(format!("board-card-space-{}", record.id))
@@ -523,6 +533,7 @@ fn column(
 }
 pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let view = &db.views[tab.view];
+    let properties = moss_core::record_layout::properties(db);
     let fallback = if s
         .database_views
         .board
@@ -720,6 +731,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     s,
                     tab,
                     db,
+                    &properties,
                     p,
                     group,
                     sub,

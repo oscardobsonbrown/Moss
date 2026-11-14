@@ -12,6 +12,57 @@ use moss_core::{Database, Record};
 use rune::*;
 use std::collections::BTreeMap;
 
+pub fn drag_preview(s: &State, t: Theme) -> Option<El> {
+    let drag = s
+        .database_views
+        .calendar
+        .drag
+        .as_ref()
+        .filter(|d| d.moved && d.edge.is_none())?;
+    let tab = s.tab()?;
+    let db = tab.database.as_ref()?;
+    let view = db.views.get(tab.view)?;
+    let projection = s.database_views.calendar.projection_for(&db.id, &view.id);
+    let properties = moss_core::record_layout::properties(db);
+    let t = Theme {
+        family: crate::fonts::family(tab.page.settings.font),
+        text_scale: crate::fonts::scale(tab.page.settings),
+        ..t
+    };
+    let preview = card(
+        s,
+        tab,
+        db,
+        &properties,
+        &drag.record,
+        0,
+        drag.card_date,
+        drag.card_end,
+        true,
+        &drag.property_id,
+        projection,
+        t,
+        true,
+    )
+    .w(drag.width);
+    let preview = if drag.undated {
+        preview
+    } else {
+        preview.h(drag.height)
+    };
+    Some(
+        preview
+            .shadow(2., 8., Color::BLACK.alpha(0.15))
+            .absolute(
+                drag.origin[0] + drag.delta[0],
+                drag.origin[1] + drag.delta[1],
+            )
+            .opacity(0.9)
+            .inert()
+            .raise(),
+    )
+}
+
 fn create(s: &mut State, property: &str, date: NaiveDate) {
     s.create_peek(BTreeMap::from([(
         property.to_owned(),
@@ -33,6 +84,12 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         return col();
     };
     let is_week = calendar_view::week(view);
+    let properties = moss_core::record_layout::properties(db);
+    let shown_properties: Vec<_> = properties
+        .iter()
+        .copied()
+        .filter(|p| super::property_visibility::visible(db, tab.view, &p.id))
+        .collect();
     let projection = s.database_views.calendar.projection_for(&db.id, &view.id);
     let records = projection
         .map(|p| p.records.as_slice())
@@ -224,17 +281,13 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
             let finish = end.min(week_end);
             let left = (begin - week_start).num_days() as usize;
             let right = (finish - week_start).num_days() as usize;
-            let height = 30.
-                + db.properties
+            let filled_height = 33.
+                + shown_properties
                     .iter()
-                    .filter(|p| {
-                        p.kind != moss_core::PropertyKind::Title
-                            && p.id != prop.id
-                            && super::property_visibility::visible(db, tab.view, &p.id)
-                            && record.values.get(&p.id).is_some_and(|v| !v.is_null())
-                    })
+                    .filter(|p| record.values.get(&p.id).is_some_and(|v| !v.is_null()))
                     .count() as f32
-                    * 23.;
+                    * 24.;
+            let height = filled_height.max(30. + shown_properties.len() as f32 * 24.);
             let lane = lanes
                 .iter()
                 .position(|(occupied, _)| (left..=right).all(|d| !occupied[d]))
@@ -258,6 +311,8 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
         }
         let week_height = (36. + lanes.iter().map(|(_, height)| height + 4.).sum::<f32>())
             .max(if is_week { 220. } else { 136. });
+        let extra =
+            (week_height - 36. - lanes.iter().map(|(_, height)| height + 4.).sum::<f32>()).max(0.);
         let mut line = row()
             .key(format!("calendar-week-{week}"))
             .w_full()
@@ -366,6 +421,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     s,
                     tab,
                     db,
+                    &properties,
                     &records[index],
                     index,
                     begin,
@@ -374,9 +430,11 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                     &prop.id,
                     projection,
                     t,
+                    false,
                 )
                 .absolute(left as f32 * column_width + 4., top)
-                .w((right - left + 1) as f32 * column_width - 8.),
+                .w((right - left + 1) as f32 * column_width - 8.)
+                .h(lanes[lane].1 + if lane + 1 == lanes.len() { extra } else { 0. }),
             );
         }
         weeks = weeks.child(line);
@@ -388,6 +446,7 @@ fn card(
     s: &State,
     tab: &Tab,
     db: &Database,
+    properties: &[&moss_core::Property],
     record: &Record,
     index: usize,
     date: NaiveDate,
@@ -396,6 +455,7 @@ fn card(
     property_id: &str,
     projection: Option<&moss_core::calendar::CalendarProjection>,
     t: Theme,
+    floating: bool,
 ) -> El {
     let title = if record.title.is_empty() {
         "Untitled"
@@ -406,11 +466,31 @@ fn card(
     let db_id = db.id.clone();
     let drag_record = record.clone();
     let drag_property = property_id.to_owned();
+    let card_key = if floating {
+        "calendar-drag-preview".to_owned()
+    } else if primary {
+        format!("calendar-{index}")
+    } else {
+        format!("calendar-{index}-{date}")
+    };
+    let card_rect = if floating {
+        None
+    } else {
+        rune::memo::window_layout_with(&card_key, |rect| rect)
+    };
+    let open_mode = db.views[tab.view]
+        .config
+        .get("open_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("center")
+        .to_owned();
     let icon = if let Some(a) = projection.and_then(|p| p.appearance.get(&record.id)) {
         super::record_icon::appearance(
             &a.icon,
             a.has_body_content,
-            if primary {
+            if floating {
+                "record-icon-calendar-drag-preview".to_owned()
+            } else if primary {
                 format!("record-icon-calendar-{index}")
             } else {
                 format!("record-icon-calendar-{index}-{date}")
@@ -421,7 +501,9 @@ fn card(
         super::record_icon::view(
             tab,
             record,
-            if primary {
+            if floating {
+                "record-icon-calendar-drag-preview".to_owned()
+            } else if primary {
                 format!("record-icon-calendar-{index}")
             } else {
                 format!("record-icon-calendar-{index}-{date}")
@@ -429,18 +511,38 @@ fn card(
             t,
         )
     };
+    let has_icon = projection
+        .and_then(|p| p.appearance.get(&record.id))
+        .map(|appearance| !appearance.icon.is_empty())
+        .unwrap_or_else(|| {
+            tab.record_icons
+                .get(&record.id)
+                .is_some_and(|icon| !icon.is_empty())
+        });
     let mut content = col()
-        .key(if primary {
-            format!("calendar-{index}")
-        } else {
-            format!("calendar-{index}-{date}")
-        })
+        .key(card_key.clone())
         .min_w(0.)
-        .padding(5.)
-        .gap(3.)
-        .radius(4.)
+        .pl(7.)
+        .pt(5.)
+        .pb(6.)
+        .gap(4.)
+        .radius(6.)
+        .clip_rounded(6.)
         .fill(t.bg)
         .border(1., t.line)
+        .opacity(
+            if !floating
+                && s.database_views
+                    .calendar
+                    .drag
+                    .as_ref()
+                    .is_some_and(|d| d.moved && d.edge.is_none() && d.record_id == record.id)
+            {
+                0.4
+            } else {
+                1.
+            },
+        )
         .hover(t.hover)
         .press(t.selected)
         .role("button")
@@ -450,26 +552,46 @@ fn card(
             row()
                 .w_full()
                 .min_w(0.)
+                .pr(7.)
                 .gap(4.)
                 .center_y()
-                .child(icon)
-                .child(t.label(title, t.text).min_w(0.).grow(1.).truncate()),
+                .mb(2.)
+                .children(has_icon.then_some(icon))
+                .child(
+                    t.label(title, t.text)
+                        .font(TextStyle::new(14., 600.).family(t.family))
+                        .min_w(0.)
+                        .grow(1.)
+                        .truncate(),
+                ),
         )
         .on_drag(move |s: &mut State, event, tx| {
-            s.drag_calendar_record(&drag_record, &drag_property, date, through, *event, tx)
+            s.drag_calendar_record(
+                &drag_record,
+                &drag_property,
+                date,
+                through,
+                true,
+                card_rect,
+                *event,
+                tx,
+            )
         })
         .on_press(move |s: &mut State| {
             if s.database_views.calendar.suppress_press {
                 s.database_views.calendar.suppress_press = false;
                 return;
             }
-            s.open_database_record(&db_id, &record_id, "center");
+            s.open_database_record(&db_id, &record_id, &open_mode);
         });
-    if let Some((start, end)) = db
-        .properties
-        .iter()
-        .find(|p| p.id == property_id)
-        .and_then(|p| calendar_view::date_range(record, p))
+    if let Some((start, end)) = (!floating)
+        .then(|| {
+            db.properties
+                .iter()
+                .find(|p| p.id == property_id)
+                .and_then(|p| calendar_view::date_range(record, p))
+        })
+        .flatten()
     {
         if date == start {
             content = content.child(
@@ -488,22 +610,136 @@ fn card(
             );
         }
     }
-    for property in db.properties.iter().filter(|property| {
-        property.kind != moss_core::PropertyKind::Title
-            && property.id != property_id
-            && super::property_visibility::visible(db, tab.view, &property.id)
-    }) {
+    let calendar_property_id = property_id.to_owned();
+    for property in properties
+        .iter()
+        .copied()
+        .filter(|property| super::property_visibility::visible(db, tab.view, &property.id))
+    {
         if let Some(value) = record
             .values
             .get(&property.id)
             .filter(|value| !value.is_null())
         {
-            content = content.child(
-                row()
-                    .w_full()
-                    .min_w(0.)
-                    .child(super::property_value::view(s, property, Some(value), t).min_w(0.)),
-            );
+            let id = record.id.clone();
+            let property_id = property.id.clone();
+            let kind = property.kind;
+            let anchor = if floating {
+                format!("calendar-drag-value-{}", property.id)
+            } else {
+                format!("calendar-value-{}-{}-{date}", record.id, property.id)
+            };
+            let editing = !floating && super::database::active(s, record, Some(&property.id));
+            let mut value_row = row()
+                .key(anchor.clone())
+                .w_full()
+                .min_w(0.)
+                .min_h(20.)
+                .center_y()
+                .radius(3.)
+                .clip_rounded(0.)
+                .hover(t.hover)
+                .child(if editing {
+                    super::database::editor(s, 120., t)
+                } else {
+                    super::property_value::compact_view(s, property, Some(value), t)
+                        .key(if floating {
+                            format!("calendar-drag-property-{}", property.id)
+                        } else {
+                            format!("property-value-{}", property.id)
+                        })
+                        .min_w(0.)
+                });
+            if !floating
+                && !editing
+                && matches!(
+                    kind,
+                    moss_core::PropertyKind::Select
+                        | moss_core::PropertyKind::Status
+                        | moss_core::PropertyKind::Date
+                        | moss_core::PropertyKind::Text
+                        | moss_core::PropertyKind::Number
+                        | moss_core::PropertyKind::Url
+                        | moss_core::PropertyKind::Email
+                        | moss_core::PropertyKind::Phone
+                        | moss_core::PropertyKind::Checkbox
+                        | moss_core::PropertyKind::Relation
+                        | moss_core::PropertyKind::Place
+                )
+            {
+                let drag_record = record.clone();
+                let drag_property = calendar_property_id.clone();
+                value_row = value_row
+                    .role("button")
+                    .label(format!("Edit {}", property.name))
+                    .focusable(true)
+                    .on_drag(move |s: &mut State, event, tx| {
+                        s.drag_calendar_record(
+                            &drag_record,
+                            &drag_property,
+                            date,
+                            through,
+                            false,
+                            card_rect,
+                            *event,
+                            tx,
+                        )
+                    })
+                    .on_press_tx(move |s: &mut State, tx| {
+                        if s.database_views.calendar.suppress_press {
+                            s.database_views.calendar.suppress_press = false;
+                            return;
+                        }
+                        s.database_views.calendar.property_anchor = Some(anchor.clone());
+                        match kind {
+                            moss_core::PropertyKind::Select
+                            | moss_core::PropertyKind::Status
+                            | moss_core::PropertyKind::Date => {
+                                s.open_property_picker(&id, &property_id)
+                            }
+                            moss_core::PropertyKind::Place => {
+                                s.open_place_picker(&id, &property_id)
+                            }
+                            moss_core::PropertyKind::Relation => {
+                                s.open_relation_picker(&id, &property_id)
+                            }
+                            moss_core::PropertyKind::Checkbox => {
+                                if let Ok(Some(record)) = s.store.get_record(&id) {
+                                    let old = record
+                                        .values
+                                        .get(&property_id)
+                                        .cloned()
+                                        .unwrap_or(serde_json::Value::Null);
+                                    let checked = match old {
+                                        serde_json::Value::Null
+                                        | serde_json::Value::Bool(false) => false,
+                                        serde_json::Value::Bool(true) => true,
+                                        _ => {
+                                            s.error =
+                                                Some("This checkbox value is not valid.".into());
+                                            return;
+                                        }
+                                    };
+                                    match s.store.set_record_value_if_unchanged(
+                                        &id,
+                                        &property_id,
+                                        &old,
+                                        serde_json::Value::Bool(!checked),
+                                    ) {
+                                        Ok(record) => {
+                                            s.sync_record(&record);
+                                            s.database_views.calendar.invalidate();
+                                        }
+                                        Err(error) => s.error = Some(error.to_string()),
+                                    }
+                                }
+                            }
+                            _ => s.edit_record_property(&id, Some(property_id.clone())),
+                        }
+                        tx.instant();
+                    });
+            }
+            content = content.child(value_row);
         }
     }
     content
@@ -514,6 +750,12 @@ pub fn undated_panel(s: &State, tab: &Tab, db: &Database, t: Theme) -> Option<El
         return None;
     }
     let view = db.views.get(tab.view)?;
+    let open_mode = view
+        .config
+        .get("open_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("center")
+        .to_owned();
     let prop = calendar_view::date_property(db, view)?;
     let projection = s.database_views.calendar.projection_for(&db.id, &view.id);
     let records = projection
@@ -531,9 +773,12 @@ pub fn undated_panel(s: &State, tab: &Tab, db: &Database, t: Theme) -> Option<El
         }
         let id = record.id.clone();
         let db_id = db.id.clone();
+        let open_mode = open_mode.clone();
         let drag_record = record.clone();
         let drag_property = prop.id.clone();
         let drag_from = tab.calendar_month;
+        let drag_card_rect =
+            rune::memo::window_layout_with(&format!("calendar-undated-row-{index}"), |rect| rect);
         let selected_record = record.clone();
         let selected_property = prop.id.clone();
         let title = if record.title.is_empty() {
@@ -552,7 +797,7 @@ pub fn undated_panel(s: &State, tab: &Tab, db: &Database, t: Theme) -> Option<El
                 button(format!("calendar-undated-open-{index}"), "Open", t).on_press(
                     move |s: &mut State| {
                         s.undated_open = false;
-                        s.open_database_record(&db_id, &id, "center");
+                        s.open_database_record(&db_id, &id, &open_mode);
                     },
                 ),
             )
@@ -562,6 +807,8 @@ pub fn undated_panel(s: &State, tab: &Tab, db: &Database, t: Theme) -> Option<El
                     &drag_property,
                     drag_from,
                     drag_from,
+                    false,
+                    drag_card_rect,
                     *event,
                     tx,
                 )

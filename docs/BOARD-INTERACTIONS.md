@@ -13,7 +13,7 @@ The video notes come from scene and audio analysis. They do not measure native p
 | Cards opened pages but could not move between columns | Drag changes the typed grouping value; moving between subgroup rows changes both values in one guarded write | Keep the source data consistent with the visible destination |
 | Empty columns were only creation targets | Empty and populated columns accept card drops | Support moving a card into and out of an empty-value group |
 | Cards used the current generic record page | A background reader counts all matching records and reads bounded windows for each bucket | Keep counts accurate and expose records beyond the loaded page |
-| Board layout had no card controls | Layout saves card size, preview, page icon, text wrapping, column color and property order | Keep display choices in the selected view |
+| Board layout had no card controls | Layout saves card size, preview, page icon, text wrapping and column color per view. Its property-order controls change the shared page property order. | Keep card display choices in the view and property order consistent across views |
 | Group opened the generic property editor | Group and Sub-group have source, visibility, collapse and order controls | Make organization a view setting without rewriting unrelated fields |
 | There were no card action menus | Card actions support opening, rename, move, duplicate and Trash by stable record ID | Keep actions correct after paging, filtering and reordering |
 | Card properties only displayed values | Supported property controls open the shared editors or change a checkbox | Keep property actions separate from opening the card |

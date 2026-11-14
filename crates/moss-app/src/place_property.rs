@@ -52,6 +52,15 @@ impl State {
         } else if self
             .tab()
             .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
+            .is_some_and(|v| v.kind == ViewKind::Calendar)
+        {
+            let Some(anchor) = self.database_views.calendar.property_anchor.clone() else {
+                return;
+            };
+            anchor
+        } else if self
+            .tab()
+            .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
             .is_some_and(|v| v.kind == ViewKind::Board)
         {
             format!("board-value-{record_id}-{property_id}")

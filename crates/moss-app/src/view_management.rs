@@ -199,13 +199,6 @@ impl State {
                     && a.iter()
                         .all(|v| v.as_str().is_some_and(|s| s.len() <= 8192))
             }),
-            "board_property_order" => next.as_array().is_some_and(|a| {
-                a.len() <= db.properties.len()
-                    && a.iter().all(|v| {
-                        v.as_str()
-                            .is_some_and(|id| db.properties.iter().any(|p| p.id == id))
-                    })
-            }),
             _ => false,
         };
         if !valid {
@@ -396,32 +389,11 @@ impl State {
         let Some(db) = tab.database.as_ref() else {
             return;
         };
-        let Some(view) = db.views.get(tab.view) else {
-            return;
-        };
-        let mut order: Vec<String> = view
-            .config
-            .get("board_property_order")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str())
-            .filter(|id| {
-                db.properties
-                    .iter()
-                    .any(|p| p.id == *id && p.kind != moss_core::PropertyKind::Title)
-            })
-            .map(str::to_owned)
-            .collect();
-        for p in db
-            .properties
+        let database_id = db.id.clone();
+        let order: Vec<String> = moss_core::record_layout::properties(db)
             .iter()
-            .filter(|p| p.kind != moss_core::PropertyKind::Title)
-        {
-            if !order.contains(&p.id) {
-                order.push(p.id.clone());
-            }
-        }
+            .map(|p| p.id.clone())
+            .collect();
         let Some(index) = order.iter().position(|id| id == property) else {
             return;
         };
@@ -431,8 +403,12 @@ impl State {
             index.saturating_sub(1)
         };
         if target < order.len() && target != index {
-            order.swap(index, target);
-            self.set_board_config("board_property_order", serde_json::json!(order));
+            let before = if down {
+                order.get(index + 2)
+            } else {
+                order.get(target)
+            };
+            self.move_metadata_property(&database_id, property, before.map(String::as_str));
         }
     }
     pub fn open_view_settings(&mut self) {

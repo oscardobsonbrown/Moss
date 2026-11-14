@@ -535,9 +535,8 @@ impl State {
     ) -> Option<Option<String>> {
         let tab = self.tab()?;
         let db = tab.database.as_ref()?;
-        let columns: Vec<Option<String>> = db
-            .properties
-            .iter()
+        let columns: Vec<Option<String>> = moss_core::record_layout::columns(db)
+            .into_iter()
             .filter(|p| crate::ui::property_visibility::visible(db, tab.view, &p.id))
             .map(|p| (p.kind != PropertyKind::Title).then(|| p.id.clone()))
             .collect();

@@ -42,6 +42,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     };
     let (width, preview_height) = CardSize::from_view(&view.config).dimensions();
     let preview = page_preview(&view.config);
+    let properties = moss_core::record_layout::properties(db);
     let mut grid = row()
         .key("gallery-grid")
         .w_full()
@@ -54,6 +55,7 @@ pub fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
             s,
             tab,
             db,
+            &properties,
             record,
             tab.gallery_previews
                 .get(&record.id)
@@ -90,6 +92,7 @@ fn card(
     s: &State,
     tab: &Tab,
     db: &Database,
+    properties: &[&moss_core::Property],
     record: &Record,
     preview_text: &str,
     index: usize,
@@ -204,9 +207,11 @@ fn card(
                 .wrap(),
             ),
     );
-    for property in db.properties.iter().filter(|p| {
-        p.kind != PropertyKind::Title && super::property_visibility::visible(db, tab.view, &p.id)
-    }) {
+    for property in properties
+        .iter()
+        .copied()
+        .filter(|p| super::property_visibility::visible(db, tab.view, &p.id))
+    {
         let value = record.values.get(&property.id);
         if property.kind == PropertyKind::Place || value.is_some_and(|value| !value.is_null()) {
             let mut property_row = row()

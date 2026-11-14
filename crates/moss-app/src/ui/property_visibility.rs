@@ -99,11 +99,11 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
         );
     } else {
         let hidden = hidden.unwrap();
+        let properties = moss_core::record_layout::properties(db);
         for is_hidden in [false, true] {
-            let matching: Vec<_> = db
-                .properties
+            let matching: Vec<_> = properties
                 .iter()
-                .filter(|p| p.kind != PropertyKind::Title)
+                .copied()
                 .filter(|p| hidden.contains(&p.id) == is_hidden)
                 .filter(|p| p.name.to_lowercase().contains(&query))
                 .collect();

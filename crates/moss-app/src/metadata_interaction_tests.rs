@@ -157,6 +157,135 @@ fn metadata_drag_reorders_record_properties_only() {
 }
 
 #[test]
+fn page_property_order_is_shared_by_database_views() {
+    let (mut rt, path, db, record_id) = fixture_with_record();
+    rt.poll = Some(poll);
+    let status = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Status)
+        .unwrap()
+        .id
+        .clone();
+    let date = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Date)
+        .unwrap()
+        .id
+        .clone();
+    for (id, value) in [
+        (&status, json!("In progress")),
+        (&date, json!("2026-11-10")),
+    ] {
+        let record = rt.state.store.get_record(&record_id).unwrap().unwrap();
+        let old = record.values.get(id).cloned().unwrap_or(json!(null));
+        let saved = rt
+            .state
+            .store
+            .set_record_value_if_unchanged(&record_id, id, &old, value)
+            .unwrap();
+        rt.state.sync_record(&saved);
+    }
+    rt.state.tabs[rt.state.active].calendar_month =
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.state
+        .move_metadata_property(&db.id, &date, Some(&status));
+    rt.invalidate();
+    rt.frame(0.3);
+    let top = |rt: &Runtime<State>, key: &str| {
+        rt.presented(key)
+            .unwrap_or_else(|| panic!("missing {key}"))
+            .0
+    };
+    assert!(
+        top(&rt, &format!("peek-property-row-{date}"))[1]
+            < top(&rt, &format!("peek-property-row-{status}"))[1]
+    );
+    assert!(rt.state.close_peek());
+    rt.invalidate();
+    rt.frame(0.3);
+    assert!(
+        top(&rt, &format!("table-header-{date}"))[0]
+            < top(&rt, &format!("table-header-{status}"))[0]
+    );
+    rt.state.selected_cell = Some((record_id.clone(), None));
+    let tab_key = KeyEvent {
+        key: Key::Tab,
+        mods: Mods::default(),
+    };
+    assert!(rt.state.table_selection_key(&tab_key));
+    assert_eq!(
+        rt.state.selected_cell.as_ref().unwrap().1.as_deref(),
+        Some(date.as_str())
+    );
+    assert!(rt.state.table_selection_key(&tab_key));
+    assert_eq!(
+        rt.state.selected_cell.as_ref().unwrap().1.as_deref(),
+        Some(status.as_str())
+    );
+    for (index, date_key, status_key, axis) in [
+        (
+            1,
+            format!("board-value-{record_id}-{date}"),
+            format!("board-value-{record_id}-{status}"),
+            1,
+        ),
+        (
+            4,
+            format!("gallery-value-0-{date}"),
+            format!("gallery-value-0-{status}"),
+            1,
+        ),
+        (
+            5,
+            format!("list-value-0-{date}"),
+            format!("list-value-0-{status}"),
+            0,
+        ),
+    ] {
+        assert!(rt.state.select_database_view(index));
+        rt.invalidate();
+        rt.frame(0.3);
+        rt.frame(0.3);
+        assert!(
+            top(&rt, &date_key)[axis] < top(&rt, &status_key)[axis],
+            "view {index}"
+        );
+    }
+    assert!(rt.state.select_database_view(2));
+    rt.invalidate();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        rt.frame(1. / 120.);
+        if rt
+            .find(&format!("calendar-value-{record_id}-{date}-2026-11-10"))
+            .is_some()
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "calendar did not load");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(
+        top(
+            &rt,
+            &format!("calendar-value-{record_id}-{date}-2026-11-10")
+        )[1] < top(
+            &rt,
+            &format!("calendar-value-{record_id}-{status}-2026-11-10")
+        )[1]
+    );
+    drop(rt);
+    let reopened = State::open(path.clone(), None).unwrap();
+    let saved = reopened.store.get_database(&db.id).unwrap().unwrap();
+    let order = moss_core::record_layout::properties(&saved);
+    assert!(order.iter().position(|p| p.id == date) < order.iter().position(|p| p.id == status));
+    drop(reopened);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn metadata_layout_reorders_with_accessible_controls() {
     let (mut rt, path, db, _) = fixture_with_record();
     let props: Vec<_> = db

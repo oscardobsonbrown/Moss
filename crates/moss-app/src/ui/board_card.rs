@@ -133,12 +133,13 @@ pub fn view(
     s: &State,
     tab: &Tab,
     db: &Database,
+    properties: &[&moss_core::Property],
     p: &BoardProjection,
     record: &Record,
     zones: Rc<Vec<DropZone>>,
     t: Theme,
 ) -> El {
-    card(s, tab, db, p, record, zones, t, false)
+    card(s, tab, db, properties, p, record, zones, t, false)
 }
 
 pub fn drag_preview(s: &State, t: Theme) -> Option<El> {
@@ -164,15 +165,25 @@ pub fn drag_preview(s: &State, t: Theme) -> Option<El> {
         ..t
     };
     Some(
-        card(s, tab, db, p, &drag.record, Rc::new(Vec::new()), t, true)
-            .key("board-drag-preview")
-            .absolute(
-                drag.origin[0] + drag.delta[0],
-                drag.origin[1] + drag.delta[1],
-            )
-            .opacity(0.85)
-            .inert()
-            .raise(),
+        card(
+            s,
+            tab,
+            db,
+            &moss_core::record_layout::properties(db),
+            p,
+            &drag.record,
+            Rc::new(Vec::new()),
+            t,
+            true,
+        )
+        .key("board-drag-preview")
+        .absolute(
+            drag.origin[0] + drag.delta[0],
+            drag.origin[1] + drag.delta[1],
+        )
+        .opacity(0.85)
+        .inert()
+        .raise(),
     )
 }
 
@@ -180,6 +191,7 @@ fn card(
     s: &State,
     tab: &Tab,
     db: &Database,
+    properties: &[&moss_core::Property],
     p: &BoardProjection,
     record: &Record,
     zones: Rc<Vec<DropZone>>,
@@ -294,23 +306,11 @@ fn card(
             }),
     );
     let mut body = col().w_full().gap(5.).padding(10.).child(title_row);
-    let mut props: Vec<_> = db
-        .properties
+    for prop in properties
         .iter()
-        .filter(|prop| {
-            prop.kind != PropertyKind::Title
-                && super::property_visibility::visible(db, tab.view, &prop.id)
-        })
-        .collect();
-    if let Some(order) = config.get("board_property_order").and_then(Value::as_array) {
-        props.sort_by_key(|p| {
-            order
-                .iter()
-                .position(|v| v.as_str() == Some(p.id.as_str()))
-                .unwrap_or(usize::MAX)
-        });
-    }
-    for prop in props {
+        .copied()
+        .filter(|prop| super::property_visibility::visible(db, tab.view, &prop.id))
+    {
         let value = record.values.get(&prop.id);
         let key = format!("board-value-{}-{}", record.id, prop.id);
         let editing = !floating && database::active(s, record, Some(&prop.id));

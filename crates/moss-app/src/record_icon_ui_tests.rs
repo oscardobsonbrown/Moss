@@ -33,7 +33,11 @@ fn all_views(rt: &mut Runtime<State>, label: &str) {
             tx.instant();
         });
         rt.frame(1. / 120.);
-        assert_eq!(icon_label(rt, key), label, "view {key}");
+        if key == "calendar" && !label.starts_with("Page icon ") {
+            assert!(rt.find("record-icon-calendar-0").is_none());
+        } else {
+            assert_eq!(icon_label(rt, key), label, "view {key}");
+        }
     }
 }
 

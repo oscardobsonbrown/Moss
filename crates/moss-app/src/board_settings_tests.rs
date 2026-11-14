@@ -49,11 +49,18 @@ fn board_layout_settings_use_saved_view_fields_and_survive_reopen() {
         assert_eq!(view.config["show_page_icon"], false);
         assert_eq!(view.config["wrap_cards"], false);
         assert_eq!(view.config["color_columns"], true);
-        assert_eq!(view.config["board_property_order"][1], status);
+        assert_eq!(
+            moss_core::record_layout::layout(&saved).unwrap().order[1],
+            status
+        );
         drop(rt);
         let reopened = State::open(path.clone(), None).unwrap();
         let stored = reopened.store.get_database_by_page(&page).unwrap().unwrap();
         assert_eq!(stored.views[1].config, view.config);
+        assert_eq!(
+            moss_core::record_layout::layout(&stored).unwrap().order[1],
+            status
+        );
         drop(reopened);
         std::fs::remove_dir_all(path).unwrap();
     }

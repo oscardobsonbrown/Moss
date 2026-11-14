@@ -231,11 +231,6 @@ pub fn view(s: &State, t: Theme) -> El {
         .child(content)
 }
 
-fn properties(db: &Database) -> impl Iterator<Item = &Property> {
-    db.properties
-        .iter()
-        .filter(|p| p.kind != PropertyKind::Title)
-}
 pub(super) fn cell_text(record: &Record, prop: &Property) -> String {
     record
         .values
@@ -317,6 +312,7 @@ pub(super) fn editor(s: &State, width: f32, t: Theme) -> El {
 
 fn list(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
     let mut content = col().w_full();
+    let properties = moss_core::record_layout::properties(db);
     for (i, record) in tab.records.iter().enumerate() {
         if active(s, record, None) {
             content = content.child(
@@ -355,7 +351,9 @@ fn list(s: &State, tab: &Tab, db: &Database, t: Theme) -> El {
                 },
                 t.text,
             ));
-        for prop in properties(db)
+        for prop in properties
+            .iter()
+            .copied()
             .filter(|prop| super::property_visibility::visible(db, tab.view, &prop.id))
         {
             let value = record.values.get(&prop.id);

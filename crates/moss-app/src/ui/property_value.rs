@@ -16,7 +16,7 @@ pub fn text(s: &State, prop: &Property, value: Option<&Value>) -> String {
     }
     match prop.kind {
         PropertyKind::Date => date_value(value, &prop.config),
-        PropertyKind::Relation => relation_value(s, prop, value),
+        PropertyKind::Relation => relation_labels(s, prop, value).join(", "),
         _ => display_value(value),
     }
 }
@@ -32,6 +32,20 @@ pub(super) fn scalar_label(value: impl Into<String>, t: Theme) -> El {
 }
 
 pub fn view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
+    view_with_size(s, prop, value, t, None)
+}
+
+pub fn compact_view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
+    view_with_size(s, prop, value, t, Some(13.))
+}
+
+fn view_with_size(
+    s: &State,
+    prop: &Property,
+    value: Option<&Value>,
+    t: Theme,
+    size: Option<f32>,
+) -> El {
     let label = text(s, prop, value);
     if matches!(prop.kind, PropertyKind::Formula | PropertyKind::Rollup) {
         if let Some(error) = value
@@ -41,7 +55,7 @@ pub fn view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
             return rune::text(&label)
                 .key(format!("property-value-{}", prop.id))
                 .font(
-                    TextStyle::new(14. * t.text_scale, 400.)
+                    TextStyle::new(size.unwrap_or(14.) * t.text_scale, 400.)
                         .family(t.family)
                         .lh(20. * t.text_scale),
                 )
@@ -52,6 +66,35 @@ pub fn view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
     }
     if label.is_empty() {
         return el();
+    }
+    if size.is_some() && prop.kind == PropertyKind::Relation {
+        let mut links = row().min_w(0.).h(20.).center_y().gap(8.).clip_rounded(0.);
+        for (index, name) in relation_labels(s, prop, value.unwrap())
+            .into_iter()
+            .enumerate()
+        {
+            let underline = Span::new(0, name.len()).underline(t.line);
+            links = links.child(
+                row()
+                    .key(format!("calendar-relation-{}-{index}", prop.id))
+                    .min_w(0.)
+                    .center_y()
+                    .gap(4.)
+                    .child(rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted))
+                    .child(
+                        rune::rich(name, vec![underline])
+                            .font(
+                                TextStyle::new(13. * t.text_scale, 600.)
+                                    .family(t.family)
+                                    .lh(20. * t.text_scale),
+                            )
+                            .color(t.text)
+                            .min_w(0.)
+                            .truncate(),
+                    ),
+            );
+        }
+        return links;
     }
     if matches!(prop.kind, PropertyKind::Status | PropertyKind::Select) {
         let default_status = prop.kind == PropertyKind::Status
@@ -64,9 +107,15 @@ pub fn view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
         } else {
             (None, t.selected, t.muted)
         };
+        let text_color =
+            if size.is_some() && default_status && label == "In progress" && t.bg.r >= 0.1 {
+                color(0x31577f)
+            } else {
+                t.text
+            };
         row()
             .key(format!("property-value-{}", prop.id))
-            .h(20.)
+            .h(if size.is_some() { 18. } else { 20. })
             .max_w(170.)
             .min_w(0.)
             .px(6.)
@@ -75,11 +124,27 @@ pub fn view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
             .radius(10.)
             .fill(bg)
             .child(el().size(7., 7.).radius(4.).fill(dot))
-            .child(t.label(label, t.text).min_w(0.).truncate())
+            .child(
+                match size {
+                    Some(size) => t.sized_label(label, size, text_color),
+                    None => t.label(label, text_color),
+                }
+                .min_w(0.)
+                .truncate(),
+            )
     } else {
-        scalar_label(label, t)
-            .key(format!("property-value-{}", prop.id))
-            .truncate()
+        let value = scalar_label(label, t)
+            .font(
+                TextStyle::new(size.unwrap_or(14.) * t.text_scale, 400.)
+                    .family(t.family)
+                    .lh(20. * t.text_scale),
+            )
+            .key(format!("property-value-{}", prop.id));
+        if size.is_some() {
+            value
+        } else {
+            value.truncate()
+        }
     }
 }
 
@@ -136,13 +201,13 @@ fn format_date(value: &str, format: &str) -> String {
     }
     value.to_owned()
 }
-fn relation_value(s: &State, prop: &Property, value: &Value) -> String {
+fn relation_labels(s: &State, prop: &Property, value: &Value) -> Vec<String> {
     let values: Vec<&Value> = match value {
         Value::Array(items) => items.iter().collect(),
         _ => vec![value],
     };
     if values.is_empty() {
-        return String::new();
+        return Vec::new();
     }
     let mut names = Vec::new();
     let mut unknown = 0;
@@ -186,7 +251,7 @@ fn relation_value(s: &State, prop: &Property, value: &Value) -> String {
             if unknown == 1 { "" } else { "s" }
         ));
     }
-    names.join(", ")
+    names
 }
 
 pub(super) fn color(rgb: u32) -> Color {

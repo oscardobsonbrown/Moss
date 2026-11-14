@@ -532,10 +532,8 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
                 .iter()
                 .position(|v| v.id == data.view.id)
                 .unwrap_or(0);
-            let props: Vec<_> = data
-                .database
-                .properties
-                .iter()
+            let props: Vec<_> = moss_core::record_layout::columns(&data.database)
+                .into_iter()
                 .filter(|p| super::property_visibility::visible(&data.database, index, &p.id))
                 .collect();
             let mut heading = row().w_full().h(28.).gap(8.).fill(t.sidebar);
@@ -633,15 +631,15 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
                 .iter()
                 .position(|v| v.id == data.view.id)
                 .unwrap_or(0);
+            let properties = moss_core::record_layout::properties(&data.database);
             for record in &data.records {
                 let mut line = row()
                     .w_full()
                     .center_y()
                     .gap(6.)
                     .child(record_button(data, widget_id, record, t).grow(1.));
-                for property in data.database.properties.iter().filter(|p| {
-                    p.kind != moss_core::PropertyKind::Title
-                        && p.kind != moss_core::PropertyKind::Relation
+                for property in properties.iter().copied().filter(|p| {
+                    p.kind != moss_core::PropertyKind::Relation
                         && super::property_visibility::visible(&data.database, index, &p.id)
                 }) {
                     if let Some(value) = record.values.get(&property.id) {

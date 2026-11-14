@@ -92,6 +92,7 @@ pub struct CalendarState {
     pub loading: bool,
     pub error: Option<String>,
     pub day_rects: BTreeMap<NaiveDate, [f32; 4]>,
+    pub property_anchor: Option<String>,
     pub drag: Option<CalendarDrag>,
     pub schedule: Option<CalendarSchedule>,
     pub suppress_press: bool,
@@ -191,6 +192,13 @@ pub struct CalendarDrag {
     pub context: (String, String),
     pub edge: Option<bool>,
     pub undated: bool,
+    pub record: moss_core::Record,
+    pub card_date: NaiveDate,
+    pub card_end: NaiveDate,
+    pub origin: [f32; 2],
+    pub delta: [f32; 2],
+    pub width: f32,
+    pub height: f32,
 }
 
 fn shift_endpoint(value: &str, days: i64) -> Option<String> {
@@ -327,6 +335,8 @@ impl State {
         property_id: &str,
         from: NaiveDate,
         through: NaiveDate,
+        allow_resize: bool,
+        card_rect: Option<[f32; 4]>,
         event: rune::Drag,
         tx: &mut Tx,
     ) {
@@ -351,7 +361,7 @@ impl State {
                 .record_database(&record.id)
                 .and_then(|db| db.properties.iter().find(|p| p.id == property_id))
                 .and_then(|prop| date_range(record, prop));
-            let edge = range.and_then(|(start, end)| {
+            let edge = range.filter(|_| allow_resize).and_then(|(start, end)| {
                 if from == start && event.start_x < 7. {
                     Some(true)
                 } else if through == end && event.start_x > event.w - 7. {
@@ -362,6 +372,12 @@ impl State {
             });
             let undated = expected.is_null() || expected.as_str() == Some("");
             let point = event.window_point();
+            let rect = card_rect.unwrap_or([
+                point[0] - event.start_x,
+                point[1] - event.start_y,
+                event.w,
+                event.h,
+            ]);
             let from = self
                 .database_views
                 .calendar
@@ -385,6 +401,13 @@ impl State {
                 context,
                 edge,
                 undated,
+                record: record.clone(),
+                card_date: from,
+                card_end: through,
+                origin: [rect[0], rect[1]],
+                delta: [0., 0.],
+                width: rect[2],
+                height: rect[3],
             });
         }
         let point = event.window_point();
@@ -402,6 +425,7 @@ impl State {
         if let Some(drag) = &mut calendar.drag {
             drag.moved |= event.dx.abs().max(event.dy.abs()) >= 5.;
             drag.target = target;
+            drag.delta = [event.dx, event.dy];
         }
         if event.phase == rune::Phase::Up {
             let Some(drag) = calendar.drag.take() else {

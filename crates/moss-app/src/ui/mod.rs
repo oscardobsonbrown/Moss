@@ -134,6 +134,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .children(view_management::popup(s, t).map(El::raise))
         .children(board_menu::popup(s, t).map(El::raise))
         .children(board_card::drag_preview(s, t))
+        .children(calendar::drag_preview(s, t))
         .children(sidebar_sections::page_drag_preview(s, t))
         .children(page_icon_picker::popup(s, t).map(El::raise))
         .children(page_cover::popup(s, t).map(El::raise))

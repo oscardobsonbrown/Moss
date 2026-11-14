@@ -252,6 +252,12 @@ pub fn relation_picker(s: &State, t: Theme) -> Option<El> {
     } else if s
         .tab()
         .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
+        .is_some_and(|view| view.kind == moss_core::ViewKind::Calendar)
+    {
+        s.database_views.calendar.property_anchor.clone()?
+    } else if s
+        .tab()
+        .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
         .is_some_and(|view| view.kind == moss_core::ViewKind::Board)
     {
         format!("board-value-{}-{}", picker.record_id, picker.property_id)

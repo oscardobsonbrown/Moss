@@ -68,6 +68,20 @@ pub fn properties(db: &Database) -> Vec<&Property> {
     result
 }
 
+pub fn columns(db: &Database) -> Vec<&Property> {
+    let mut ordered = properties(db).into_iter();
+    db.properties
+        .iter()
+        .filter_map(|property| {
+            if property.kind == PropertyKind::Title {
+                Some(property)
+            } else {
+                ordered.next()
+            }
+        })
+        .collect()
+}
+
 pub fn visible(db: &Database, property: &Property, record: &Record) -> bool {
     layout(db).unwrap_or_default().visible(property, record)
 }
