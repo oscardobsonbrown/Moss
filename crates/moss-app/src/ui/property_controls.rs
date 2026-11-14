@@ -244,20 +244,13 @@ fn picker_view(s: &State, t: Theme) -> Option<El> {
                 .instant_changes(),
         );
         let mut weekdays = row().w_full().h(32.).center_y();
-        let names = if s.prefs.start_week_on_monday {
-            ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-        } else {
-            ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
-        };
-        for day in names {
+        let names = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+        for offset in 0..7 {
+            let day = names[(s.prefs.week_start() as usize + offset) % 7];
             weekdays = weekdays.child(t.label(day, t.muted).w(32.).center());
         }
         let mut calendar = col().key("date-calendar").w_full().child(weekdays);
-        let start = if s.prefs.start_week_on_monday {
-            month.weekday().num_days_from_monday()
-        } else {
-            month.weekday().num_days_from_sunday()
-        } as i64;
+        let start = crate::calendar_view::weekday_offset(month, s.prefs.week_start()) as i64;
         for week in 0..6 {
             let mut line = row().w_full().h(32.).center_y();
             for weekday in 0..7 {

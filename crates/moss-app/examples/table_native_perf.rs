@@ -10,6 +10,8 @@ mod board_interaction;
 mod board_view;
 #[path = "../src/calendar_view.rs"]
 mod calendar_view;
+#[path = "../src/drafts.rs"]
+mod drafts;
 #[path = "../src/caret.rs"]
 mod caret;
 #[path = "../src/chart_view.rs"]

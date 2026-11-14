@@ -228,7 +228,23 @@ impl State {
             Ok(tab)
         })();
         match result {
-            Ok(tab) => {
+            Ok(mut tab) => {
+                if !new_tab {
+                    if let Some(old_id) = self.tab().map(|tab| tab.page.id.clone()).filter(|old_id| old_id != id) {
+                        let link = self.new_item_drafts.get(&old_id).and_then(|draft| draft.created_link.as_ref()).filter(|link| link.page_id == tab.page.id).map(|link| link.id.clone());
+                        if !self.discard_draft_for_page(&old_id) { return; }
+                        if let Some(link) = link {
+                            if self.store.get_page(&old_id).is_ok_and(|page| page.is_none()) {
+                                tab.blocks.retain(|block| block.block.id != link);
+                                tab.page_links.remove(&old_id);
+                                if tab.blocks.is_empty() {
+                                    let block = Block::paragraph(&tab.page.id, "", 0);
+                                    tab.blocks.push(EditableBlock { edit: crate::rich_text::load(&block), block });
+                                }
+                            }
+                        }
+                    }
+                }
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;

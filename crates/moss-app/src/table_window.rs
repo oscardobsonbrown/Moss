@@ -411,6 +411,16 @@ pub fn note_created(s: &mut State, database_id: &str) {
     }
 }
 
+pub fn note_discarded(s: &mut State, database_id: &str) {
+    for tab in &mut s.tabs {
+        if tab.database.as_ref().is_some_and(|db| db.id == database_id) {
+            if let Some(window) = &mut tab.table_window {
+                window.invalidate_pending = true;
+            }
+        }
+    }
+}
+
 fn is_editing(s: &State, index: usize) -> bool {
     index == s.active
         && (s.editing_cell.is_some()

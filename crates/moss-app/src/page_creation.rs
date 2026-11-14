@@ -16,6 +16,7 @@ impl State {
             PageKind::Document,
         ) {
             Ok(page) => {
+                self.track_new_page(&page);
                 self.error = None;
                 if let Some(parent) = page.parent_id.as_deref() {
                     self.refresh_child_pages(parent);

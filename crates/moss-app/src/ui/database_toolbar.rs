@@ -44,7 +44,7 @@ fn fitted_tabs(widths: &[f32], active: usize, available: f32) -> Vec<usize> {
             }
     };
     let all: Vec<_> = (0..widths.len()).collect();
-    if required(&all, false) <= available {
+    if all.len() <= 4 && required(&all, false) <= available {
         return all;
     }
     if widths.is_empty() {
@@ -52,6 +52,9 @@ fn fitted_tabs(widths: &[f32], active: usize, available: f32) -> Vec<usize> {
     }
     let mut visible = vec![active.min(widths.len() - 1)];
     for index in 0..widths.len() {
+        if visible.len() == 4 {
+            break;
+        }
         if visible.contains(&index) {
             continue;
         }
@@ -258,13 +261,11 @@ mod tests {
             .unwrap()
             .views
             .len();
-        assert!(
-            rt.find("db-views").is_none(),
-            "all tabs should fit without a more button"
-        );
-        for index in 0..count {
+        assert!(rt.find("db-views").is_some());
+        for index in 0..4 {
             assert!(rt.find(&format!("db-view-{index}")).is_some());
         }
+        assert!(rt.find("db-view-4").is_none());
         rt.set_viewport((850., 700.), 1.);
         rt.state.select_database_view(count - 1);
         rt.invalidate();
@@ -294,7 +295,7 @@ mod tests {
         rt.set_viewport((2000., 700.), 1.);
         rt.frame(0.);
         rt.frame(0.);
-        assert!(rt.find("db-views").is_none());
+        assert!(rt.find("db-views").is_some());
         drop(rt);
         std::fs::remove_dir_all(path).unwrap();
     }

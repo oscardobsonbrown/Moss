@@ -165,6 +165,7 @@ fn timeline_dates_and_clipped_ranges_share_one_axis() {
     for (start, end) in [("2026-10-29", "2026-11-03"), ("2026-11-29", "2026-12-10")] {
         let values = [(date.clone(), json!({"start": start, "end": end}))].into();
         rt.state.create_inline(values, false);
+        rt.state.cell.replace_text(start);
         assert!(rt.state.finish_cell(false));
     }
     rt.invalidate();

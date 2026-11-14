@@ -210,6 +210,7 @@ fn gallery_load_limit_pages_without_skipping_records() {
 fn gallery_page_preview_loads_and_updates_after_peek_save() {
     let (mut rt, path) = database_runtime(4);
     rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Fixture item");
     assert!(rt.state.finish_cell(false));
     rt.state.open_record(0);
     let record = rt.state.record_peek.as_ref().unwrap().record.clone();

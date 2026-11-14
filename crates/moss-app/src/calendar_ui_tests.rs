@@ -419,6 +419,7 @@ fn calendar_loads_all_matching_dates_and_supports_layout_settings() {
     rt.state.view_management = None;
     rt.invalidate();
     rt.frame(0.3);
+    click(&mut rt, "db-view-settings");
     click(&mut rt, "calendar-no-date");
     rt.frame(0.3);
     rt.state.undated_search.replace_text("Undated 124");
@@ -562,6 +563,7 @@ fn calendar_drag_moves_resizes_and_schedules_without_losing_date_details() {
             .is_some_and(|e| e.contains("not saved"))
     );
     wait_calendar(&mut rt, |p| p.undated.iter().any(|r| r.id == undated.id));
+    click(&mut rt, "db-view-settings");
     click(&mut rt, "calendar-no-date");
     rt.frame(0.3);
     let idx = rt
@@ -615,6 +617,7 @@ fn calendar_drag_moves_resizes_and_schedules_without_losing_date_details() {
         )
         .unwrap();
     wait_calendar(&mut rt, |p| p.undated.iter().any(|r| r.id == another.id));
+    click(&mut rt, "db-view-settings");
     click(&mut rt, "calendar-no-date");
     rt.frame(0.3);
     let idx = rt
@@ -889,6 +892,318 @@ fn calendar_scrolls_to_the_next_and_previous_period_at_the_edges() {
 }
 
 #[test]
+fn horizontal_scroll_changes_month_without_changing_vertical_position() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.set_viewport((1200., 700.), 1.);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    let db = rt.state.tab().unwrap().database.as_ref().unwrap().clone();
+    let property = db.properties.iter().find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
+    let december = rt.state.store.create_record(&db.id, "December page", &[(property, json!("2026-12-15"))].into()).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline, "adjacent periods were not loaded");
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    rt.update(|_, tx| tx.scroll_to_instant("db-body", 0., 100.));
+    rt.frame(0.1);
+    let before = rt.state.database_views.calendar.scroll.get().offset[1];
+    let view = rect(&rt, "db-body");
+    let (x, y) = (view[0] + 100., view[1] + 100.);
+    let initial = rect(&rt, "calendar-grid");
+    let controls = rect(&rt, "calendar-today");
+    let width = rt.state.database_views.calendar.slide.width;
+    assert!(width > 100.);
+    rt.wheel_event(rune::WheelEvent::new(-30., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(0.02);
+    assert_eq!(rt.state.tab().unwrap().calendar_month.month(), 11);
+    assert!((rect(&rt, "calendar-grid")[0] - initial[0] + 30.).abs() < 1.);
+    assert!((rect(&rt, "calendar-today")[0] - controls[0]).abs() < 1., "the header controls must stay in place while scrolling");
+    assert!(rt.find("calendar-preview-2026-12-01").is_some());
+    assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("December page")));
+    rt.wheel_event(rune::WheelEvent::new(-30., 0.).at(x, y).precise(true));
+    rt.frame(0.02);
+    assert_eq!(rt.state.tab().unwrap().calendar_month.month(), 11);
+    assert!((rect(&rt, "calendar-grid")[0] - initial[0] + 60.).abs() < 1.);
+    assert!((rt.state.database_views.calendar.scroll.get().offset[1] - before).abs() < 2.);
+    rt.wheel_event(rune::WheelEvent::new(20., 0.).at(x, y).precise(true));
+    rt.frame(0.02);
+    assert!((rect(&rt, "calendar-grid")[0] - initial[0] + 40.).abs() < 1., "the grid must reverse with the gesture");
+    rt.wheel_event(rune::WheelEvent::new(0., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Ended));
+    rt.frame(0.02);
+    assert!((rect(&rt, "calendar-grid")[0] - initial[0] + 40.).abs() < 1., "the grid must wait for possible momentum");
+    rt.wheel_event(rune::WheelEvent::new(40., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(0.02);
+    assert!((rect(&rt, "calendar-grid")[0] - initial[0]).abs() < 1.);
+    assert!(!rt.state.database_views.calendar.slide.active);
+    rt.wheel_event(rune::WheelEvent::new(-(width + 30.), 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(0.02);
+    assert_eq!(rt.state.tab().unwrap().calendar_month.month(), 12);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while (rt.state.database_views.calendar.slide.offset.get()[0] + 30.).abs() >= 2. {
+        assert!(Instant::now() < deadline, "the remaining motion did not resume after prefetch");
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!((rt.state.database_views.calendar.slide.offset.get()[0] + 30.).abs() < 2.);
+    assert!(rt.state.database_views.calendar.projection.as_ref().unwrap().records.iter().any(|record| record.id == december.id));
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn horizontal_scroll_settles_on_a_date_column_after_momentum() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline);
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let body = rect(&rt, "db-body");
+    let (x, y) = (body[0] + 100., body[1] + 100.);
+    let column = rt.state.database_views.calendar.slide.width / 7.;
+    rt.wheel_event(rune::WheelEvent::new(-column * 0.6, 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(1. / 120.);
+    std::thread::sleep(Duration::from_millis(120));
+    rt.frame(1. / 120.);
+    assert!((rt.state.database_views.calendar.slide.offset.get()[0] + column * 0.6).abs() < 1., "a held gesture must not snap");
+    rt.wheel_event(rune::WheelEvent::new(0., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Ended));
+    rt.frame(1. / 120.);
+    let mut momentum = rune::WheelEvent::new(-column * 0.8, 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began);
+    momentum.momentum = true;
+    rt.wheel_event(momentum);
+    rt.frame(1. / 120.);
+    rt.wheel_event(rune::WheelEvent::new(0., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Ended));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        rt.frame(1. / 120.);
+        if (rt.state.database_views.calendar.slide.offset.get()[0] + column).abs() < 0.1 { break; }
+        assert!(Instant::now() < deadline, "calendar did not settle on the nearest column");
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    rt.state.database_views.calendar.slide.resize(column * 7. * 1.2);
+    assert!((rt.state.database_views.calendar.slide.offset.get()[0] + column * 1.2).abs() < 0.2, "resizing must keep date columns aligned");
+    rt.state.database_views.calendar.slide.resize(column * 7.);
+    rt.wheel_event(rune::WheelEvent::new(column * 0.7, 0.).at(x, y).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(1. / 120.);
+    rt.wheel_event(rune::WheelEvent::new(0., 0.).at(x, y).precise(true).phase(rune::GesturePhase::Ended));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        rt.frame(1. / 120.);
+        if !rt.state.database_views.calendar.slide.active { break; }
+        assert!(Instant::now() < deadline, "calendar did not settle back to the month edge");
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn horizontal_scroll_can_settle_across_a_month_boundary() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline);
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let body = rect(&rt, "db-body");
+    let width = rt.state.database_views.calendar.slide.width;
+    rt.wheel_event(rune::WheelEvent::new(-width * 0.98, 0.).at(body[0] + 100., body[1] + 100.));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        rt.frame(1. / 120.);
+        if rt.state.tab().unwrap().calendar_month.month() == 12 { break; }
+        assert!(Instant::now() < deadline, "calendar did not settle across the month boundary");
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    assert!(rt.state.database_views.calendar.slide.offset.get()[0].abs() < 0.1);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn a_page_in_the_partially_visible_month_can_be_opened() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    let db = rt.state.tab().unwrap().database.as_ref().unwrap().clone();
+    let property = db.properties.iter().find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
+    let record = rt.state.store.create_record(&db.id, "Next month", &[(property, json!("2026-12-01"))].into()).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline);
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let body = rect(&rt, "db-body");
+    let width = rt.state.database_views.calendar.slide.width;
+    rt.wheel_event(rune::WheelEvent::new(-width * 0.8, 0.).at(body[0] + 100., body[1] + 100.).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(1. / 60.);
+    let card = rect(&rt, "calendar-preview-card-2026-12-01-0-2026-12-01");
+    rt.pointer_down(card[0] + 20., card[1] + 10.);
+    rt.pointer_up(card[0] + 20., card[1] + 10.);
+    rt.frame(1. / 120.);
+    assert_eq!(rt.state.record_peek.as_ref().map(|peek| &peek.record.id), Some(&record.id));
+    for _ in 0..30 {
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(rt.state.database_views.calendar.slide.active);
+    assert!((rt.state.database_views.calendar.slide.offset.get()[0] + width * 0.8).abs() < 1., "opening a page must not reset the calendar position");
+    let mut updated = record.clone();
+    updated.title = "Updated next month".into();
+    rt.state.sync_record(&updated);
+    assert!(rt.state.database_views.calendar.adjacent.values().flat_map(|projection| &projection.records).any(|item| item.id == record.id && item.title == updated.title));
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn a_fast_scroll_keeps_its_distance_across_multiple_months() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline);
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let body = rect(&rt, "db-body");
+    let width = rt.state.database_views.calendar.slide.width;
+    rt.wheel_event(rune::WheelEvent::new(-2. * width - 25., 0.).at(body[0] + 100., body[1] + 100.).precise(true).phase(rune::GesturePhase::Began));
+    loop {
+        rt.frame(1. / 120.);
+        let month = rt.state.tab().unwrap().calendar_month;
+        let offset = rt.state.database_views.calendar.slide.offset.get()[0];
+        if month == chrono::NaiveDate::from_ymd_opt(2027, 1, 1).unwrap() && (offset + 25.).abs() < 1. { break; }
+        assert!(Instant::now() < deadline, "scroll distance was lost: {month}, {offset}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn a_taller_adjacent_month_is_not_clipped() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while rt.state.database_views.calendar.adjacent.len() < 2 {
+        assert!(Instant::now() < deadline);
+        rt.frame(1. / 120.);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let body = rect(&rt, "db-body");
+    let width = rt.state.database_views.calendar.slide.width;
+    rt.wheel_event(rune::WheelEvent::new(-width * 0.8, 0.).at(body[0] + 100., body[1] + 100.).precise(true).phase(rune::GesturePhase::Began));
+    rt.frame(1. / 60.);
+    let preview = rect(&rt, "calendar-preview-2026-03-01");
+    let viewport = rect(&rt, "calendar-slide-viewport");
+    assert!(viewport[3] >= preview[3] - 1., "adjacent month must fit: {viewport:?}, {preview:?}");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn calendar_dates_align_and_add_button_appears_on_hover() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    let first_cell = rect(&rt, "calendar-day-2026-11-01");
+    let second_cell = rect(&rt, "calendar-day-2026-11-02");
+    let first = rect(&rt, "calendar-date-label-2026-11-01");
+    let second = rect(&rt, "calendar-date-label-2026-11-02");
+    assert!(((first[0] - first_cell[0]) - (second[0] - second_cell[0])).abs() < 1.);
+    assert!(((first[1] - first_cell[1]) - (second[1] - second_cell[1])).abs() < 1.);
+    assert!(rt.find("calendar-no-date").is_none());
+    rt.pointer_move(1., 1.);
+    rt.frame(0.2);
+    let opacity = |rt: &Runtime<State>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("calendar-add-visual-2026-11-01")).unwrap().opacity;
+    assert!(opacity(&rt) < 0.01);
+    rt.pointer_move(first_cell[0] + 15., first_cell[1] + 15.);
+    rt.frame(0.2);
+    assert!(opacity(&rt) > 0.99);
+    rt.pointer_move(1., 1.);
+    rt.set_full_keyboard_access(true);
+    for _ in 0..150 {
+        if rt.elements().iter().any(|e| e.focused && e.key.as_deref() == Some("calendar-add-2026-11-01")) { break; }
+        press(&mut rt, Key::Tab);
+    }
+    assert!(rt.elements().iter().any(|e| e.focused && e.key.as_deref() == Some("calendar-add-2026-11-01")));
+    press(&mut rt, Key::Text(" ".into()));
+    assert!(rt.state.record_peek.is_some(), "keyboard activation must create a page");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn untouched_calendar_events_are_discarded_but_edits_are_kept() {
+    let (mut rt, path) = database_runtime(2);
+    rt.poll = Some(poll);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    wait_calendar(&mut rt, |_| true);
+    click(&mut rt, "calendar-add-2026-11-12");
+    let draft = rt.state.record_peek.as_ref().unwrap();
+    let (id, page_id) = (draft.record.id.clone(), draft.page.id.clone());
+    assert!(rt.state.close_peek());
+    assert!(rt.state.store.get_record(&id).unwrap().is_none());
+    assert!(rt.state.store.get_page(&page_id).unwrap().is_none());
+    rt.invalidate();
+    rt.frame(1. / 120.);
+    click(&mut rt, "calendar-add-2026-11-12");
+    let id = rt.state.record_peek.as_ref().unwrap().record.id.clone();
+    let saved = rt.state.store.rename_record(&id, "A real event").unwrap();
+    rt.state.sync_record(&saved);
+    assert!(rt.state.close_peek());
+    assert_eq!(rt.state.store.get_record(&id).unwrap().unwrap().title, "A real event");
+    rt.invalidate();
+    rt.frame(1. / 120.);
+    click(&mut rt, "calendar-add-2026-11-12");
+    let draft = rt.state.record_peek.as_ref().unwrap();
+    let id = draft.record.id.clone();
+    let mut page = draft.page.clone();
+    page.icon = "🌱".into();
+    rt.state.store.update_page(&page).unwrap();
+    assert!(rt.state.close_peek());
+    assert!(rt.state.store.get_record(&id).unwrap().is_some());
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn calendar_draft_is_discarded_when_its_full_page_tab_closes() {
+    let (mut rt, path) = database_runtime(2);
+    let active = rt.state.active;
+    let view_index = rt.state.tabs[active].view;
+    let db = rt.state.tabs[active].database.as_mut().unwrap();
+    db.views[view_index].config["open_mode"] = json!("full");
+    rt.state.store.save_database(db).unwrap();
+    let date = db.properties.iter().find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
+    rt.state.create_peek([(date, json!("2026-11-12"))].into());
+    let id = rt.state.tab().unwrap().record_context.as_ref().unwrap().1.id.clone();
+    rt.state.close_tab(rt.state.active);
+    assert!(rt.state.store.get_record(&id).unwrap().is_none());
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn calendar_pages_through_dense_date_ranges() {
     let (mut rt, path) = database_runtime(2);
     rt.poll = Some(poll);
@@ -993,7 +1308,7 @@ fn monday_preference_changes_calendar_and_date_picker_and_persists() {
     rt.invalidate();
     rt.frame(0.3);
     click(&mut rt, "week-start-monday");
-    assert!(rt.state.prefs.start_week_on_monday);
+    assert_eq!(rt.state.prefs.week_start(), 1);
     press(&mut rt, Key::Escape);
     rt.invalidate();
     rt.frame(0.3);
@@ -1028,7 +1343,48 @@ fn monday_preference_changes_calendar_and_date_picker_and_persists() {
     assert!(first[0] < sunday[0]);
     drop(rt);
     let reopened = State::open(path.clone(), None).unwrap();
-    assert!(reopened.prefs.start_week_on_monday);
+    assert_eq!(reopened.prefs.week_start(), 1);
     drop(reopened);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn any_weekday_can_start_the_week_and_persists() {
+    let (mut rt, path) = database_runtime(2);
+    rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.state.modal = Some(state::Modal::Settings);
+    rt.invalidate();
+    rt.frame(0.3);
+    for (index, day) in ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"].into_iter().enumerate() {
+        click(&mut rt, &format!("week-start-{day}"));
+        assert_eq!(rt.state.prefs.week_start(), index as u8);
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        assert_eq!(crate::calendar_view::weekday_offset(date, rt.state.prefs.week_start()), ((7 - index) % 7) as u32);
+    }
+    click(&mut rt, "week-start-wednesday");
+    press(&mut rt, Key::Escape);
+    rt.frame(0.3);
+    let wednesday = rect(&rt, "calendar-weekday-Wed");
+    let thursday = rect(&rt, "calendar-weekday-Thu");
+    let sunday = rect(&rt, "calendar-weekday-Sun");
+    assert!(wednesday[0] < thursday[0] && thursday[0] < sunday[0]);
+    assert!(rt.find("calendar-day-2026-10-28").is_some());
+    assert!(rt.state.select_database_view(0));
+    rt.state.create_inline(Default::default(), false);
+    assert!(rt.state.finish_cell(false));
+    let record = rt.state.tab().unwrap().records[0].id.clone();
+    let date_property = rt.state.tab().unwrap().database.as_ref().unwrap().properties.iter()
+        .find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
+    rt.state.open_property_picker(&record, &date_property);
+    rt.state.property_picker.as_mut().unwrap().month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.invalidate();
+    rt.frame(0.3);
+    assert!(rect(&rt, "date-2026-10-28")[0] < rect(&rt, "date-2026-11-01")[0]);
+    drop(rt);
+    let reopened = State::open(path.clone(), None).unwrap();
+    assert_eq!(reopened.prefs.week_start(), 3);
+    drop(reopened);
+    let legacy: state::Preferences = serde_json::from_value(json!({"workspace":"", "tabs":{}, "active":{}, "start_week_on_monday":true})).unwrap();
+    assert_eq!(legacy.week_start(), 1);
     std::fs::remove_dir_all(path).unwrap();
 }

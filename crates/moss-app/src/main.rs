@@ -10,6 +10,7 @@ mod computed_refresh;
 mod dashboard_view;
 mod database_properties;
 mod database_views;
+mod drafts;
 mod editor_commands;
 mod emoji_catalog;
 mod fonts;
@@ -230,7 +231,7 @@ fn main() {
             }
         })
         .on_close(|s, _| {
-            s.flush_current();
+            if s.flush_current() { s.discard_all_drafts(); }
             s.save_preferences();
         });
     handles
@@ -261,7 +262,7 @@ fn main() {
                         }
                     })
                     .on_close(|s, _| {
-                        s.flush_current();
+                        if s.flush_current() { s.discard_all_drafts(); }
                         s.save_preferences();
                     });
                 let (handle, _) = app.window(WindowSpec::from_app(id.clone(), secondary));

@@ -181,6 +181,20 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     }
                 }),
             );
+            if editor.kind == ViewKind::Calendar {
+                body = body.child(
+                    item("calendar-no-date", "Pages without dates", "", &super::phosphor::CALENDAR_BLANK, t.text, t)
+                        .on_press_tx(|s: &mut State, tx| {
+                            if !s.autosave_view_name(true) { return; }
+                            s.view_management = None;
+                            s.database_views.calendar.suppress_press = false;
+                            s.undated_open = true;
+                            s.undated_search = TextEdit::new("");
+                            s.undated_search.focused = true;
+                            if tx.focused().is_some() { tx.instant(); }
+                        }),
+                );
+            }
             if KINDS.contains(&editor.kind) {
                 body = body.child(
                     item("view-properties", "Properties", "›", &menu::EYE, t.text, t)

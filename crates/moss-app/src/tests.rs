@@ -741,6 +741,7 @@ fn table_checkbox_toggles_and_protects_invalid_values() {
     rt.state.store.save_database(&db).unwrap();
     rt.state.tabs[rt.state.active].database = Some(db);
     rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Fixture item");
     assert!(rt.state.finish_cell(false));
     let record_id = rt.state.tab().unwrap().records[0].id.clone();
     rt.invalidate();
@@ -870,6 +871,7 @@ fn calendar_and_timeline_no_date_lists_search_and_open_records() {
         }
         rt.invalidate();
         rt.frame(1. / 120.);
+        if view == 2 { click(&mut rt, "db-view-settings"); }
         click(&mut rt, &format!("{prefix}-no-date"));
         assert!(rt.find(&format!("{prefix}-no-date-search")).is_some());
         press(&mut rt, Key::Text("Find".into()));

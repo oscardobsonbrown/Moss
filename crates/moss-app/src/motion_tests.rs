@@ -221,6 +221,7 @@ fn pointer_gallery_and_undated_popovers_fade_outside_instant_content() {
     assert!(rt.state.select_database_view(2));
     rt.invalidate();
     rt.frame(0.);
+    click(&mut rt, "db-view-settings");
     click(&mut rt, "calendar-no-date");
     let start = opacity(&rt, "calendar-no-date-panel");
     assert!(start < 0.95);
@@ -240,6 +241,16 @@ fn keyboard_gallery_and_undated_popovers_open_instantly() {
         assert!(rt.state.select_database_view(view));
         rt.invalidate();
         rt.frame(0.);
+        if view == 2 {
+            click(&mut rt, "db-view-settings");
+            press(&mut rt, Key::Tab);
+            press(&mut rt, Key::Tab);
+            press(&mut rt, Key::End);
+            for _ in 0..30 {
+                if rt.elements().iter().any(|e| e.focused && e.key.as_deref() == Some(button)) { break; }
+                press(&mut rt, Key::Up);
+            }
+        }
         focus(&mut rt, button);
         press(&mut rt, Key::Text(" ".into()));
         assert_eq!(opacity(&rt, panel), 1.);

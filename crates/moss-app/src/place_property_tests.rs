@@ -10,6 +10,7 @@ fn place_can_be_edited_in_table_peek_gallery_and_list() {
     let property = db.properties.last().unwrap().id.clone();
     rt.state.tabs[rt.state.active].database = Some(db);
     rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Fixture item");
     assert!(rt.state.finish_cell(false));
     rt.state.query_records();
     let id = rt.state.tab().unwrap().records[0].id.clone();
@@ -68,6 +69,7 @@ fn place_search_finishes_outside_map_and_offline_text_is_saved() {
     let property = db.properties.last().unwrap().id.clone();
     rt.state.tabs[rt.state.active].database = Some(db);
     rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Fixture item");
     assert!(rt.state.finish_cell(false));
     rt.state.query_records();
     let id = rt.state.tab().unwrap().records[0].id.clone();

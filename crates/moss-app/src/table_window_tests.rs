@@ -327,6 +327,7 @@ fn new_draft_count_waits_for_fresh_rank_without_double_counting() {
             .displayed_total(),
         Some(6)
     );
+    rt.state.cell.replace_text("Saved row");
     assert!(rt.state.finish_cell(false));
     wait_until(&mut rt, |s| {
         let window = s.tab().unwrap().table_window.as_ref().unwrap();

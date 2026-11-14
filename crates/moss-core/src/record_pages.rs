@@ -1,10 +1,79 @@
 use crate::store::{decode, encode, invalid};
-use crate::{Database, Page, PageKind, Record, Store, new_id, now, search};
+use crate::{Block, Database, Page, PageKind, Record, Store, new_id, now, search};
 use rusqlite::{Connection, OptionalExtension, Result, params};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 impl Store {
+    pub fn discard_untouched_item(
+        &mut self,
+        record: Option<&Record>,
+        page: Option<&Page>,
+        blocks: &[Block],
+        created_link: Option<&Block>,
+    ) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        if let Some(record) = record {
+            let current: Option<String> = tx
+                .query_row(
+                    "SELECT data FROM records WHERE id=?1",
+                    [&record.id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM calculation_edges WHERE target_id=?1 AND source_id<>?1) OR EXISTS(SELECT 1 FROM records r, json_tree(r.values_json) value WHERE r.id<>?1 AND instr(r.values_json,?1)>0 AND value.type='text' AND value.value=?1)", [&record.id], |row| row.get(0))?;
+            if current.map(decode::<Record>).transpose()?.as_ref() != Some(record)
+                || in_use
+                || record.page_id.as_deref() != page.map(|p| p.id.as_str())
+            {
+                return Ok(false);
+            }
+        }
+        if let Some(page) = page {
+            if let Some(link) = created_link {
+                let current: Option<String> = tx
+                    .query_row("SELECT data FROM blocks WHERE id=?1", [&link.id], |row| {
+                        row.get(0)
+                    })
+                    .optional()?;
+                if current.map(decode::<Block>).transpose()?.as_ref() != Some(link)
+                    || link.kind != crate::BlockKind::ChildPage
+                    || link.config.get("page_id").and_then(Value::as_str) != Some(&page.id)
+                    || page.parent_id.as_deref() != Some(&link.page_id)
+                {
+                    return Ok(false);
+                }
+            }
+            let current: Option<String> = tx
+                .query_row("SELECT data FROM pages WHERE id=?1", [&page.id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            let current_blocks: Vec<Block> = {
+                let mut query =
+                    tx.prepare("SELECT data FROM blocks WHERE page_id=?1 ORDER BY sort_order,id")?;
+                let rows = query.query_map([&page.id], |row| row.get::<_, String>(0))?;
+                rows.map(|row| decode(row?)).collect::<Result<_>>()?
+            };
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pages WHERE parent_id=?1) OR EXISTS(SELECT 1 FROM databases WHERE page_id=?1) OR EXISTS(SELECT 1 FROM blocks b, json_tree(b.data) value WHERE b.page_id<>?1 AND b.id<>?2 AND instr(b.data,?1)>0 AND value.type='text' AND value.value=?1)", params![page.id, created_link.map(|link| link.id.as_str()).unwrap_or("")], |row| row.get(0))?;
+            if current.map(decode::<Page>).transpose()?.as_ref() != Some(page)
+                || current_blocks != blocks
+                || in_use
+            {
+                return Ok(false);
+            }
+            if let Some(link) = created_link {
+                tx.execute("DELETE FROM blocks WHERE id=?1", [&link.id])?;
+            }
+            tx.execute("DELETE FROM pages WHERE id=?1", [&page.id])?;
+        } else if let Some(record) = record {
+            tx.execute("DELETE FROM records WHERE id=?1", [&record.id])?;
+        } else {
+            return Ok(false);
+        }
+        tx.commit()?;
+        Ok(true)
+    }
     /// Create a record with caller-supplied property defaults.
     pub fn create_record(
         &mut self,

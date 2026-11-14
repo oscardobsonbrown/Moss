@@ -94,7 +94,7 @@ fn panel(s: &State, t: Theme) -> El {
         .w_full()
         .gap(4.)
         .px(32.)
-        .pt(32.)
+        .pt(if peek.page.cover.is_some() { 32. } else { 48. })
         .pb(160.)
         .child(
             row()
@@ -256,15 +256,18 @@ fn panel(s: &State, t: Theme) -> El {
         });
     }
     let header = row()
-        .w_full()
-        .h(44.)
-        .px(10.)
+        .key("peek-actions")
+        .h(32.)
+        .padding(2.)
         .center_y()
-        .child(el().grow(1.))
+        .radius(7.)
+        .fill(t.bg)
+        .border(1., t.line)
+        .shadow(1., 3., Color::BLACK.alpha(0.08))
         .child(
             row()
                 .key("peek-full-page")
-                .h(30.)
+                .h(28.)
                 .px(9.)
                 .gap(4.)
                 .center_y()
@@ -273,24 +276,30 @@ fn panel(s: &State, t: Theme) -> El {
                 .role("button")
                 .label("Open as page")
                 .focusable(true)
-                .child(t.label("Open as page", t.text))
-                .child(rune::icon(&super::phosphor::ARROW_UP_RIGHT, 14.).color(t.muted))
+                .child(
+                    t.label("Open as page", t.text)
+                        .key("peek-full-page-label")
+                        .offset(0., -1.)
+                        .offset_motion(Anim::INSTANT),
+                )
                 .on_press_tx(|s: &mut State, tx| {
                     s.dismiss_property_picker();
                     s.expand_peek();
                     tx.instant();
                 }),
         )
+        .child(el().w(1.).h(16.).fill(t.line))
         .child(
             icon_button("peek-close", "Close", "×", t).on_press(|s: &mut State| {
                 s.dismiss_property_picker();
                 s.close_peek();
             }),
-        );
+        )
+        .pin(None, Some(8.), Some(8.), None)
+        .raise();
     col()
         .fill(t.bg)
         .min_h(0.)
-        .child(header)
         .children(super::cell_recovery::view(s, t))
         .children(
             s.error
@@ -313,4 +322,5 @@ fn panel(s: &State, t: Theme) -> El {
                         .child(content),
                 ),
         )
+        .child(header)
 }

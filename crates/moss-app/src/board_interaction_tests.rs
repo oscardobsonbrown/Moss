@@ -905,6 +905,8 @@ fn board_creation_inherits_guaranteed_filters_rejects_conflicting_columns_and_ap
     let toolbar = f.rt.state.record_peek.as_ref().unwrap().record.clone();
     assert_eq!(toolbar.values[&f.status], "Done");
     assert_eq!(toolbar.values[&notes], "keep");
+    f.rt.state.record_peek.as_mut().unwrap().title.replace_text("Toolbar task");
+    f.rt.state.save_peek_title();
     click(&mut f.rt, "peek-close");
     wait_board(&mut f.rt, |p| p.total == 3);
     let count =

@@ -229,7 +229,15 @@ fn settings(s: &State, t: Theme) -> El {
         }),
     );
     col().w_full().gap(12.).child(label("Appearance",t.muted)).child(appearance)
-        .child(button("week-start-monday", "Start week on Monday", t).gap(8.).role("switch").checked(s.prefs.start_week_on_monday).child(t.label(if s.prefs.start_week_on_monday { "On" } else { "Off" }, t.muted)).on_press(|s: &mut State| s.set_week_start(!s.prefs.start_week_on_monday)))
+        .child(label("Start week on", t.muted))
+        .child(row().gap(4.).children(["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].into_iter().enumerate().map(|(day, name)| {
+            button(format!("week-start-{}", name.to_lowercase()), &name[..3], t)
+                .role("radio")
+                .label(format!("Start week on {name}"))
+                .checked(s.prefs.week_start() == day as u8)
+                .fill(if s.prefs.week_start() == day as u8 { t.selected } else { t.bg })
+                .on_press(move |s: &mut State| s.set_week_start(day as u8))
+        })))
         .child(el().h(1.).w_full().fill(t.line))
         .child(label("Workspace",t.muted))
         .child(button("export-workspace","Export workspace archive…",t).on_press_tx(|s:&mut State,tx|{

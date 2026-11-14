@@ -339,6 +339,7 @@ impl State {
                 tab.created_record_ids.push(record.id.clone());
                 crate::table_window::note_created(self, &db_id);
                 self.error = None;
+                self.track_new_record(&record);
                 Some(record)
             }
             Err(e) => {
@@ -368,14 +369,10 @@ impl State {
         if !self.finish_cell(false) || !self.close_peek() {
             return;
         }
-        let full_page = self
-            .tab()
+        let full_page = self.tab()
             .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-            .and_then(|view| view.config.get("open_mode").and_then(Value::as_str))
-            == Some("full");
-        if full_page && !self.flush_current() {
-            return;
-        }
+            .and_then(|view| view.config.get("open_mode").and_then(Value::as_str)) == Some("full");
+        if full_page && !self.flush_current() { return; }
         if let Some(record) = self.create_item(values) {
             self.open_record_id(&record.id);
         }
@@ -410,7 +407,19 @@ impl State {
         self.open_database_record(&database_id, id, &mode);
     }
     pub(crate) fn sync_record(&mut self, record: &Record) {
+        if self.new_item_drafts.get(&record.id).and_then(|draft| draft.record.as_ref()).is_some_and(|original| original != record) {
+            self.new_item_drafts.remove(&record.id);
+            self.pending_empty_items.retain(|id| id != &record.id);
+        }
         self.sidebar_sections.update_record_title(record);
+        let calendar = &mut self.database_views.calendar;
+        for projection in calendar.projection.iter_mut().chain(calendar.adjacent.values_mut()) {
+            for current in projection.records.iter_mut().chain(projection.undated.iter_mut()) {
+                if current.id == record.id {
+                    *current = record.clone();
+                }
+            }
+        }
         for tab in &mut self.tabs {
             if let Some((_, current)) = &mut tab.record_context {
                 if current.id == record.id {
@@ -695,6 +704,9 @@ impl State {
         let id = target.record_id.clone();
         let property = target.property_id.clone();
         let expected_value = target.expected_value.clone();
+        if property.is_none() && self.new_item_drafts.get(&id).and_then(|draft| draft.record.as_ref()).is_some_and(|record| record.title == self.cell.text) {
+            return true;
+        }
         let result = (|| -> Result<Record, String> {
             if let Some(p) = property.as_ref() {
                 let kind = self
@@ -796,7 +808,13 @@ impl State {
             self.cell.focused = true;
             return false;
         }
-        let values = self.editing_cell.take().and_then(|t| t.repeat_values);
+        let target = self.editing_cell.take();
+        if let Some(target) = &target {
+            if self.new_item_drafts.contains_key(&target.record_id) && !self.pending_empty_items.contains(&target.record_id) {
+                self.pending_empty_items.push(target.record_id.clone());
+            }
+        }
+        let values = target.and_then(|t| t.repeat_values);
         self.cell.focused = false;
         if repeat {
             if let Some(values) = values {
@@ -876,6 +894,7 @@ impl State {
                 }
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
+                self.keep_draft_for_page(&page_id);
             }
             Err(e) => self.error = Some(format!("Page contents are not saved: {e}")),
         }
@@ -942,6 +961,9 @@ impl State {
         {
             return false;
         }
+        if let Some(id) = self.record_peek.as_ref().map(|peek| peek.record.id.clone()) {
+            if !self.discard_draft(&id) { return false; }
+        }
         self.record_peek = None;
         true
     }
@@ -949,13 +971,18 @@ impl State {
         let Some(id) = self.record_peek.as_ref().map(|p| p.page.id.clone()) else {
             return;
         };
-        if self.close_peek() {
+        let record_id = self.record_peek.as_ref().unwrap().record.id.clone();
+        let draft = self.new_item_drafts.remove(&record_id);
+        let closed = self.close_peek();
+        if let Some(draft) = draft { self.new_item_drafts.insert(record_id, draft); }
+        if closed {
             self.open_page(&id, true);
         }
     }
 }
 
 pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
+    let draft_changed = s.discard_closed_items();
     let caret_changed = crate::caret::poll(s, time, tx);
     let computed_changed = crate::computed_refresh::poll(s);
     let window_changed = crate::table_window::poll(s, tx);
@@ -965,7 +992,7 @@ pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
         tx.instant();
         return true;
     }
-    caret_changed || computed_changed || summaries_changed || window_changed
+    draft_changed || caret_changed || computed_changed || summaries_changed || window_changed
 }
 
 #[cfg(test)]
