@@ -43,7 +43,7 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
             .h(28.)
             .min_w(100.)
             .max_w(240.)
-            .px(8.)
+            .px(5.)
             .gap(7.)
             .center_y()
             .radius(7.)
@@ -75,11 +75,16 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
                     .label(title)
                     .focus_selected(i == s.active)
                     .focusable(true)
-                    .child(if tab.page.icon.is_empty() {
-                        rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
-                    } else {
-                        super::theme::sized_label(&tab.page.icon, 14., t.muted)
-                    })
+                    .child(
+                        row()
+                            .size(20., 20.)
+                            .center()
+                            .child(if tab.page.icon.is_empty() {
+                                rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
+                            } else {
+                                super::theme::sized_label(&tab.page.icon, 14., t.muted)
+                            }),
+                    )
                     .child({
                         let title = label(title, if i == s.active { t.text } else { t.muted });
                         if light {
@@ -100,18 +105,20 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
                     }),
             )
             .child({
-                let close = shell_icon(
-                    format!("close-tab-{i}"),
-                    "Close tab",
-                    &super::phosphor::X,
-                    true,
-                    t,
-                )
-                .size(18., 20.)
-                .on_press_tx(move |s: &mut State, tx| {
-                    tx.instant();
-                    s.close_tab(i);
-                });
+                let close = row()
+                    .key(format!("close-tab-{i}"))
+                    .size(20., 20.)
+                    .center()
+                    .radius(5.)
+                    .hover(t.hover)
+                    .role("button")
+                    .label("Close tab")
+                    .focusable(true)
+                    .child(rune::icon(&super::phosphor::X, 14.).color(t.muted))
+                    .on_press_tx(move |s: &mut State, tx| {
+                        tx.instant();
+                        s.close_tab(i);
+                    });
                 if light && i != s.active {
                     close.focusable(false).group_opacity(0., 1.)
                 } else {
