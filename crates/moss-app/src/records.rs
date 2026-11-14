@@ -47,7 +47,11 @@ impl State {
             .map(|v| v.query.clone())
             .unwrap_or_default();
         q.offset = tab.offset;
-        let limit = db.views.get(tab.view).map(view_load_limit).unwrap_or(100);
+        let limit = db
+            .views
+            .get(tab.view)
+            .map(|view| crate::table_window::initial_limit(view, &tab.title_search, tab.offset))
+            .unwrap_or(100);
         q.limit = limit + 1;
         if !self.filter.text.is_empty() {
             let search = FilterExpr::Rule(FilterRule {
@@ -535,7 +539,7 @@ impl State {
     ) -> Option<Option<String>> {
         let tab = self.tab()?;
         let db = tab.database.as_ref()?;
-        let columns: Vec<Option<String>> = moss_core::record_layout::columns(db)
+        let columns: Vec<Option<String>> = moss_core::record_layout::columns_for_view(db, tab.view)
             .into_iter()
             .filter(|p| crate::ui::property_visibility::visible(db, tab.view, &p.id))
             .map(|p| (p.kind != PropertyKind::Title).then(|| p.id.clone()))

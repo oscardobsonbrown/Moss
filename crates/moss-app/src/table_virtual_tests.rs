@@ -160,3 +160,25 @@ fn logical_table_can_reach_last_row_of_million_with_bounded_nodes() {
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn logical_table_shows_placeholders_during_a_distant_window_load() {
+    let (mut rt, path) = database_runtime(0);
+    rt.poll = None;
+    let db = rt.state.tab().unwrap().database.as_ref().unwrap().id.clone();
+    for n in 0..100 { rt.state.store.create_record(&db, &format!("Row {n}"), &Default::default()).unwrap(); }
+    assert!(rt.state.query_records());
+    let mut window = crate::table_window::TableWindow::new(100);
+    window.total = Some(1_000_000);
+    window.visible = 500_000..500_040;
+    rt.state.tabs[rt.state.active].table_window = Some(window);
+    rt.invalidate();
+    rt.frame(0.);
+    rt.update(|_, tx| tx.scroll_to_instant("db-body", 0., 500_000. * 38.));
+    rt.frame(0.);
+    assert!(rt.find("table-pending-500010").is_some());
+    assert!(rt.find("cell-0-title").is_none());
+    assert!(rt.elements().len() < 5000, "placeholder window must remain bounded");
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}

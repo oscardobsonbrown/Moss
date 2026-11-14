@@ -99,6 +99,9 @@ pub(crate) fn prune_view(view: &mut crate::DatabaseView, id: &str) {
         if let Some(Value::Object(calculations)) = config.get_mut("calculations") {
             calculations.remove(id);
         }
+        if let Some(Value::Object(widths)) = config.get_mut("column_widths") {
+            widths.remove(id);
+        }
     }
 }
 

@@ -69,6 +69,28 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     },
                 ),
             );
+            for property in db.properties.iter().filter(|property| {
+                property.kind == PropertyKind::Place
+                    && super::property_visibility::visible(db, tab.view, &property.id)
+                    && record.values.get(&property.id).is_none_or(|value| {
+                        value.is_null() || value.as_str().is_some_and(str::is_empty)
+                    })
+            }) {
+                let record_id = record.id.clone();
+                let property_id = property.id.clone();
+                body = body.child(
+                    action(
+                        &format!("board-menu-set-place-{property_id}"),
+                        &format!("Set {}", property.name),
+                        &phosphor::MAP_PIN,
+                        t,
+                    )
+                    .on_press(move |s: &mut State| {
+                        close(s);
+                        s.open_place_picker(&record_id, &property_id);
+                    }),
+                );
+            }
             body = body.child(
                 action("board-menu-move", "Move to group", &phosphor::COLUMNS, t).on_press(
                     |s: &mut State| {

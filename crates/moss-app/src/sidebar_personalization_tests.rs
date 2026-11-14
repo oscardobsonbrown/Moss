@@ -134,11 +134,17 @@ fn sidebar_row_geometry_and_actions_preserve_navigation() {
             let child_title = rect(&format!("page-title-{}", child.id));
             let favorite_icon = rect(&format!("favorite-icon-{}", parent.id));
             let favorite_title = rect(&format!("favorite-title-{}", parent.id));
+            let page_row = rect(&format!("page-highlight-{}", parent.id));
+            let section_row = rect("sidebar-new-section");
+            let section_action = rect("sidebar-manage-sections");
+            assert_eq!((page_row[0], page_row[2], page_row[3]), (section_row[0], section_row[2], section_row[3]));
+            assert_eq!(section_row[0] + section_row[2] - section_action[0] - section_action[2], 5.);
+            assert_eq!(section_action[2..], [20., 20.]);
             assert_eq!(root_icon[2], 20.);
-            assert_eq!(root_title[0] - root_icon[0] - root_icon[2], 8.);
+            assert_eq!(root_title[0] - root_icon[0] - root_icon[2], 7.);
             assert_eq!(child_icon[0] - root_icon[0], 16.);
-            assert_eq!(child_title[0] - child_icon[0] - child_icon[2], 8.);
-            assert_eq!(favorite_title[0] - favorite_icon[0] - favorite_icon[2], 8.);
+            assert_eq!(child_title[0] - child_icon[0] - child_icon[2], 7.);
+            assert_eq!(favorite_title[0] - favorite_icon[0] - favorite_icon[2], 7.);
             for (icon, title) in [
                 (root_icon, root_title),
                 (child_icon, child_title),
@@ -323,15 +329,15 @@ fn trailing_page_actions_stay_near_the_right_edge_for_parents_and_nested_pages()
             let actions = rt.presented(&format!("{prefix}-actions-{id}")).unwrap().0;
             let add = rt.presented(&format!("{prefix}-add-{id}")).unwrap().0;
             assert!(
-                (row[0] + row[2] - add[0] - add[2] - 3.).abs() < 0.1,
+                (row[0] + row[2] - add[0] - add[2] - 5.).abs() < 0.1,
                 "{prefix} width={width}: {row:?} {add:?}"
             );
             assert!(
                 (add[0] - actions[0] - actions[2]).abs() < 0.1,
                 "{actions:?} {add:?}"
             );
-            assert_eq!(actions[2], 22.);
-            assert_eq!(add[2], 22.);
+            assert_eq!(actions[2], 20.);
+            assert_eq!(add[2], 20.);
         }
         drop(rt);
         std::fs::remove_dir_all(path).unwrap();

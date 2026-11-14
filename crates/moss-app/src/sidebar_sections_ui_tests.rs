@@ -470,8 +470,8 @@ fn disclosure_replaces_the_page_icon_and_section_caret_follows_its_title() {
         .unwrap()
         .0;
     assert_eq!(slot[2..], [20., 20.]);
-    assert!((slot[0] - row[0] - 3.).abs() < 1.);
-    assert!((slot[1] - row[1] - 3.).abs() < 1.);
+    assert!((slot[0] - row[0] - 5.).abs() < 1.);
+    assert!((slot[1] - row[1] - 4.).abs() < 1.);
     let (x, y) = rt.find(&format!("page-icon-{}", parent.id)).unwrap();
     rt.pointer_move(x, y);
     rt.frame(0.);

@@ -39,6 +39,41 @@ pub fn compact_view(s: &State, prop: &Property, value: Option<&Value>, t: Theme)
     view_with_size(s, prop, value, t, Some(13.))
 }
 
+pub fn board_view(s: &State, prop: &Property, value: Option<&Value>, t: Theme) -> El {
+    if prop.kind != PropertyKind::Relation {
+        return compact_view(s, prop, value, t);
+    }
+    let mut links = col().min_w(0.).gap(2.);
+    if let Some(value) = value {
+        for (index, name) in relation_labels(s, prop, value).into_iter().enumerate() {
+            links = links.child(relation_link("board", prop, index, name, t));
+        }
+    }
+    links
+}
+
+fn relation_link(view: &str, prop: &Property, index: usize, name: String, t: Theme) -> El {
+    let underline = Span::new(0, name.len()).underline(t.line);
+    row()
+        .key(format!("{view}-relation-{}-{index}", prop.id))
+        .min_w(0.)
+        .h(20.)
+        .center_y()
+        .gap(4.)
+        .child(rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted))
+        .child(
+            rune::rich(name, vec![underline])
+                .font(
+                    TextStyle::new(13. * t.text_scale, 600.)
+                        .family(t.family)
+                        .lh(20. * t.text_scale),
+                )
+                .color(t.text)
+                .min_w(0.)
+                .truncate(),
+        )
+}
+
 fn view_with_size(
     s: &State,
     prop: &Property,
@@ -73,26 +108,7 @@ fn view_with_size(
             .into_iter()
             .enumerate()
         {
-            let underline = Span::new(0, name.len()).underline(t.line);
-            links = links.child(
-                row()
-                    .key(format!("calendar-relation-{}-{index}", prop.id))
-                    .min_w(0.)
-                    .center_y()
-                    .gap(4.)
-                    .child(rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted))
-                    .child(
-                        rune::rich(name, vec![underline])
-                            .font(
-                                TextStyle::new(13. * t.text_scale, 600.)
-                                    .family(t.family)
-                                    .lh(20. * t.text_scale),
-                            )
-                            .color(t.text)
-                            .min_w(0.)
-                            .truncate(),
-                    ),
-            );
+            links = links.child(relation_link("calendar", prop, index, name, t));
         }
         return links;
     }

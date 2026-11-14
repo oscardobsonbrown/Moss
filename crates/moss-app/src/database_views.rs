@@ -3,6 +3,8 @@ use rune::Tx;
 
 #[derive(Default)]
 pub struct DatabaseViews {
+    pub table_move: Option<crate::table_columns::Move>,
+    pub table_resize: Option<crate::table_columns::Resize>,
     pub calendar: crate::calendar_view::CalendarState,
     pub board: crate::board_view::BoardState,
     pub board_ui: crate::board_interaction::BoardUi,

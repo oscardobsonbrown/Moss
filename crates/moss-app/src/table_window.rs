@@ -19,7 +19,9 @@ use std::{
 };
 
 const ROW: f32 = 38.;
-const WINDOW: usize = 256;
+pub(crate) const WINDOW: usize = 1000;
+pub(crate) const INITIAL_WINDOW: usize = 256;
+const PREFETCH_MARGIN: usize = 320;
 const OVERSCAN: usize = 12;
 static GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -74,20 +76,33 @@ impl TableWindow {
 }
 
 pub fn supported(tab: &Tab) -> bool {
-    let Some(view) = tab.database.as_ref().and_then(|db| db.views.get(tab.view)) else {
-        return false;
-    };
+    tab.database
+        .as_ref()
+        .and_then(|db| db.views.get(tab.view))
+        .is_some_and(|view| supported_view(view, &tab.title_search, tab.offset))
+}
+
+fn supported_view(view: &moss_core::DatabaseView, search: &str, offset: u64) -> bool {
     view.kind == ViewKind::Table
         && view.query.filter.is_none()
         && view.query.sorts.is_empty()
         && view.query.group_by.is_none()
-        && tab.title_search.is_empty()
-        && tab.offset == 0
+        && search.is_empty()
+        && offset == 0
         && !view
             .config
             .get("wrap_cells")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
+}
+
+pub fn initial_limit(view: &moss_core::DatabaseView, search: &str, offset: u64) -> u32 {
+    let limit = crate::records::view_load_limit(view);
+    if supported_view(view, search, offset) {
+        limit.min(INITIAL_WINDOW as u32)
+    } else {
+        limit
+    }
 }
 
 #[derive(Clone)]
@@ -313,15 +328,16 @@ impl State {
         let covered = window.total.is_some()
             && start >= cached_start
             && end <= cached_end
-            && (start < 32 || start >= cached_start + 32)
-            && (total.is_some_and(|n| cached_end >= n) || end.saturating_add(32) <= cached_end);
+            && (cached_start == 0 || start >= cached_start + PREFETCH_MARGIN)
+            && (total.is_some_and(|n| cached_end >= n)
+                || end.saturating_add(PREFETCH_MARGIN) <= cached_end);
         if covered && !window.invalidate_pending && !window.force_reload {
             return false;
         }
         if window.error.is_some() {
             return false;
         }
-        let desired = start.saturating_sub(64) / 64 * 64;
+        let desired = start.saturating_sub(PREFETCH_MARGIN) / 64 * 64;
         if window.loading && window.desired_start == Some(desired as u64) {
             return false;
         }
@@ -684,8 +700,14 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
         let visible =
             first.saturating_sub(OVERSCAN).min(limit)..last.saturating_add(OVERSCAN).min(limit);
         if visible != window.visible {
+            let cache_start = window.start as usize;
+            let cache_end = cache_start.saturating_add(window.window_len);
+            if visible.start < cache_start || visible.end > cache_end
+                || window.visible.start < cache_start || window.visible.end > cache_end
+            {
+                changed = true;
+            }
             window.visible = visible.clone();
-            changed = true;
         }
         if !is_editing(s, index) {
             changed |= s.request_table_window(visible);

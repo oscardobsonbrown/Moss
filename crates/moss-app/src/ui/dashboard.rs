@@ -532,7 +532,7 @@ fn render_records(data: &WidgetData, widget_id: &str, monday: bool, t: Theme) ->
                 .iter()
                 .position(|v| v.id == data.view.id)
                 .unwrap_or(0);
-            let props: Vec<_> = moss_core::record_layout::columns(&data.database)
+            let props: Vec<_> = moss_core::record_layout::columns_for_view(&data.database, index)
                 .into_iter()
                 .filter(|p| super::property_visibility::visible(&data.database, index, &p.id))
                 .collect();

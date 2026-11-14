@@ -138,7 +138,7 @@ pub fn view(s: &State, t: Theme) -> El {
                 .label(&item.name)
                 .focusable(true)
                 .focus_selected(active)
-                .child(rune::icon(super::view_icons::toolbar_icon(item.kind), 16.).color(color))
+                .child(rune::icon(super::view_icons::for_view(item), 16.).color(color))
                 .child(
                     t.label(&item.name, color)
                         .font(TextStyle::new(14., 500.).family(t.family))

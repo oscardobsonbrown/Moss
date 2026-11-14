@@ -6,7 +6,7 @@ pub fn popup(s: &State, t: Theme) -> El {
     let width = rune::memo::layout_with("workspace-picker", |rect| rect[2]).unwrap_or(254.);
     let header = row()
         .w_full()
-        .px(6.)
+        .px(8.)
         .py(6.)
         .gap(8.)
         .center_y()
@@ -100,7 +100,7 @@ pub fn popup(s: &State, t: Theme) -> El {
                 .child(rule(t))
                 .child(settings)
                 .child(rule(t))
-                .child(label("On this Mac", t.muted).px(6.).py(6.))
+                .child(label("On this Mac", t.muted).px(8.).py(6.))
                 .child(list)
                 .children(
                     s.error
@@ -120,7 +120,7 @@ fn item(key: impl Into<String>, name: &str, t: Theme) -> El {
         .key(key)
         .w_full()
         .h(30.)
-        .px(6.)
+        .px(8.)
         .gap(8.)
         .center_y()
         .radius(5.)

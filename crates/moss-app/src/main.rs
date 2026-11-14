@@ -36,6 +36,7 @@ mod sidebar_sections;
 mod sidebar_tree;
 mod simple_table;
 mod state;
+mod table_columns;
 mod table_summaries;
 mod table_window;
 mod ui;

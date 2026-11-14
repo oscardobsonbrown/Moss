@@ -62,6 +62,11 @@ impl State {
                         .and_then(|view_id| db.views.iter().position(|view| &view.id == view_id))
                 })
                 .unwrap_or(0);
+            let limit = database
+                .as_ref()
+                .and_then(|db| db.views.get(selected_view))
+                .map(|view| crate::table_window::initial_limit(view, "", 0))
+                .unwrap_or(100) as usize;
             let mut records = if let Some(db) = &database {
                 let mut query = db
                     .views
@@ -69,21 +74,11 @@ impl State {
                     .map(|view| view.query.clone())
                     .unwrap_or_default();
                 query.offset = 0;
-                query.limit = db
-                    .views
-                    .get(selected_view)
-                    .map(crate::records::view_load_limit)
-                    .unwrap_or(100)
-                    + 1;
+                query.limit = limit as u32 + 1;
                 self.store.query_records(&db.id, &query)?
             } else {
                 vec![]
             };
-            let limit = database
-                .as_ref()
-                .and_then(|db| db.views.get(selected_view))
-                .map(crate::records::view_load_limit)
-                .unwrap_or(100) as usize;
             let has_more_records = records.len() > limit;
             records.truncate(limit);
             let cursor_query = database

@@ -33,8 +33,13 @@ fn all_views(rt: &mut Runtime<State>, label: &str) {
             tx.instant();
         });
         rt.frame(1. / 120.);
-        if key == "calendar" && !label.starts_with("Page icon ") {
-            assert!(rt.find("record-icon-calendar-0").is_none());
+        if (key == "calendar" || key == "board") && !label.starts_with("Page icon ") {
+            let icon = if key == "board" {
+                format!("board-icon-{}", rt.state.tab().unwrap().records[0].id)
+            } else {
+                "record-icon-calendar-0".to_owned()
+            };
+            assert!(rt.find(&icon).is_none());
         } else {
             assert_eq!(icon_label(rt, key), label, "view {key}");
         }
@@ -73,7 +78,11 @@ fn page_icons_follow_body_content_and_preserve_custom_icons_across_views() {
             tx.instant();
         });
         rt.frame(1. / 120.);
-        assert_eq!(icon_label(&rt, key), "Empty page");
+        if key == "board" {
+            assert!(rt.find(&format!("board-icon-{id}")).is_none());
+        } else {
+            assert_eq!(icon_label(&rt, key), "Empty page");
+        }
         press(&mut rt, Key::Escape);
     }
 

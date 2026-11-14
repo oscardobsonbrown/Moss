@@ -22,8 +22,11 @@ fn sidebar_controls_and_history_work_at_narrow_and_wide_sizes() {
             let header = rt.presented("sidebar-header").unwrap().0;
             let search = rt.presented("search-button").unwrap().0;
             let tabs = rt.presented("tab-strip").unwrap().0;
+            let compose = rt.presented("sidebar-compose").unwrap().0;
+            let section_action = rt.presented("sidebar-manage-sections").unwrap().0;
             assert!(header[1] + header[3] <= search[1]);
             assert!(tabs[0] >= search[0] + search[2]);
+            assert!((compose[0] + compose[2] / 2. - section_action[0] - section_action[2] / 2.).abs() < 1.);
             click(&mut rt, "sidebar-collapse");
             assert!(rt.state.sidebar_collapsed());
             assert!(rt.find("sidebar").is_some());

@@ -37,49 +37,56 @@ impl State {
                 return;
             }
         };
-        let anchor = if self
-            .record_peek
-            .as_ref()
-            .is_some_and(|p| p.record.id == record_id)
-        {
-            format!("peek-property-{property_id}")
-        } else if self
-            .tab()
-            .and_then(|tab| tab.record_context.as_ref())
-            .is_some_and(|(_, record)| record.id == record_id)
-        {
-            format!("page-place-{property_id}")
-        } else if self
-            .tab()
-            .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-            .is_some_and(|v| v.kind == ViewKind::Calendar)
-        {
-            let Some(anchor) = self.database_views.calendar.property_anchor.clone() else {
-                return;
-            };
-            anchor
-        } else if self
-            .tab()
-            .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-            .is_some_and(|v| v.kind == ViewKind::Board)
-        {
-            format!("board-value-{record_id}-{property_id}")
-        } else if let Some(index) = self
-            .tab()
-            .and_then(|tab| tab.records.iter().position(|r| r.id == record_id))
-        {
-            match self
+        let anchor =
+            if self
+                .record_peek
+                .as_ref()
+                .is_some_and(|p| p.record.id == record_id)
+            {
+                format!("peek-property-{property_id}")
+            } else if self
+                .tab()
+                .and_then(|tab| tab.record_context.as_ref())
+                .is_some_and(|(_, record)| record.id == record_id)
+            {
+                format!("page-place-{property_id}")
+            } else if self
                 .tab()
                 .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-                .map(|view| view.kind)
+                .is_some_and(|v| v.kind == ViewKind::Calendar)
             {
-                Some(ViewKind::Gallery) => format!("gallery-value-{index}-{property_id}"),
-                Some(ViewKind::List) => format!("list-value-{index}-{property_id}"),
-                _ => format!("cell-{index}-{property_id}"),
-            }
-        } else {
-            return;
-        };
+                let Some(anchor) = self.database_views.calendar.property_anchor.clone() else {
+                    return;
+                };
+                anchor
+            } else if self
+                .tab()
+                .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
+                .is_some_and(|v| v.kind == ViewKind::Board)
+            {
+                if record.values.get(property_id).is_none_or(|value| {
+                    value.is_null() || value.as_str().is_some_and(str::is_empty)
+                }) {
+                    format!("board-card-{record_id}")
+                } else {
+                    format!("board-value-{record_id}-{property_id}")
+                }
+            } else if let Some(index) = self
+                .tab()
+                .and_then(|tab| tab.records.iter().position(|r| r.id == record_id))
+            {
+                match self
+                    .tab()
+                    .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
+                    .map(|view| view.kind)
+                {
+                    Some(ViewKind::Gallery) => format!("gallery-value-{index}-{property_id}"),
+                    Some(ViewKind::List) => format!("list-value-{index}-{property_id}"),
+                    _ => format!("cell-{index}-{property_id}"),
+                }
+            } else {
+                return;
+            };
         let expected = record
             .values
             .get(property_id)
