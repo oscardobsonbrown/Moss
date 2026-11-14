@@ -106,14 +106,18 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     "Move up",
                     &phosphor::ARROW_UP,
                     -1,
-                    index > 0,
+                    s.sidebar_sections.sections[..index]
+                        .iter()
+                        .any(|section| !section.hidden),
                 ),
                 (
                     "sidebar-section-down",
                     "Move down",
                     &phosphor::ARROW_DOWN,
                     1,
-                    index + 1 < s.sidebar_sections.sections.len(),
+                    s.sidebar_sections.sections[index + 1..]
+                        .iter()
+                        .any(|section| !section.hidden),
                 ),
             ] {
                 if visible {
@@ -151,6 +155,23 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     tx.instant();
                 }),
             );
+            let target = id.clone();
+            body = body.child(
+                item(
+                    "sidebar-section-hide",
+                    "Hide section",
+                    &phosphor::EYE_SLASH,
+                    t,
+                )
+                .on_press_tx(move |s: &mut State, tx| {
+                    if s.set_sidebar_section_hidden(&target, true) {
+                        s.sidebar_section_menu = None;
+                    } else if let Some(menu) = &mut s.sidebar_section_menu {
+                        menu.error = s.error.take();
+                    }
+                    tx.instant();
+                }),
+            );
             let anchor = current.anchor.clone();
             body = body.child(rule(t)).child(
                 item("sidebar-section-new", "New section", &phosphor::PLUS, t).on_press_tx(
@@ -177,6 +198,45 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     }),
                 );
             }
+        }
+        SectionMenuMode::Visibility => {
+            title = "Show sections";
+            let mut sections = col().w_full().min_h(0.).max_h(300.).scroll(ScrollSpec {
+                stick_bottom: false,
+            });
+            for section in &s.sidebar_sections.sections {
+                let id = section.id.clone();
+                let hidden = section.hidden;
+                sections = sections.child(
+                    item(
+                        &format!("sidebar-section-visibility-{id}"),
+                        &section.name,
+                        if hidden {
+                            &phosphor::EYE_SLASH
+                        } else {
+                            &phosphor::EYE
+                        },
+                        t,
+                    )
+                    .role("checkbox")
+                    .checked(!hidden)
+                    .child(menu::end(
+                        format!("sidebar-section-visibility-check-{id}"),
+                        (!hidden).then_some(&phosphor::CHECK),
+                        t,
+                    ))
+                    .on_press_tx(move |s: &mut State, tx| {
+                        if !s.set_sidebar_section_hidden(&id, !hidden) {
+                            let error = s.error.take();
+                            if let Some(menu) = &mut s.sidebar_section_menu {
+                                menu.error = error;
+                            }
+                        }
+                        tx.instant();
+                    }),
+                );
+            }
+            body = body.child(sections);
         }
         SectionMenuMode::AddPage(section_id) => {
             title = "Add page to section";

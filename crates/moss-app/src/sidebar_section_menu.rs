@@ -10,6 +10,7 @@ pub enum SectionMenuMode {
     Rename(String),
     AddPage(String),
     ChooseSection(String),
+    Visibility,
 }
 
 pub struct SidebarSectionMenu {

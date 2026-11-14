@@ -19,3 +19,5 @@ Pages can be dragged between Private, Favorites and custom sections. Custom sect
 Pages in Private can also be dragged to a new position among their siblings. The order is stored with each page and works across the paged sidebar list. This does not change the page's parent.
 
 The collapsed and revealed sidebar use the same surface, rows and scroll view. Hover changes the width of that surface without moving the page content. The compact state shows the page icons and section dividers; the revealed state shows their labels and controls.
+
+Sections can be hidden from their options menu and restored with the control beside New section. Visibility is saved per workspace and does not remove pages or shortcuts. When one section is visible, its pages show without a section heading; the visibility control remains available even when every section is hidden.

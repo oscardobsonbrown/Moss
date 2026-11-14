@@ -48,6 +48,129 @@ fn create_section(rt: &mut Runtime<State>, name: &str) -> String {
         .clone()
 }
 
+#[test]
+fn sections_can_be_hidden_restored_and_used_without_a_single_header() {
+    for (dark, scale) in [(false, 1.), (true, 2.)] {
+        let (mut state, path) = fixture();
+        let page = new_page(&mut state, None, "Page");
+        let custom = state.create_sidebar_section("Projects").unwrap();
+        assert!(state.add_page_to_sidebar_section(&custom, &page.id));
+        assert!(state.toggle_sidebar_section("private"));
+        let workspace = state.workspace.id.clone();
+        let mut rt = make_runtime(state, dark, scale);
+        click(&mut rt, "section-actions-recents");
+        click(&mut rt, "sidebar-section-hide");
+        settle(&mut rt);
+        assert!(
+            rt.state
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == "recents")
+                .unwrap()
+                .hidden
+        );
+        click(&mut rt, "sidebar-manage-sections");
+        assert!(matches!(
+            rt.state.sidebar_section_menu.as_ref().map(|m| &m.mode),
+            Some(crate::sidebar_section_menu::SectionMenuMode::Visibility)
+        ));
+        click(&mut rt, "sidebar-section-visibility-favorites");
+        click(&mut rt, &format!("sidebar-section-visibility-{custom}"));
+        settle(&mut rt);
+        assert!(rt.find("section-header-private").is_none());
+        assert!(
+            rt.find(&format!("page-open-{}", page.id)).is_some(),
+            "the last section stays open"
+        );
+        click(&mut rt, "sidebar-section-visibility-private");
+        settle(&mut rt);
+        assert!(rt.find(&format!("page-open-{}", page.id)).is_none());
+        assert!(rt.find("sidebar-manage-sections").is_some());
+        click(&mut rt, "sidebar-section-visibility-private");
+        settle(&mut rt);
+        assert!(rt.find(&format!("page-open-{}", page.id)).is_some());
+        click(&mut rt, "sidebar-section-visibility-recents");
+        settle(&mut rt);
+        assert!(rt.find("section-header-private").is_some());
+        assert!(rt.find("section-header-recents").is_some());
+        drop(rt);
+        let reopened = State::open(path.clone(), Some(&workspace)).unwrap();
+        assert!(
+            reopened
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == "favorites")
+                .unwrap()
+                .hidden
+        );
+        let saved = reopened
+            .sidebar_sections
+            .sections
+            .iter()
+            .find(|s| s.id == custom)
+            .unwrap();
+        assert!(saved.hidden && saved.page_ids.contains(&page.id));
+        assert!(
+            !reopened
+                .sidebar_sections
+                .sections
+                .iter()
+                .find(|s| s.id == "private")
+                .unwrap()
+                .hidden
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn pages_can_be_reordered_when_the_only_section_has_no_header() {
+    let (mut state, path) = fixture();
+    let first = new_page(&mut state, None, "First");
+    let last = new_page(&mut state, None, "Last");
+    assert!(state.set_sidebar_section_hidden("recents", true));
+    assert!(state.set_sidebar_section_hidden("favorites", true));
+    let mut rt = make_runtime(state, false, 1.);
+    assert!(rt.find("section-header-private").is_none());
+    let (x, y) = rt.find(&format!("page-open-{}", last.id)).unwrap();
+    let target = rt
+        .presented(&format!("page-highlight-{}", first.id))
+        .unwrap()
+        .0;
+    rt.pointer_down(x, y);
+    rt.pointer_move(target[0] + 30., target[1] + 3.);
+    rt.frame(0.02);
+    rt.pointer_up(target[0] + 30., target[1] + 3.);
+    settle(&mut rt);
+    let pages = rt
+        .state
+        .store
+        .page_children(
+            &rt.state.workspace.id,
+            None,
+            moss_core::PagePosition::Start,
+            50,
+        )
+        .unwrap();
+    assert!(
+        pages
+            .items
+            .iter()
+            .position(|p| p.page.id == last.id)
+            .unwrap()
+            < pages
+                .items
+                .iter()
+                .position(|p| p.page.id == first.id)
+                .unwrap()
+    );
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 fn drag_page(rt: &mut Runtime<State>, source: &str, target: &str) {
     let (x, y) = rt
         .find(source)
@@ -785,6 +908,7 @@ fn many_section_shortcuts_keep_mounted_rows_bounded() {
             kind: SidebarSectionKind::Custom,
             page_ids: pages.iter().map(|p| p.id.clone()).collect(),
             collapsed: false,
+            hidden: false,
         });
         s.sidebar_sections.pages.insert(section, pages);
     }

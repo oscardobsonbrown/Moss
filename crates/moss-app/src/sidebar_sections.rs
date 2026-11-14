@@ -26,6 +26,7 @@ pub struct SidebarSection {
     pub kind: SidebarSectionKind,
     pub page_ids: Vec<String>,
     pub collapsed: bool,
+    pub hidden: bool,
 }
 
 #[derive(Default)]
@@ -102,6 +103,7 @@ fn sections_for(prefs: &Preferences, workspace: &str) -> Vec<SidebarSection> {
         if let Some(builtin) = builtins.iter().find(|builtin| builtin.id == saved.id) {
             let mut section = builtin.clone();
             section.collapsed = saved.collapsed;
+            section.hidden = saved.hidden;
             sections.push(section);
         } else if saved.kind == SidebarSectionKind::Custom && custom_count < MAX_SECTIONS - 3 {
             let mut page_ids = BTreeSet::new();
@@ -118,6 +120,7 @@ fn sections_for(prefs: &Preferences, workspace: &str) -> Vec<SidebarSection> {
                 kind: SidebarSectionKind::Custom,
                 page_ids,
                 collapsed: saved.collapsed,
+                hidden: saved.hidden,
             });
             custom_count += 1;
         }
@@ -351,13 +354,17 @@ impl State {
     }
     pub fn move_sidebar_section(&mut self, id: &str, offset: isize) -> bool {
         self.change_sidebar_sections(|sections, _, _| {
-            let from = sections
+            let visible: Vec<_> = sections
                 .iter()
-                .position(|s| s.id == id)
+                .enumerate()
+                .filter_map(|(i, section)| (!section.hidden).then_some(i))
+                .collect();
+            let from = visible
+                .iter()
+                .position(|&i| sections[i].id == id)
                 .ok_or("Section not found.")?;
-            let to = from.saturating_add_signed(offset).min(sections.len() - 1);
-            let section = sections.remove(from);
-            sections.insert(to, section);
+            let to = from.saturating_add_signed(offset).min(visible.len() - 1);
+            sections.swap(visible[from], visible[to]);
             Ok(())
         })
     }
@@ -395,6 +402,16 @@ impl State {
                 .find(|s| s.id == id)
                 .ok_or("Section not found.")?;
             section.collapsed = !section.collapsed;
+            Ok(())
+        })
+    }
+    pub fn set_sidebar_section_hidden(&mut self, id: &str, hidden: bool) -> bool {
+        self.change_sidebar_sections(|sections, _, _| {
+            let section = sections
+                .iter_mut()
+                .find(|section| section.id == id)
+                .ok_or("Section not found.")?;
+            section.hidden = hidden;
             Ok(())
         })
     }
@@ -439,6 +456,16 @@ impl State {
         before: Option<&str>,
     ) -> bool {
         if source == "private" && target == "private" {
+            let visible = {
+                let prefs = self.shared_preferences.lock().unwrap();
+                sections_for(&prefs, &self.workspace.id)
+                    .iter()
+                    .any(|section| section.id == "private" && !section.hidden)
+            };
+            if !visible {
+                self.error = Some("The section is hidden.".into());
+                return false;
+            }
             return match self
                 .store
                 .reorder_sidebar_page(&self.workspace.id, id, before)
@@ -471,6 +498,9 @@ impl State {
                 .ok_or("Target section not found.")?;
             let from_kind = sections[from].kind;
             let to_kind = sections[to].kind;
+            if sections[from].hidden || sections[to].hidden {
+                return Err("The source or target section is hidden.".into());
+            }
             if from_kind == SidebarSectionKind::Recents || to_kind == SidebarSectionKind::Recents {
                 return Err("Recent pages cannot be moved.".into());
             }
@@ -775,6 +805,80 @@ mod tests {
     }
 
     #[test]
+    fn failed_visibility_save_does_not_hide_a_section() {
+        let (mut s, path) = fixture();
+        let before = s
+            .shared_preferences
+            .lock()
+            .unwrap()
+            .sidebar_sections
+            .clone();
+        s.path = path.join("missing-directory");
+        assert!(!s.set_sidebar_section_hidden("private", true));
+        assert!(
+            !s.sidebar_sections
+                .sections
+                .iter()
+                .find(|section| section.id == "private")
+                .unwrap()
+                .hidden
+        );
+        assert_eq!(
+            s.shared_preferences.lock().unwrap().sidebar_sections,
+            before
+        );
+        s.path = path.clone();
+        drop(s);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn section_visibility_is_workspace_scoped_and_keeps_shortcuts() {
+        let (mut s, path) = fixture();
+        let item = page(&mut s, None, "Item");
+        let custom = s.create_sidebar_section("Projects").unwrap();
+        assert!(s.add_page_to_sidebar_section(&custom, &item.id));
+        assert!(s.set_sidebar_section_hidden(&custom, true));
+        assert!(s.set_sidebar_section_hidden("favorites", true));
+        assert!(s.move_sidebar_section("private", -1));
+        let visible: Vec<_> = s
+            .sidebar_sections
+            .sections
+            .iter()
+            .filter(|section| !section.hidden)
+            .map(|section| section.id.as_str())
+            .collect();
+        assert_eq!(visible, ["private", "recents"]);
+        assert!(!s.move_sidebar_page(&item.id, "private", &custom, None));
+        assert_eq!(s.sidebar_sections.pages[&custom][0].id, item.id);
+        let other = s.store.create_workspace("Other", "").unwrap();
+        let mut other_state = State::open(path.clone(), Some(&other.id)).unwrap();
+        other_state.shared_preferences = s.shared_preferences.clone();
+        assert!(other_state.refresh_sidebar_sections());
+        assert!(
+            other_state
+                .sidebar_sections
+                .sections
+                .iter()
+                .all(|section| !section.hidden)
+        );
+        let workspace = s.workspace.id.clone();
+        drop(other_state);
+        drop(s);
+        let reopened = State::open(path.clone(), Some(&workspace)).unwrap();
+        let saved = reopened
+            .sidebar_sections
+            .sections
+            .iter()
+            .find(|section| section.id == custom)
+            .unwrap();
+        assert!(saved.hidden && saved.page_ids.contains(&item.id));
+        assert!(reopened.store.get_page(&item.id).unwrap().is_some());
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
     fn record_peek_adds_recent_only_on_open_and_updates_renamed_label() {
         let (mut s, path) = fixture();
         s.new_page(true, None);
@@ -844,6 +948,7 @@ mod tests {
             kind: SidebarSectionKind::Custom,
             page_ids: vec!["ignored".into()],
             collapsed: true,
+            hidden: false,
         }];
         for i in 0..45 {
             raw.push(SidebarSection {
@@ -852,6 +957,7 @@ mod tests {
                 kind: SidebarSectionKind::Custom,
                 page_ids: (0..150).map(|n| format!("page-{n}")).collect(),
                 collapsed: false,
+                hidden: false,
             });
         }
         s.shared_preferences

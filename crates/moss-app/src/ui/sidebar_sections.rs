@@ -27,7 +27,7 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
         .sidebar_sections
         .sections
         .iter()
-        .filter(|item| item.id != id)
+        .filter(|item| item.id != id && !item.hidden)
         .filter_map(|item| {
             let target = item.id.clone();
             rune::memo::window_layout_with(&format!("section-header-{}", item.id), move |rect| {
@@ -158,9 +158,20 @@ pub enum Item {
 
 fn items(s: &State) -> Vec<Item> {
     let mut rows = Vec::new();
+    let visible_count = s
+        .sidebar_sections
+        .sections
+        .iter()
+        .filter(|section| !section.hidden)
+        .count();
     for (index, section) in s.sidebar_sections.sections.iter().enumerate() {
-        rows.push(Item::Header(index));
-        if section.collapsed {
+        if section.hidden {
+            continue;
+        }
+        if visible_count > 1 {
+            rows.push(Item::Header(index));
+        }
+        if section.collapsed && visible_count > 1 {
             continue;
         }
         match section.kind {
@@ -255,7 +266,17 @@ pub fn page_drag_preview(s: &State, t: Theme) -> Option<El> {
 
 pub fn view(s: &State, t: Theme) -> El {
     let rows = Rc::new(items(s));
-    let mut section = None;
+    let mut visible = s
+        .sidebar_sections
+        .sections
+        .iter()
+        .filter(|section| !section.hidden);
+    let first = visible.next();
+    let mut section = if visible.next().is_none() {
+        first.map(|section| section.id.clone())
+    } else {
+        None
+    };
     let mut zones = Vec::new();
     for item in rows.iter().copied() {
         let (key, page, parent) = match item {
@@ -366,6 +387,26 @@ fn new_section(s: &State, t: Theme) -> El {
         .focusable(!compact)
         .child(rune::icon(&phosphor::PLUS, 14.).color(t.faint).w(20.))
         .child(t.label("New section", t.faint))
+        .child(el().grow(1.))
+        .child(
+            row()
+                .key("sidebar-manage-sections")
+                .size(24., 24.)
+                .center()
+                .radius(4.)
+                .hover(t.selected)
+                .role("button")
+                .label("Show or hide sections")
+                .focusable(!compact)
+                .child(rune::icon(&phosphor::SLIDERS_HORIZONTAL, 16.).color(t.faint))
+                .on_press_tx(|s: &mut State, tx| {
+                    s.open_sidebar_section_menu(
+                        SectionMenuMode::Visibility,
+                        "sidebar-manage-sections",
+                    );
+                    tx.instant();
+                }),
+        )
         .on_press(|s: &mut State| {
             s.open_sidebar_section_menu(SectionMenuMode::Create, "sidebar-new-section")
         })
