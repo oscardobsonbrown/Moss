@@ -11,6 +11,7 @@ hot = ["rune/hot"]
 rune = { git = "https://github.com/anomalyco/rune", rev = "f3d04f3f2069d177d04c963b0ba9f6b2065e46eb", features = ["native-file-dialog"] }
 moss-core.workspace = true
 moss-engine.workspace = true
+moss-mcp = { path = "../moss-mcp" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

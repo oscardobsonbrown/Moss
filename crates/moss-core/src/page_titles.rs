@@ -39,6 +39,8 @@ impl Store {
         expected_title: &str,
         new_title: &str,
     ) -> Result<Page> {
+        let actor = self.history_actor.clone();
+        let coalesce = self.history_coalesce;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -49,6 +51,17 @@ impl Store {
         if page.title != expected_title {
             return Err(invalid("title changed in another editor"));
         }
+        crate::history::record_text_change(
+            &tx,
+            &page,
+            "page",
+            &page.id,
+            "title",
+            &serde_json::json!(page.title),
+            &serde_json::json!(new_title),
+            actor.as_ref(),
+            coalesce,
+        )?;
         page.title = new_title.to_owned();
         page.updated_at = now();
         tx.execute(

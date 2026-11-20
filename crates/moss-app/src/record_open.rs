@@ -63,6 +63,7 @@ impl State {
                 .get_record(record_id)?
                 .ok_or("Record was not found")?;
             let mut blocks = self.store.get_blocks(&page.id)?;
+            let saved_blocks = blocks.clone();
             if blocks.is_empty() {
                 blocks.push(Block::paragraph(&page.id, "", 0));
             }
@@ -72,6 +73,7 @@ impl State {
             title.focused = true;
             Ok(RecordPeek {
                 database,
+                saved_blocks,
                 record,
                 page,
                 title,
@@ -103,6 +105,7 @@ impl State {
                     self.open_page(&page_id, true);
                 } else {
                     self.record_peek = Some(peek);
+                    self.load_comments(&page_id);
                     self.modal = None;
                     self.record_sidebar_recent(&page_id);
                 }

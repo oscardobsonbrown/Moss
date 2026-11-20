@@ -1,6 +1,12 @@
 // Phosphor Regular. Vendored SVGs and license are in assets/phosphor.
 use rune::Icon;
 
+pub const HEXAGON_FILL: Icon = Icon {
+    name: "phosphor-hexagon-fill",
+    view: 256.,
+    body: include_str!("../../assets/phosphor/fill/hexagon-fill.svg"),
+};
+
 macro_rules! icons {
     ($($id:ident => $name:literal),+ $(,)?) => {
         $(pub const $id: Icon = Icon {

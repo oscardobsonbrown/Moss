@@ -37,6 +37,49 @@ fn settle(rt: &mut Runtime<State>) {
     }
 }
 
+#[test]
+fn agent_setup_is_keyboard_accessible_with_access_off() {
+    fn tab_to(rt: &mut Runtime<State>, target: &str) {
+        for _ in 0..20 {
+            let tree = rt.accessibility_tree();
+            if tree
+                .nodes
+                .iter()
+                .any(|(id, node)| *id == tree.focus && node.author_id() == Some(target))
+            {
+                return;
+            }
+            super::press(rt, Key::Tab);
+        }
+        panic!("Tab did not reach {target}");
+    }
+
+    let (mut rt, path) = runtime(220., 850., false);
+    rt.set_full_keyboard_access(true);
+    click(&mut rt, "settings-button");
+    settle(&mut rt);
+    tab_to(&mut rt, "agent-setup-open");
+    super::press(&mut rt, Key::Text(" ".into()));
+    assert!(matches!(rt.state.modal, Some(state::Modal::AgentSetup { .. })));
+    assert!(!rt.state.prefs.mcp_enabled);
+
+    tab_to(&mut rt, "agent-setup-copy-codex");
+    tab_to(&mut rt, "agent-setup-copy-json");
+    super::press(&mut rt, Key::Text(" ".into()));
+    assert!(matches!(rt.state.modal, Some(state::Modal::AgentSetup { feedback: Some(_) })));
+    if let Some(copy) = rt.copy_request.take() {
+        let config: serde_json::Value = serde_json::from_str(copy.content().text()).unwrap();
+        let moss = &config["mcpServers"]["moss"];
+        assert_eq!(moss["env"]["MOSS_DATA_DIR"].as_str(), path.to_str());
+        assert!(moss["command"].as_str().unwrap().ends_with("/moss-mcp"));
+    }
+    tab_to(&mut rt, "agent-setup-back");
+    super::press(&mut rt, Key::Text(" ".into()));
+    assert!(rt.state.modal == Some(state::Modal::Settings));
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 fn info(rt: &Runtime<State>, name: &str) -> rune::runtime::ElementInfo {
     rt.elements()
         .into_iter()

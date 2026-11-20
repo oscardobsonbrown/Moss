@@ -2,6 +2,65 @@ use super::*;
 
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
+#[test]
+fn stale_open_page_keeps_its_draft_when_another_editor_saves() {
+    let path = std::env::temp_dir().join(format!("moss-shared-{}", new_id()));
+    let mut first = State::open(path.clone(), None).unwrap();
+    let page_id = first.tab().unwrap().page.id.clone();
+    first.tabs[first.active].blocks[0].edit.replace_text("original");
+    first.save_blocks();
+    let mut second = State::open(path.clone(), Some(&first.workspace.id)).unwrap();
+    second.open_page(&page_id, false);
+    first.tabs[first.active].blocks[0].edit.replace_text("first editor");
+    first.save_blocks();
+    second.tabs[second.active].blocks[0].edit.replace_text("second draft");
+    second.save_blocks();
+    assert!(second.tab().unwrap().dirty_blocks);
+    assert_eq!(second.tab().unwrap().blocks[0].edit.text, "second draft");
+    assert_eq!(first.store.get_blocks(&page_id).unwrap()[0].text, "first editor");
+    drop(first);
+    drop(second);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn collaboration_refreshes_another_block_without_disturbing_focus() {
+    let path = std::env::temp_dir().join(format!("moss-live-{}", new_id()));
+    let mut state = State::open(path.clone(), None).unwrap();
+    let page_id = state.tab().unwrap().page.id.clone();
+    state.tabs[state.active].blocks[0].edit.replace_text("first");
+    state.save_blocks();
+    state.add_block(0);
+    state.tabs[state.active].blocks[1].edit.replace_text("second");
+    state.save_blocks();
+    state.tabs[state.active].blocks[1].edit.focused = false;
+    state.tabs[state.active].blocks[0].edit.focused = true;
+    state.tabs[state.active].blocks[0].edit.set_caret(2);
+    state.collaboration_live = true;
+    let mut rt = Runtime::new(state, crate::ui::view, (1200., 900.), Env::default());
+    rt.poll = Some(crate::poll);
+    rt.frame(0.);
+    let mut other = Store::open(path.join("workspace.sqlite3")).unwrap();
+    let expected = other.get_blocks(&page_id).unwrap();
+    let mut changed = expected.clone();
+    changed[1].text = "changed elsewhere".into();
+    other.save_editor_blocks_if_unchanged(&page_id, &expected, &changed).unwrap();
+    rt.frame(0.3);
+    assert_eq!(rt.state.tab().unwrap().blocks[1].edit.text, "changed elsewhere");
+    assert_eq!(rt.state.tab().unwrap().blocks[0].edit.focus, 2);
+    let expected = rt.state.store.get_blocks(&page_id).unwrap();
+    let mut changed = expected.clone();
+    changed[1].text = "changed before disconnect".into();
+    rt.state.store.save_editor_blocks_if_unchanged(&page_id, &expected, &changed).unwrap();
+    rt.state.collaboration_live = false;
+    rt.state.external_refresh_pending = true;
+    rt.frame(0.6);
+    assert_eq!(rt.state.tab().unwrap().blocks[1].edit.text, "changed before disconnect");
+    drop(other);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 fn press(rt: &mut Runtime<State>, key: Key) {
     rt.key(KeyEvent {
         key,

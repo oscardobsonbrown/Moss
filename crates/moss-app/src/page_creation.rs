@@ -55,6 +55,7 @@ impl State {
                 }
             };
             let tab = &mut self.tabs[self.active];
+            tab.saved_blocks = blocks.clone();
             if !blocks.is_empty() {
                 tab.blocks = blocks
                     .into_iter()

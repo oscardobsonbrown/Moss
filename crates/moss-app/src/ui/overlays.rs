@@ -43,6 +43,7 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
             search(s, t),
         ),
         Modal::Settings => ("Settings", 520., settings(s, t)),
+        Modal::AgentSetup { feedback } => ("Connect an agent", 520., agent_setup(s, t, feedback)),
         Modal::Trash => ("Trash", 600., trash(s, t)),
     };
     Some(
@@ -262,6 +263,15 @@ fn settings(s: &State, t: Theme) -> El {
             ),
         )
         .child(el().h(1.).w_full().fill(t.line))
+        .child(label("Local agent access", t.muted))
+        .child(label("Allow local agents to connect while Moss is open.", t.muted).wrap())
+        .child(
+            row().gap(8.).child(agent_access_switch(s, t)).child(
+                button("agent-setup-open", "Connect an agent…", t)
+                    .on_press(|s: &mut State| s.modal = Some(Modal::AgentSetup { feedback: None })),
+            ),
+        )
+        .child(el().h(1.).w_full().fill(t.line))
         .child(label("Workspace", t.muted))
         .child(
             button("export-workspace", "Export workspace archive…", t)
@@ -338,6 +348,88 @@ fn settings(s: &State, t: Theme) -> El {
             t.muted,
         ))
 }
+
+fn agent_access_switch(s: &State, t: Theme) -> El {
+    button("mcp-enabled", if s.prefs.mcp_enabled { "On" } else { "Off" }, t)
+        .role("switch")
+        .label("Local agent access")
+        .checked(s.prefs.mcp_enabled)
+        .on_press(|s: &mut State| s.set_mcp_enabled(!s.prefs.mcp_enabled))
+}
+
+fn agent_setup(s: &State, t: Theme, feedback: Option<&'static str>) -> El {
+    col()
+        .w_full()
+        .gap(10.)
+        .child(label("1. Turn on Local agent access and keep Moss running.", t.text).wrap())
+        .child(label("Connected clients can read and change local workspace data.", t.muted).wrap())
+        .child(row().child(agent_access_switch(s, t)))
+        .child(label("2. Add Moss to an MCP client on this Mac.", t.text).wrap())
+        .child(label("For Codex CLI, paste the command into Terminal. For a client that uses mcpServers JSON, paste the settings into its MCP configuration.", t.muted).wrap())
+        .child(
+            row()
+                .gap(8.)
+                .child(button("agent-setup-copy-codex", "Copy Codex CLI command", t).on_press_tx(
+                    |s: &mut State, tx| copy_agent_setup(s, tx, true),
+                ))
+                .child(button("agent-setup-copy-json", "Copy MCP settings as JSON", t).on_press_tx(
+                    |s: &mut State, tx| copy_agent_setup(s, tx, false),
+                )),
+        )
+        .child(label("3. Start a new session in the client. Ask it to list your Moss workspaces.", t.text).wrap())
+        .child(label("If the client cannot connect, check that Moss is running and Local agent access is on. Then restart the client.", t.muted).wrap())
+        .child(feedback.map_or_else(
+            || el().h(18.).inert().a11y_hidden(),
+            |message| {
+                label(message, t.text)
+                    .key("agent-setup-feedback")
+                    .min_h(18.)
+                    .live_region(LiveRegion::Polite)
+                    .wrap()
+            },
+        ))
+        .child(row().child(
+            button("agent-setup-back", "Back to Settings", t)
+                .on_press(|s: &mut State| s.modal = Some(Modal::Settings)),
+        ))
+}
+
+fn copy_agent_setup(s: &mut State, tx: &mut Tx, codex: bool) {
+    let feedback = match agent_setup_text(&s.path, codex) {
+        Ok(text) => {
+            tx.copy(text);
+            "Copied to the clipboard."
+        }
+        Err(message) => message,
+    };
+    s.modal = Some(Modal::AgentSetup { feedback: Some(feedback) });
+}
+
+fn agent_setup_text(data: &std::path::Path, codex: bool) -> Result<String, &'static str> {
+    let command = std::env::var_os("MOSS_MCP_ADAPTER")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_exe().ok().map(|path| path.with_file_name("moss-mcp")))
+        .filter(|path| path.is_file())
+        .ok_or("The Moss MCP adapter is missing. Reinstall Moss or run cargo build -p moss-mcp in the development checkout.")?;
+    let data = std::path::absolute(data).map_err(|_| "Could not find the Moss data folder.")?;
+    let (Some(command), Some(data)) = (command.to_str(), data.to_str()) else {
+        return Err("The app or data folder path is not valid UTF-8.");
+    };
+    if codex {
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+        Ok(format!(
+            "codex mcp add moss --env {} -- {}",
+            quote(&format!("MOSS_DATA_DIR={data}")),
+            quote(command),
+        ))
+    } else {
+        let settings = serde_json::json!({
+            "mcpServers": { "moss": { "command": command, "env": { "MOSS_DATA_DIR": data } } }
+        });
+        Ok(format!("{settings:#}"))
+    }
+}
+
 fn trash(s: &State, t: Theme) -> El {
     col()
         .gap(8.)

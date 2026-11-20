@@ -1,3 +1,4 @@
+use crate::comments::{CommentAnchor, CommentMessage};
 use crate::{
     Block, BlockKind, Database, Page, PropertyKind, Record, Store, Workspace, new_id, search,
 };
@@ -51,6 +52,21 @@ struct Payload {
     record_trash_roots: Vec<RecordTrashRoot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cover_assets: Vec<CoverAsset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    comments: Vec<ArchivedComment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    history: Vec<crate::history::HistoryEntry>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchivedComment {
+    id: String,
+    page_id: String,
+    anchor: CommentAnchor,
+    resolved: bool,
+    orphaned: bool,
+    created_at: String,
+    messages: Vec<CommentMessage>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,6 +210,90 @@ impl Store {
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let comments = {
+            let mut stmt = self.conn.prepare("SELECT id,page_id,anchor,resolved,orphaned,created_at FROM comment_threads WHERE workspace_id=?1 ORDER BY id")?;
+            let rows = stmt.query_map([workspace_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })?;
+            let mut comments = Vec::new();
+            for row in rows {
+                let (id, page_id, anchor, resolved, orphaned, created_at) = row?;
+                let mut messages = self.conn.prepare("SELECT id,author,body,created_at,kind FROM comment_messages WHERE thread_id=?1 ORDER BY created_at,id")?;
+                let messages = messages
+                    .query_map([&id], |r| {
+                        Ok(CommentMessage {
+                            id: r.get(0)?,
+                            author: r.get(1)?,
+                            text: r.get(2)?,
+                            created_at: r.get(3)?,
+                            kind: r.get(4)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                comments.push(ArchivedComment {
+                    id,
+                    page_id,
+                    anchor: serde_json::from_str(&anchor)?,
+                    resolved,
+                    orphaned,
+                    created_at,
+                    messages,
+                });
+            }
+            comments
+        };
+        let history = {
+            let mut stmt = self.conn.prepare("SELECT sequence,workspace_id,page_id,entity_kind,entity_id,property_id,actor,occurred_at,before_json,after_json FROM change_history WHERE workspace_id=?1 ORDER BY sequence")?;
+            let rows = stmt.query_map([workspace_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })?;
+            let mut history = Vec::new();
+            for row in rows {
+                let (
+                    sequence,
+                    workspace_id,
+                    page_id,
+                    entity_kind,
+                    entity_id,
+                    property_id,
+                    actor,
+                    occurred_at,
+                    before,
+                    after,
+                ) = row?;
+                history.push(crate::history::HistoryEntry {
+                    sequence,
+                    workspace_id,
+                    page_id,
+                    entity_kind,
+                    entity_id,
+                    property_id,
+                    actor: actor.map(|s| serde_json::from_str(&s)).transpose()?,
+                    occurred_at,
+                    before: before.map(|s| serde_json::from_str(&s)).transpose()?,
+                    after: after.map(|s| serde_json::from_str(&s)).transpose()?,
+                });
+            }
+            history
+        };
         let payload = Payload {
             workspace,
             pages,
@@ -203,6 +303,8 @@ impl Store {
             board_order,
             record_trash_roots,
             cover_assets: Vec::new(),
+            comments,
+            history,
         };
         let ids = asset_ids(&payload)?;
         Ok((payload, ids))
@@ -352,6 +454,15 @@ impl Store {
                 params![tag.record_id, tag.root_id],
             )?;
         }
+        for comment in &payload.comments {
+            tx.execute("INSERT INTO comment_threads(id,workspace_id,page_id,anchor,resolved,orphaned,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![comment.id,payload.workspace.id,comment.page_id,serde_json::to_string(&comment.anchor)?,comment.resolved,comment.orphaned,comment.created_at])?;
+            for message in &comment.messages {
+                tx.execute("INSERT INTO comment_messages(id,thread_id,author,body,created_at,kind) VALUES(?1,?2,?3,?4,?5,?6)", params![message.id,comment.id,message.author,message.text,message.created_at,message.kind])?;
+            }
+        }
+        for entry in &payload.history {
+            tx.execute("INSERT INTO change_history(workspace_id,page_id,entity_kind,entity_id,property_id,actor,occurred_at,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![entry.workspace_id,entry.page_id,entry.entity_kind,entry.entity_id,entry.property_id,entry.actor.as_ref().map(serde_json::to_string).transpose()?,entry.occurred_at,entry.before.as_ref().map(serde_json::to_string).transpose()?,entry.after.as_ref().map(serde_json::to_string).transpose()?])?;
+        }
         if let Some(database) = payload.databases.first() {
             crate::advanced_properties::graph(&tx, &payload.workspace.id, database, None)?;
         }
@@ -374,6 +485,55 @@ fn make_map(p: &Payload) -> HashMap<String, String> {
         ids.extend(d.views.iter().map(|x| x.id.clone()));
     }
     ids.extend(p.records.iter().map(|x| x.id.clone()));
+    for entry in &p.history {
+        ids.push(entry.entity_id.clone());
+        if let Some(property) = &entry.property_id {
+            if entry.entity_kind != "page" {
+                ids.push(property.clone());
+            }
+        }
+        if entry.entity_kind == "relation" {
+            for snapshot in [entry.before.as_ref(), entry.after.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(values) = snapshot.as_array() {
+                    ids.extend(values.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+            }
+        }
+        if entry.entity_kind == "block" {
+            for snapshot in [entry.before.as_ref(), entry.after.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(id) = snapshot
+                    .get("config")
+                    .and_then(|v| v.get("page_id"))
+                    .and_then(Value::as_str)
+                {
+                    ids.push(id.to_owned());
+                }
+            }
+        }
+    }
+    for comment in &p.comments {
+        ids.push(comment.id.clone());
+        ids.extend(comment.messages.iter().map(|message| message.id.clone()));
+        match &comment.anchor {
+            CommentAnchor::Page => {}
+            CommentAnchor::Block { block_id } | CommentAnchor::Text { block_id, .. } => {
+                ids.push(block_id.clone())
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } => {
+                ids.push(record_id.clone());
+                ids.push(property_id.clone());
+            }
+        }
+    }
     ids.into_iter().map(|id| (id, new_id())).collect()
 }
 
@@ -407,6 +567,26 @@ fn asset_ids(p: &Payload) -> Result<Vec<String>, ArchiveError> {
                         .ok_or_else(|| invalid("invalid image asset"))?
                         .to_owned(),
                 );
+            }
+        }
+    }
+    for entry in &p.history {
+        if entry.entity_kind == "block" {
+            for snapshot in [entry.before.as_ref(), entry.after.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                let block: Block = serde_json::from_value(snapshot.clone())?;
+                if block.kind == BlockKind::Image {
+                    if let Some(asset) = block.config.get("asset") {
+                        ids.insert(
+                            asset
+                                .as_str()
+                                .ok_or_else(|| invalid("invalid history image asset"))?
+                                .to_owned(),
+                        );
+                    }
+                }
             }
         }
     }
@@ -472,6 +652,9 @@ fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), Archi
     if unsupported(p) {
         return Err(ArchiveError::AttachmentsUnsupported);
     }
+    if asset_ids(p)?.iter().any(|id| !assets.contains(id.as_str())) {
+        return Err(invalid("history asset missing"));
+    }
     let mut ids = HashSet::new();
     let mut add = |id: &str| -> Result<(), ArchiveError> {
         if id.is_empty() || !ids.insert(id.to_owned()) {
@@ -498,8 +681,57 @@ fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), Archi
     for x in &p.records {
         add(&x.id)?;
     }
+    for comment in &p.comments {
+        add(&comment.id)?;
+        for message in &comment.messages {
+            add(&message.id)?;
+        }
+    }
     let pages: HashMap<&str, &ArchivedPage> =
         p.pages.iter().map(|x| (x.page.id.as_str(), x)).collect();
+    let mut last_sequence = 0;
+    for entry in &p.history {
+        if entry.sequence <= last_sequence
+            || entry.workspace_id != p.workspace.id
+            || !pages.contains_key(entry.page_id.as_str())
+            || entry.entity_id.is_empty()
+            || !matches!(
+                entry.entity_kind.as_str(),
+                "block"
+                    | "record"
+                    | "page"
+                    | "record_title"
+                    | "relation"
+                    | "record_created"
+                    | "record_duplicated"
+                    | "record_trashed"
+                    | "record_restored"
+            )
+            || chrono::DateTime::parse_from_rfc3339(&entry.occurred_at).is_err()
+            || entry.actor.as_ref().is_some_and(|actor| {
+                actor.id.trim().is_empty()
+                    || actor.name.trim().is_empty()
+                    || !matches!(actor.kind.as_str(), "person" | "agent")
+            })
+        {
+            return Err(invalid("invalid history entry"));
+        }
+        if entry.entity_kind == "block" {
+            for snapshot in [entry.before.as_ref(), entry.after.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                let block: Block = serde_json::from_value(snapshot.clone())?;
+                if block.id != entry.entity_id || block.page_id != entry.page_id {
+                    return Err(invalid("invalid history block"));
+                }
+                if media(block.kind) {
+                    return Err(ArchiveError::AttachmentsUnsupported);
+                }
+            }
+        }
+        last_sequence = entry.sequence;
+    }
     for x in &p.pages {
         if x.page.workspace_id != p.workspace.id {
             return Err(invalid("page belongs to another workspace"));
@@ -529,6 +761,61 @@ fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), Archi
     for b in &p.blocks {
         if !pages.contains_key(b.page_id.as_str()) {
             return Err(invalid("missing block page"));
+        }
+    }
+    for comment in &p.comments {
+        if !pages.contains_key(comment.page_id.as_str())
+            || comment.messages.is_empty()
+            || chrono::DateTime::parse_from_rfc3339(&comment.created_at).is_err()
+        {
+            return Err(invalid("invalid comment thread"));
+        }
+        for message in &comment.messages {
+            if message.author.trim().is_empty()
+                || message.author.len() > 256
+                || message.text.trim().is_empty()
+                || message.text.len() > 65_536
+                || message
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| !matches!(kind, "person" | "agent"))
+                || chrono::DateTime::parse_from_rfc3339(&message.created_at).is_err()
+            {
+                return Err(invalid("invalid comment message"));
+            }
+        }
+        match &comment.anchor {
+            CommentAnchor::Text {
+                block_id,
+                start,
+                end,
+                quote,
+            } => {
+                if block_id.is_empty() || start >= end || quote.is_empty() || quote.len() > 65_536 {
+                    return Err(invalid("invalid comment anchor"));
+                }
+                if !comment.orphaned
+                    && p.blocks
+                        .iter()
+                        .find(|block| block.id == *block_id)
+                        .is_some_and(|block| {
+                            block.page_id != comment.page_id
+                                || block.text.get(*start..*end) != Some(quote)
+                        })
+                {
+                    return Err(invalid("invalid comment anchor"));
+                }
+            }
+            CommentAnchor::Block { block_id } if block_id.is_empty() => {
+                return Err(invalid("invalid comment anchor"));
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } if record_id.is_empty() || property_id.is_empty() => {
+                return Err(invalid("invalid comment anchor"));
+            }
+            _ => {}
         }
     }
     let mut db_pages = HashSet::new();
@@ -731,6 +1018,51 @@ fn remap(p: &mut Payload, map: &HashMap<String, String>) {
             id(&mut k, map);
             value(&mut v, map);
             r.values.insert(k, v);
+        }
+    }
+    for comment in &mut p.comments {
+        id(&mut comment.id, map);
+        id(&mut comment.page_id, map);
+        match &mut comment.anchor {
+            CommentAnchor::Page => {}
+            CommentAnchor::Block { block_id } | CommentAnchor::Text { block_id, .. } => {
+                id(block_id, map)
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } => {
+                id(record_id, map);
+                id(property_id, map);
+            }
+        }
+        for message in &mut comment.messages {
+            id(&mut message.id, map);
+        }
+    }
+    for entry in &mut p.history {
+        id(&mut entry.workspace_id, map);
+        id(&mut entry.page_id, map);
+        id(&mut entry.entity_id, map);
+        if entry.entity_kind != "page" {
+            optional_id(&mut entry.property_id, map);
+        }
+        for snapshot in [&mut entry.before, &mut entry.after].into_iter().flatten() {
+            if entry.entity_kind == "block" {
+                if let Some(object) = snapshot.as_object_mut() {
+                    if let Some(Value::String(block_id)) = object.get_mut("id") {
+                        id(block_id, map);
+                    }
+                    if let Some(Value::String(page_id)) = object.get_mut("page_id") {
+                        id(page_id, map);
+                    }
+                    if let Some(config) = object.get_mut("config") {
+                        value(config, map);
+                    }
+                }
+            } else if entry.entity_kind == "relation" {
+                value(snapshot, map);
+            }
         }
     }
 }

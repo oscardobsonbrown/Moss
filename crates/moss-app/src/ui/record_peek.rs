@@ -28,6 +28,16 @@ pub fn center(s: &State, t: Theme) -> Option<El> {
     if peek.mode != PeekMode::Center {
         return None;
     }
+    let comments_open = s.comments.open && s.comments.page_id.as_ref() == Some(&peek.page.id);
+    let history_open = s.history.open && s.history.page_id.as_ref() == Some(&peek.page.id);
+    let contents = if comments_open || history_open {
+        row()
+            .child(panel(s, t).grow(1.).min_w(0.).h_full())
+            .children(super::comments::panel(s, t, 300.))
+            .children(super::history::panel(s, t, 300.))
+    } else {
+        panel(s, t)
+    };
     Some(
         el().key("record-peek-scrim")
             .pin(Some(0.), Some(0.), Some(0.), Some(0.))
@@ -38,7 +48,7 @@ pub fn center(s: &State, t: Theme) -> Option<El> {
                 s.close_peek();
             })
             .child(
-                panel(s, t)
+                contents
                     .key("record-peek-center")
                     .w_full()
                     .max_w(800.)
@@ -240,6 +250,8 @@ fn panel(s: &State, t: Theme) -> El {
                 Vec::new()
             };
             let hidden = crate::inline_links::hidden_markdown_syntax(&block.edit, &links);
+            let comment_ranges = super::comments::keyed_ranges(s, page_id, &block.block.id, &block.edit.text);
+            let comment_color = rune::color::oklch(0.68, 0.14, 80.);
             let overlay = if links.is_empty() {
                 None
             } else {
@@ -265,8 +277,11 @@ fn panel(s: &State, t: Theme) -> El {
                         .on_link(|s: &mut State, target, tx| s.open_peek_inline_link(target, tx)),
                 )
             };
+            let mut spans = hidden;
+            spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
             let input = super::inputs::text(&block.edit, style, t)
-                .spans(hidden)
+                .spans(spans)
+                .text_highlights(comment_ranges.into_iter().map(|(id, range)| rune::text::TextHighlight::new(range, comment_color.alpha(0.23)).key(super::comments::highlight_key(&id, true))))
                 .key(format!("peek-block-{}", block.block.id))
                 .align(Align::Start)
                 .w_full()
@@ -447,6 +462,7 @@ fn panel(s: &State, t: Theme) -> El {
                     tx.instant();
                 }),
         )
+        .children(super::shell::presence(s, page_id, "peek-", t))
         .child(el().w(1.).h(16.).fill(t.line))
         .child(
             icon_button("peek-close", "Close", "×", t).on_press(|s: &mut State| {

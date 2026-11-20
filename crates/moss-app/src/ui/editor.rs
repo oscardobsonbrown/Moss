@@ -95,6 +95,8 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                     Vec::new()
                 };
                 let hidden = crate::inline_links::hidden_markdown_syntax(&b.edit, &links);
+                let comment_ranges = super::comments::keyed_ranges(s, &tab.page.id, &b.block.id, &b.edit.text);
+                let comment_color = rune::color::oklch(0.68, 0.14, 80.);
                 let overlay = if links.is_empty() {
                     None
                 } else {
@@ -119,8 +121,11 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                         overlay.on_link(|s: &mut State, target, tx| s.open_inline_link(target, tx)),
                     )
                 };
+                let mut spans = hidden;
+                spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
                 let input = super::inputs::text(&b.edit, style, t)
-                    .spans(hidden)
+                    .spans(spans)
+                    .text_highlights(comment_ranges.into_iter().map(|(id, range)| rune::text::TextHighlight::new(range, comment_color.alpha(0.23)).key(super::comments::highlight_key(&id, false))))
                     .key(format!("block-input-{}", b.block.id))
                     .w_full()
                     .min_w(0.)
@@ -304,6 +309,7 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
             if b.block.kind == BlockKind::Todo
                 && s.editor_drag.is_none()
                 && s.editor_selection.is_none()
+                && super::comments::markers(s, &tab.page.id, &b.block.id, false, t).is_empty()
             {
                 let menu_open = s
                     .block_commands

@@ -3,6 +3,9 @@
   "revision": "2b75f3ad12b420c9504ef05df8d2564a28f8500e",
   "package_version": "2.1.1",
   "weight": "regular",
+  "fill_sha256": {
+    "hexagon-fill": "750b85cbc3245bfb5c176fb7ec24bfb5a941f230d30ceec2ec37a069cf519982"
+  },
   "sha256": {
     "airplane-tilt": "502cddc0643200dc2843339c7f0fc878a768fe3a6f8874d342ed49fda923a89e",
     "arrow-clockwise": "4a78a777b692cb74826e3071ae7049cc0d3927e68a7b8272e7251b1760cd771f",

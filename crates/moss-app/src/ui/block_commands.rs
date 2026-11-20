@@ -149,6 +149,30 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             .child(input)
             .child(t.label("Basic blocks", t.muted).px(10.))
             .child(list)
+            .children((current.mode == BlockCommandMode::Change && current.error.is_none()).then(|| {
+                let page = current.page_id.clone();
+                let block = current.block_id.clone();
+                let peek = current.peek;
+                menu::row_item(
+                    "comment-block",
+                    "Add comment",
+                    rune::icon(super::view_icons::catalog_icon("chat-circle").unwrap(), 16.).color(t.muted),
+                    t,
+                ).on_press(move |s: &mut State| s.comment_for_block(&page, &block, peek))
+            }))
+            .children((current.mode == BlockCommandMode::Change && current.error.is_none()).then(|| {
+                let page = current.page_id.clone();
+                let block = current.block_id.clone();
+                menu::row_item(
+                    "block-show-changes",
+                    "Show changes",
+                    rune::icon(&phosphor::CLOCK_COUNTER_CLOCKWISE, 16.).color(t.muted),
+                    t,
+                ).on_press(move |s: &mut State| {
+                    s.block_commands = None;
+                    s.open_item_history(&page, &block, None);
+                })
+            }))
             .children((change && current.error.is_none()).then(|| {
                 col()
                     .w_full()

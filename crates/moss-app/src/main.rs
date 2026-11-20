@@ -8,6 +8,7 @@ mod caret;
 mod chart_view;
 mod child_pages;
 mod computed_refresh;
+mod comments;
 mod dashboard_view;
 mod database_properties;
 mod database_views;
@@ -17,7 +18,9 @@ mod editor_drag;
 mod editor_selection;
 mod emoji_catalog;
 mod fonts;
+mod history;
 mod inline_links;
+mod local_service;
 mod map_clusters;
 mod map_interaction;
 mod map_view;
@@ -39,6 +42,7 @@ mod sidebar_reveal;
 mod sidebar_section_menu;
 mod sidebar_sections;
 mod sidebar_tree;
+mod shared_refresh;
 mod simple_table;
 mod state;
 mod table_columns;
@@ -191,6 +195,7 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
     false
 }
 fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
+    let history = history::poll(s, time, tx);
     let records = records::poll(s, time, tx);
     let sidebar = sidebar_reveal::poll(s, time, tx);
     let sidebar_drag = sidebar_sections::poll(s, time, tx);
@@ -199,7 +204,7 @@ fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
     let archives = archive_transfer::poll(s, time, tx);
     let place = place_property::poll(s, tx);
     let appearance = page_appearance::poll(s, time, tx);
-    records || sidebar || sidebar_drag || views || covers || archives || appearance || place
+    history || records || sidebar || sidebar_drag || views || covers || archives || appearance || place
 }
 fn spec() -> AppSpec<State> {
     AppSpec {
@@ -234,6 +239,8 @@ fn main() {
     let first_id = first.workspace.id.clone();
     let handles = first.handles.clone();
     let shared_preferences = first.shared_preferences.clone();
+    let local_service = first.local_service.clone();
+    let mcp_enabled = first.prefs.mcp_enabled;
     let mut app = App::new(spec())
         .init(move || first)
         .titlebar(Titlebar::new(ui::CHROME_EDGE))
@@ -265,6 +272,7 @@ fn main() {
             Ok(mut state) => {
                 state.handles = handles.clone();
                 state.shared_preferences = shared_preferences.clone();
+                state.local_service = local_service.clone();
                 let id = workspace.id.clone();
                 let secondary = App::new(spec())
                     .init(move || state)
@@ -295,7 +303,17 @@ fn main() {
             Err(e) => eprintln!("Could not prepare workspace {}: {e}", workspace.name),
         }
     }
+    if mcp_enabled {
+        match local_service::start(&path, handles.clone()) {
+            Ok(service) => *local_service.lock().unwrap() = Some(service),
+            Err(error) => {
+                eprintln!("Could not start local agent access: {error}");
+                app.handle().update(move |s, _| { s.set_mcp_enabled(false); s.error = Some(format!("Could not start local agent access: {error}")); });
+            }
+        }
+    }
     app.run();
+    drop(local_service.lock().unwrap().take());
 }
 
 #[cfg(test)]

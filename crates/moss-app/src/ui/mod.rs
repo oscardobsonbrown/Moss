@@ -7,6 +7,7 @@ mod board_settings;
 mod calendar;
 mod cell_recovery;
 mod chart;
+pub(crate) mod comments;
 mod child_pages;
 mod dashboard;
 mod database;
@@ -16,6 +17,7 @@ mod database_toolbar;
 mod editor;
 mod editor_layout;
 mod gallery;
+mod history;
 mod icons;
 mod image_block;
 mod inputs;
@@ -74,6 +76,24 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         expanded_sidebar_width
     };
     let available_width = (window_width - sidebar_width).max(0.);
+    let center_peek_comments = s.record_peek.as_ref().is_some_and(|peek| {
+        peek.mode == crate::state::PeekMode::Center
+            && s.comments.page_id.as_ref().is_some_and(|id| &peek.page.id == id)
+    });
+    let center_peek_history = s.record_peek.as_ref().is_some_and(|peek| {
+        peek.mode == crate::state::PeekMode::Center && s.history.open
+            && s.history.page_id.as_ref() == Some(&peek.page.id)
+    });
+    let history_visible = s.history.open && !center_peek_history && s.history.page_id.as_ref().is_some_and(|id| {
+        s.tab().is_some_and(|tab| &tab.page.id == id)
+            || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
+    });
+    let comments_width = if (!center_peek_comments && s.comments.open
+        && s.comments.page_id.as_ref().is_some_and(|id| {
+            s.tab().is_some_and(|tab| &tab.page.id == id)
+                || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
+        })) || history_visible
+    { 300_f32.min((available_width * 0.4).max(0.)) } else { 0. };
     let peek_width = if has_side_peek {
         (available_width / 2.).min(420.)
     } else {
@@ -110,8 +130,10 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .grow(1.)
                 .min_h(0.)
                 .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
-                .child(shell::content(s, t, available_width - peek_width))
-                .children(record_peek::side(s, t, peek_width)),
+                .child(shell::content(s, t, (available_width - peek_width - comments_width).max(0.)))
+                .children(record_peek::side(s, t, peek_width))
+                .children((!center_peek_comments).then(|| comments::panel(s, t, comments_width)).flatten())
+                .children((!center_peek_history).then(|| history::panel(s, t, comments_width)).flatten()),
         )
         .children(
             (!s.sidebar_collapsed())

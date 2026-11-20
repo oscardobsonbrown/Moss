@@ -31,7 +31,7 @@ impl Store {
         )?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        let mut store = Store { conn };
+        let mut store = Store { conn, history_actor: None, history_coalesce: true };
         let asset = store.import_cover_image(&bytes)?;
         store.set_block_image_if_unchanged(workspace, page_id, block_id, expected, &asset)
     }

@@ -116,6 +116,7 @@ pub fn decorate_for(s: &State, page_id: &str, id: &str, item: El, t: Theme, peek
     }))
     .child(preview)
     .children(marker)
+    .children(super::comments::markers(s, page_id, id, peek, t))
 }
 pub fn group(s: &State, tab: &Tab, blocks: Vec<El>, t: Theme) -> Vec<El> {
     group_for(s, &tab.page.id, &tab.blocks, blocks, t, false)
