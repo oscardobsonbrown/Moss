@@ -4,6 +4,7 @@ pub mod board;
 mod board_copy;
 mod board_settings;
 mod calculation;
+pub mod comments;
 pub mod calendar;
 mod image_blocks;
 mod imported_links;

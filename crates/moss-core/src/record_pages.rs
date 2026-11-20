@@ -21,7 +21,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()?;
-            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM calculation_edges WHERE target_id=?1 AND source_id<>?1) OR EXISTS(SELECT 1 FROM records r, json_tree(r.values_json) value WHERE r.id<>?1 AND instr(r.values_json,?1)>0 AND value.type='text' AND value.value=?1)", [&record.id], |row| row.get(0))?;
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM calculation_edges WHERE target_id=?1 AND source_id<>?1) OR EXISTS(SELECT 1 FROM records r, json_tree(r.values_json) value WHERE r.id<>?1 AND instr(r.values_json,?1)>0 AND value.type='text' AND value.value=?1) OR EXISTS(SELECT 1 FROM comment_threads WHERE json_extract(anchor,'$.type')='cell' AND json_extract(anchor,'$.record_id')=?1)", [&record.id], |row| row.get(0))?;
             if current.map(decode::<Record>).transpose()?.as_ref() != Some(record)
                 || in_use
                 || record.page_id.as_deref() != page.map(|p| p.id.as_str())
@@ -55,7 +55,7 @@ impl Store {
                 let rows = query.query_map([&page.id], |row| row.get::<_, String>(0))?;
                 rows.map(|row| decode(row?)).collect::<Result<_>>()?
             };
-            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pages WHERE parent_id=?1) OR EXISTS(SELECT 1 FROM databases WHERE page_id=?1) OR EXISTS(SELECT 1 FROM blocks b, json_tree(b.data) value WHERE b.page_id<>?1 AND b.id<>?2 AND instr(b.data,?1)>0 AND value.type='text' AND value.value=?1)", params![page.id, created_link.map(|link| link.id.as_str()).unwrap_or("")], |row| row.get(0))?;
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pages WHERE parent_id=?1) OR EXISTS(SELECT 1 FROM databases WHERE page_id=?1) OR EXISTS(SELECT 1 FROM comment_threads WHERE page_id=?1) OR EXISTS(SELECT 1 FROM blocks b, json_tree(b.data) value WHERE b.page_id<>?1 AND b.id<>?2 AND instr(b.data,?1)>0 AND value.type='text' AND value.value=?1)", params![page.id, created_link.map(|link| link.id.as_str()).unwrap_or("")], |row| row.get(0))?;
             if current.map(decode::<Page>).transpose()?.as_ref() != Some(page)
                 || current_blocks != blocks
                 || in_use
@@ -63,6 +63,7 @@ impl Store {
                 return Ok(false);
             }
             if let Some(link) = created_link {
+                tx.execute("UPDATE comment_threads SET orphaned=1 WHERE page_id=?1 AND json_extract(anchor,'$.block_id')=?2", params![link.page_id, link.id])?;
                 tx.execute("DELETE FROM blocks WHERE id=?1", [&link.id])?;
             }
             tx.execute("DELETE FROM pages WHERE id=?1", [&page.id])?;

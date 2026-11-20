@@ -20,6 +20,8 @@ mod chart_view;
 mod child_pages;
 #[path = "../src/computed_refresh.rs"]
 mod computed_refresh;
+#[path = "../src/comments.rs"]
+mod comments;
 #[path = "../src/dashboard_view.rs"]
 mod dashboard_view;
 #[path = "../src/database_properties.rs"]
@@ -92,6 +94,8 @@ mod table_columns;
 mod table_summaries;
 #[path = "../src/table_window.rs"]
 mod table_window;
+#[path = "../src/text_colors.rs"]
+mod text_colors;
 #[path = "../src/ui/mod.rs"]
 mod ui;
 #[path = "../src/view_management.rs"]

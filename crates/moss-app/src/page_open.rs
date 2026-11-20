@@ -14,6 +14,7 @@ impl State {
             self.active = i;
             self.filter = TextEdit::new(&self.tabs[i].title_search);
             self.record_navigation(id);
+            self.load_comments(id);
             self.save_preferences();
             return;
         }
@@ -275,6 +276,7 @@ impl State {
                 }
                 self.filter = TextEdit::new("");
                 self.record_navigation(id);
+                self.load_comments(id);
                 self.refresh_table_summaries();
                 self.save_preferences();
             }

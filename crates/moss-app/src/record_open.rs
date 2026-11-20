@@ -103,6 +103,7 @@ impl State {
                     self.open_page(&page_id, true);
                 } else {
                     self.record_peek = Some(peek);
+                    self.load_comments(&page_id);
                     self.modal = None;
                     self.record_sidebar_recent(&page_id);
                 }

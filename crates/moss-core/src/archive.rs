@@ -1,3 +1,4 @@
+use crate::comments::{CommentAnchor, CommentMessage};
 use crate::{
     Block, BlockKind, Database, Page, PropertyKind, Record, Store, Workspace, new_id, search,
 };
@@ -51,6 +52,19 @@ struct Payload {
     record_trash_roots: Vec<RecordTrashRoot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cover_assets: Vec<CoverAsset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    comments: Vec<ArchivedComment>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchivedComment {
+    id: String,
+    page_id: String,
+    anchor: CommentAnchor,
+    resolved: bool,
+    orphaned: bool,
+    created_at: String,
+    messages: Vec<CommentMessage>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,6 +208,45 @@ impl Store {
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
+        let comments = {
+            let mut stmt = self.conn.prepare("SELECT id,page_id,anchor,resolved,orphaned,created_at FROM comment_threads WHERE workspace_id=?1 ORDER BY id")?;
+            let rows = stmt.query_map([workspace_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })?;
+            let mut comments = Vec::new();
+            for row in rows {
+                let (id, page_id, anchor, resolved, orphaned, created_at) = row?;
+                let mut messages = self.conn.prepare("SELECT id,author,body,created_at,kind FROM comment_messages WHERE thread_id=?1 ORDER BY created_at,id")?;
+                let messages = messages
+                    .query_map([&id], |r| {
+                        Ok(CommentMessage {
+                            id: r.get(0)?,
+                            author: r.get(1)?,
+                            text: r.get(2)?,
+                            created_at: r.get(3)?,
+                            kind: r.get(4)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                comments.push(ArchivedComment {
+                    id,
+                    page_id,
+                    anchor: serde_json::from_str(&anchor)?,
+                    resolved,
+                    orphaned,
+                    created_at,
+                    messages,
+                });
+            }
+            comments
+        };
         let payload = Payload {
             workspace,
             pages,
@@ -203,6 +256,7 @@ impl Store {
             board_order,
             record_trash_roots,
             cover_assets: Vec::new(),
+            comments,
         };
         let ids = asset_ids(&payload)?;
         Ok((payload, ids))
@@ -352,6 +406,12 @@ impl Store {
                 params![tag.record_id, tag.root_id],
             )?;
         }
+        for comment in &payload.comments {
+            tx.execute("INSERT INTO comment_threads(id,workspace_id,page_id,anchor,resolved,orphaned,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![comment.id,payload.workspace.id,comment.page_id,serde_json::to_string(&comment.anchor)?,comment.resolved,comment.orphaned,comment.created_at])?;
+            for message in &comment.messages {
+                tx.execute("INSERT INTO comment_messages(id,thread_id,author,body,created_at,kind) VALUES(?1,?2,?3,?4,?5,?6)", params![message.id,comment.id,message.author,message.text,message.created_at,message.kind])?;
+            }
+        }
         if let Some(database) = payload.databases.first() {
             crate::advanced_properties::graph(&tx, &payload.workspace.id, database, None)?;
         }
@@ -374,6 +434,23 @@ fn make_map(p: &Payload) -> HashMap<String, String> {
         ids.extend(d.views.iter().map(|x| x.id.clone()));
     }
     ids.extend(p.records.iter().map(|x| x.id.clone()));
+    for comment in &p.comments {
+        ids.push(comment.id.clone());
+        ids.extend(comment.messages.iter().map(|message| message.id.clone()));
+        match &comment.anchor {
+            CommentAnchor::Page => {}
+            CommentAnchor::Block { block_id } | CommentAnchor::Text { block_id, .. } => {
+                ids.push(block_id.clone())
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } => {
+                ids.push(record_id.clone());
+                ids.push(property_id.clone());
+            }
+        }
+    }
     ids.into_iter().map(|id| (id, new_id())).collect()
 }
 
@@ -498,6 +575,12 @@ fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), Archi
     for x in &p.records {
         add(&x.id)?;
     }
+    for comment in &p.comments {
+        add(&comment.id)?;
+        for message in &comment.messages {
+            add(&message.id)?;
+        }
+    }
     let pages: HashMap<&str, &ArchivedPage> =
         p.pages.iter().map(|x| (x.page.id.as_str(), x)).collect();
     for x in &p.pages {
@@ -529,6 +612,61 @@ fn validate_with_assets(p: &Payload, assets: &HashSet<&str>) -> Result<(), Archi
     for b in &p.blocks {
         if !pages.contains_key(b.page_id.as_str()) {
             return Err(invalid("missing block page"));
+        }
+    }
+    for comment in &p.comments {
+        if !pages.contains_key(comment.page_id.as_str())
+            || comment.messages.is_empty()
+            || chrono::DateTime::parse_from_rfc3339(&comment.created_at).is_err()
+        {
+            return Err(invalid("invalid comment thread"));
+        }
+        for message in &comment.messages {
+            if message.author.trim().is_empty()
+                || message.author.len() > 256
+                || message.text.trim().is_empty()
+                || message.text.len() > 65_536
+                || message
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| !matches!(kind, "person" | "agent"))
+                || chrono::DateTime::parse_from_rfc3339(&message.created_at).is_err()
+            {
+                return Err(invalid("invalid comment message"));
+            }
+        }
+        match &comment.anchor {
+            CommentAnchor::Text {
+                block_id,
+                start,
+                end,
+                quote,
+            } => {
+                if block_id.is_empty() || start >= end || quote.is_empty() || quote.len() > 65_536 {
+                    return Err(invalid("invalid comment anchor"));
+                }
+                if !comment.orphaned
+                    && p.blocks
+                        .iter()
+                        .find(|block| block.id == *block_id)
+                        .is_some_and(|block| {
+                            block.page_id != comment.page_id
+                                || block.text.get(*start..*end) != Some(quote)
+                        })
+                {
+                    return Err(invalid("invalid comment anchor"));
+                }
+            }
+            CommentAnchor::Block { block_id } if block_id.is_empty() => {
+                return Err(invalid("invalid comment anchor"));
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } if record_id.is_empty() || property_id.is_empty() => {
+                return Err(invalid("invalid comment anchor"));
+            }
+            _ => {}
         }
     }
     let mut db_pages = HashSet::new();
@@ -731,6 +869,26 @@ fn remap(p: &mut Payload, map: &HashMap<String, String>) {
             id(&mut k, map);
             value(&mut v, map);
             r.values.insert(k, v);
+        }
+    }
+    for comment in &mut p.comments {
+        id(&mut comment.id, map);
+        id(&mut comment.page_id, map);
+        match &mut comment.anchor {
+            CommentAnchor::Page => {}
+            CommentAnchor::Block { block_id } | CommentAnchor::Text { block_id, .. } => {
+                id(block_id, map)
+            }
+            CommentAnchor::Cell {
+                record_id,
+                property_id,
+            } => {
+                id(record_id, map);
+                id(property_id, map);
+            }
+        }
+        for message in &mut comment.messages {
+            id(&mut message.id, map);
         }
     }
 }

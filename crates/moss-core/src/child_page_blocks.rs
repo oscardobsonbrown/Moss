@@ -75,6 +75,7 @@ impl Store {
             params![child.id, workspace_id, parent_id, encode(&child)?],
         )?;
         search::index(&tx, &format!("page:{}", child.id), &child, "")?;
+        crate::comments::update_block_anchors(&tx, parent_id, &blocks)?;
         tx.execute("DELETE FROM blocks WHERE page_id=?1", [parent_id])?;
         for block in expected {
             search::remove(&tx, &format!("block:{}", block.id))?;

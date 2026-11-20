@@ -921,6 +921,9 @@ impl State {
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
                 self.keep_draft_for_page(&page_id);
+                if self.comments.threads.get(&page_id).is_some_and(|threads| !threads.is_empty()) {
+                    self.load_comments(&page_id);
+                }
             }
             Err(e) => self.error = Some(format!("Page contents are not saved: {e}")),
         }
@@ -943,7 +946,8 @@ impl State {
         edit.focused = false;
         suffix.set_caret(0);
         suffix.focused = true;
-        let mut block = Block::paragraph(&peek.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&peek.page.id, &suffix.text, after as i64 + 1);
+        crate::text_colors::copy_suffix(&peek.blocks[after].block, &mut block, end);
         crate::editor_drag::copy_column(&peek.blocks[after].block, &mut block);
         peek.blocks.insert(
             after + 1,

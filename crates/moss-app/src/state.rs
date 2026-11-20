@@ -115,6 +115,7 @@ impl Preferences {
     }
 }
 pub struct State {
+    pub comments: crate::comments::CommentsState,
     pub editor_selection: Option<crate::editor_selection::Selection>,
     pub editor_drag: Option<crate::editor_drag::BlockDrag>,
     pub editor_column_resize: Option<crate::editor_drag::ColumnResize>,
@@ -255,6 +256,7 @@ impl State {
         let restore = prefs.tabs.get(&workspace.id).cloned().unwrap_or_default();
         let active = *prefs.active.get(&workspace.id).unwrap_or(&0);
         let mut s = Self {
+            comments: Default::default(),
             editor_selection: None,
             editor_drag: None,
             editor_column_resize: None,
@@ -716,6 +718,9 @@ impl State {
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
                 self.keep_draft_for_page(&page_id);
+                if self.comments.threads.get(&page_id).is_some_and(|threads| !threads.is_empty()) {
+                    self.load_comments(&page_id);
+                }
             }
             Err(e) => {
                 self.error = Some(format!(
@@ -745,7 +750,8 @@ impl State {
         let mut edit = suffix;
         edit.set_caret(0);
         edit.focused = true;
-        let mut block = Block::paragraph(&tab.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&tab.page.id, &edit.text, after as i64 + 1);
+        crate::text_colors::copy_suffix(&tab.blocks[after].block, &mut block, end);
         crate::editor_drag::copy_column(&tab.blocks[after].block, &mut block);
         let oldkind = tab.blocks[after].block.kind;
         if matches!(

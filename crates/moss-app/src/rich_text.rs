@@ -77,6 +77,7 @@ pub fn load(block: &Block) -> TextEdit {
     TextEdit::from_parts(&block.text, marks, paragraphs).with_soft_breaks(soft)
 }
 pub fn save(block: &mut Block, edit: &TextEdit) {
+    crate::text_colors::sync(block, edit);
     block.text = edit.text.clone();
     block.config["html"] = json!(edit.to_html());
     block.config["marks"] = Value::Array(

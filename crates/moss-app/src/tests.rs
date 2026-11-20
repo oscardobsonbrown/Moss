@@ -24,6 +24,293 @@ fn click(rt: &mut Runtime<State>, key: &str) {
 }
 
 #[test]
+fn text_toolbar_formats_a_pointer_selection_and_persists_links() {
+    use crate::text_colors::{Channel, Palette, active_color};
+    use rune::edit::Mark;
+
+    fn block(s: &State, peek: bool) -> &state::EditableBlock {
+        if peek {
+            &s.record_peek.as_ref().unwrap().blocks[0]
+        } else {
+            &s.tab().unwrap().blocks[0]
+        }
+    }
+
+    for (mode, scale) in [
+        (None, 1.),
+        (None, 2.),
+        (Some("center"), 1.),
+        (Some("side"), 2.),
+    ] {
+        let text = "Café and another phrase";
+        let (mut s, path) = fixture();
+        s.new_page(mode.is_some(), None);
+        let peek = mode.is_some();
+        let editable = if let Some(mode) = mode {
+            let db = s.tab().unwrap().database.as_ref().unwrap().id.clone();
+            let record = s
+                .store
+                .create_record(&db, "Record", &Default::default())
+                .unwrap();
+            s.open_database_record(&db, &record.id, mode);
+            &mut s.record_peek.as_mut().unwrap().blocks[0]
+        } else {
+            &mut s.tabs[s.active].blocks[0]
+        };
+        editable.edit.replace_text(text);
+        let id = editable.block.id.clone();
+        let page = editable.block.page_id.clone();
+        let mut next = moss_core::Block::paragraph(&page, "Next item", 1);
+        next.kind = BlockKind::NumberedList;
+        let next = state::EditableBlock {
+            edit: crate::rich_text::load(&next),
+            block: next,
+        };
+        if peek {
+            s.record_peek.as_mut().unwrap().blocks.push(next);
+        } else {
+            s.tabs[s.active].blocks.push(next);
+        }
+        let workspace = s.workspace.id.clone();
+        let target = s
+            .store
+            .create_page(
+                &s.workspace.id,
+                None,
+                "Link destination",
+                "",
+                PageKind::Document,
+            )
+            .unwrap();
+        let destination = format!("moss-page:{}", target.id);
+        s.refresh_pages();
+        if peek {
+            s.save_peek_blocks();
+        } else {
+            s.save_blocks();
+        }
+        let mut rt = Runtime::with_text(
+            s,
+            ui::view,
+            (1100., 900.),
+            Env {
+                system_dark: scale == 2.,
+                scale,
+            },
+            rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
+        );
+        rt.on_key = Some(key);
+        rt.frame(0.);
+        rt.frame(0.02);
+        let input_key = if peek {
+            format!("peek-block-{id}")
+        } else {
+            format!("block-input-{id}")
+        };
+        let [left, top, _, height] = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(&input_key))
+            .unwrap()
+            .target;
+        let y = top + height / 2.;
+        rt.pointer_down(left + 1., y);
+        rt.frame(1. / 120.);
+        rt.pointer_move(left + 41., y);
+        rt.pointer_up(left + 41., y);
+        rt.frame(1. / 120.);
+        rt.frame(1. / 120.);
+        let selection = block(&rt.state, peek).edit.range();
+        assert!(selection.0 < selection.1 && selection.1 < text.len());
+        let [_, toolbar_y, _, toolbar_h] = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("text-toolbar"))
+            .expect("selection toolbar")
+            .target;
+        assert!(toolbar_y + toolbar_h < top);
+
+        let styles = [
+            ("text-toolbar-bold", Mark::Bold),
+            ("text-toolbar-italic", Mark::Italic),
+            ("text-toolbar-underline", Mark::Underline),
+            ("text-toolbar-strike", Mark::Strike),
+            ("text-toolbar-code", Mark::Code),
+        ];
+        for (button, mark) in &styles {
+            for applied in [true, false, true] {
+                click(&mut rt, button);
+                rt.frame(1. / 120.);
+                let edit = &block(&rt.state, peek).edit;
+                assert_eq!(edit.range(), selection, "{mode:?} {button}");
+                assert_eq!(edit.text, text);
+                assert_eq!(edit.has_mark(mark), applied, "{mode:?} {button}");
+                if applied {
+                    assert!(edit.marks().iter().any(|range| {
+                        range.mark == *mark && (range.start, range.end) == selection
+                    }));
+                }
+            }
+        }
+
+        let range = selection.0..selection.1;
+        for (swatch, channel, color) in [
+            ("text-Blue", Channel::Text, Some(Palette::Blue)),
+            (
+                "background-Yellow",
+                Channel::Background,
+                Some(Palette::Yellow),
+            ),
+            ("background-Default", Channel::Background, None),
+            (
+                "background-Yellow",
+                Channel::Background,
+                Some(Palette::Yellow),
+            ),
+        ] {
+            click(&mut rt, "text-toolbar-color");
+            rt.frame(1. / 120.);
+            click(&mut rt, &format!("editor-color-{swatch}"));
+            rt.frame(1. / 120.);
+            let saved = &rt.state.store.get_blocks(&page).unwrap()[0];
+            assert_eq!(active_color(saved, Some(range.clone()), channel), color);
+            assert_eq!(
+                active_color(saved, Some(selection.1..text.len()), channel),
+                None
+            );
+            assert_eq!(active_color(saved, None, channel), None);
+            assert_eq!(block(&rt.state, peek).edit.range(), selection);
+        }
+        click(
+            &mut rt,
+            if peek {
+                "peek-block-menu-0"
+            } else {
+                "block-menu-0"
+            },
+        );
+        for _ in 0..30 {
+            rt.frame(1. / 120.);
+        }
+        click(&mut rt, "block-color");
+        rt.frame(1. / 120.);
+        click(&mut rt, "editor-color-background-Pink");
+        rt.frame(1. / 120.);
+        let saved = &rt.state.store.get_blocks(&page).unwrap()[0];
+        assert_eq!(
+            active_color(saved, None, Channel::Background),
+            Some(Palette::Pink)
+        );
+        assert_eq!(
+            active_color(saved, Some(range), Channel::Background),
+            Some(Palette::Yellow)
+        );
+
+        click(&mut rt, "text-toolbar-link");
+        press(&mut rt, Key::Text("https://example.org".into()));
+        press(&mut rt, Key::Enter);
+        let edit = &block(&rt.state, peek).edit;
+        assert_eq!(edit.range(), selection);
+        assert_eq!(edit.active_link(), Some("https://example.org"));
+        rt.frame(1. / 120.);
+        click(&mut rt, "text-toolbar-link");
+        for _ in 0..30 {
+            rt.frame(1. / 120.);
+        }
+        click(&mut rt, "block-remove-text-link");
+        assert!(block(&rt.state, peek).edit.active_link().is_none());
+        rt.frame(1. / 120.);
+        click(&mut rt, "text-toolbar-link");
+        press(&mut rt, Key::Text("Link destination".into()));
+        press(&mut rt, Key::Enter);
+        assert_eq!(
+            block(&rt.state, peek).edit.active_link(),
+            Some(destination.as_str())
+        );
+        rt.frame(1. / 120.);
+        for (label, kind) in [
+            ("Heading 1", BlockKind::Heading1),
+            ("Heading 3", BlockKind::Heading3),
+            ("To-do list", BlockKind::Todo),
+            ("Bulleted list", BlockKind::BulletedList),
+            ("Numbered list", BlockKind::NumberedList),
+            ("Quote", BlockKind::Quote),
+            ("Callout", BlockKind::Callout),
+            ("Code", BlockKind::Code),
+            ("Text", BlockKind::Paragraph),
+            ("Heading 2", BlockKind::Heading2),
+        ] {
+            click(&mut rt, "text-toolbar-type");
+            assert!(rt.find("block-kind-Toggle").is_none());
+            press(&mut rt, Key::Text(label.into()));
+            press(&mut rt, Key::Enter);
+            rt.frame(1. / 120.);
+            assert_eq!(block(&rt.state, peek).block.kind, kind, "{mode:?} {label}");
+            assert_eq!(block(&rt.state, peek).edit.text, text);
+            assert_eq!(rt.state.store.get_blocks(&page).unwrap()[0].kind, kind);
+            if kind == BlockKind::NumberedList {
+                assert!(
+                    rt.elements()
+                        .iter()
+                        .any(|el| el.text.as_deref() == Some("2."))
+                );
+            }
+        }
+        click(&mut rt, "text-toolbar-comment");
+        assert!(matches!(
+            rt.state.comments.anchor,
+            Some(moss_core::comments::CommentAnchor::Text { start, end, .. })
+                if (start, end) == selection
+        ));
+        assert!(rt.find("text-toolbar").is_none());
+        for _ in 0..30 {
+            rt.frame(1. / 120.);
+        }
+        click(&mut rt, "comment-input");
+        press(&mut rt, Key::Text("Keep this phrase.".into()));
+        assert_eq!(
+            rt.state.comments.input.text, "Keep this phrase.",
+            "{mode:?}"
+        );
+        click(&mut rt, "comment-submit");
+        let threads = rt.state.store.list_comments(&workspace, &page).unwrap();
+        assert_eq!(threads.len(), 1, "{mode:?} {:?}", rt.state.comments.error);
+        assert!(matches!(
+            &threads[0].anchor,
+            moss_core::comments::CommentAnchor::Text { block_id, start, end, quote }
+                if block_id == &id && (*start, *end) == selection && quote == &text[*start..*end]
+        ));
+
+        drop(rt);
+        let mut reopened = State::open(path.clone(), None).unwrap();
+        reopened.open_page(&page, false);
+        let edit = &mut reopened.tabs[reopened.active].blocks[0].edit;
+        edit.set_selection(selection.0, selection.1);
+        assert_eq!(edit.text, text);
+        for (_, mark) in &styles {
+            assert!(edit.has_mark(mark), "{mode:?} {mark:?}");
+        }
+        assert_eq!(edit.active_link(), Some(destination.as_str()));
+        let mut reopened = Runtime::with_text(
+            reopened,
+            ui::view,
+            (1100., 760.),
+            Env {
+                system_dark: scale == 2.,
+                scale,
+            },
+            rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
+        );
+        reopened.frame(0.);
+        reopened.frame(0.02);
+        click(&mut reopened, &destination);
+        assert_eq!(reopened.state.tab().unwrap().page.id, target.id);
+        drop(reopened);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
 fn create_edit_format_search_and_reopen_a_page() {
     let (s, path) = fixture();
     let mut rt = Runtime::new(

@@ -1,6 +1,7 @@
 use rusqlite::{Connection, Result};
 
 pub(crate) fn init(conn: &Connection) -> Result<()> {
+    crate::comments::install_schema(conn)?;
     conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;
         CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));
         CREATE TABLE IF NOT EXISTS pages(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, parent_id TEXT REFERENCES pages(id) ON DELETE CASCADE, deleted_at TEXT, trash_root TEXT, data TEXT NOT NULL CHECK(json_valid(data)));

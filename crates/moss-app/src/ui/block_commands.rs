@@ -33,6 +33,9 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     if current.link_picker {
         return Some(link_picker(s, t));
     }
+    if let BlockCommandMode::Color { selection } = current.mode {
+        return super::editor_colors::popup(s, current, selection, t);
+    }
     let results = s.block_command_matches();
     let anchor = current.anchor.clone();
     let change = current.mode == BlockCommandMode::Change && !current.peek;
@@ -147,8 +150,37 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             .modal(true, |s: &mut State| s.dismiss_block_commands())
             .transition(Transition::opacity())
             .child(input)
-            .child(t.label("Basic blocks", t.muted).px(10.))
+            .child(t.label(
+                if current.mode == BlockCommandMode::TextType { "Turn into" } else { "Basic blocks" },
+                t.muted,
+            ).px(10.))
             .child(list)
+            .children((current.mode == BlockCommandMode::Change
+                && current.error.is_none()
+                && super::editor_colors::can_color(s, current))
+                .then(|| {
+                    menu::row_item(
+                        "block-color", "Color",
+                        rune::icon(super::view_icons::catalog_icon("palette").unwrap(), 16.).color(t.muted),
+                        t,
+                    )
+                    .on_press(|s: &mut State| {
+                        if let Some(menu) = &mut s.block_commands {
+                            menu.mode = BlockCommandMode::Color { selection: None };
+                        }
+                    })
+                }))
+            .children((current.mode == BlockCommandMode::Change && current.error.is_none()).then(|| {
+                let page = current.page_id.clone();
+                let block = current.block_id.clone();
+                let peek = current.peek;
+                menu::row_item(
+                    "comment-block",
+                    "Add comment",
+                    rune::icon(super::view_icons::catalog_icon("chat-circle").unwrap(), 16.).color(t.muted),
+                    t,
+                ).on_press(move |s: &mut State| s.comment_for_block(&page, &block, peek))
+            }))
             .children((change && current.error.is_none()).then(|| {
                 col()
                     .w_full()
@@ -194,6 +226,17 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
 fn link_picker(s: &State, t: Theme) -> El {
     let menu = s.block_commands.as_ref().unwrap();
     let anchor = menu.anchor.clone();
+    let active = if matches!(menu.mode, BlockCommandMode::TextLink { .. }) && menu.error.is_none() {
+        let blocks = if menu.peek {
+            s.record_peek.as_ref().filter(|p| p.page.id == menu.page_id).map(|p| &p.blocks)
+        } else {
+            s.tab().filter(|t| t.page.id == menu.page_id).map(|t| &t.blocks)
+        };
+        blocks.and_then(|blocks| blocks.iter().find(|b| b.block.id == menu.block_id))
+            .and_then(|block| block.edit.active_link())
+    } else {
+        None
+    };
     let input = super::inputs::field(
         &s.block_command_search,
         "block-link-search",
@@ -284,6 +327,30 @@ fn link_picker(s: &State, t: Theme) -> El {
         ))
         .modal(true, |s: &mut State| s.dismiss_block_commands())
         .child(input)
+        .children(active.map(|url| {
+            let (url, peek) = (url.to_owned(), menu.peek);
+            col()
+                .w_full()
+                .child(
+                    menu::row_item(
+                        "block-open-text-link", "Open link",
+                        rune::icon(super::view_icons::catalog_icon("arrow-up-right").unwrap(), 16.).color(t.muted),
+                        t,
+                    )
+                    .on_press_tx(move |s: &mut State, tx| {
+                        s.dismiss_block_commands();
+                        if peek { s.open_peek_inline_link(&url, tx); } else { s.open_inline_link(&url, tx); }
+                    }),
+                )
+                .child(
+                    menu::row_item(
+                        "block-remove-text-link", "Remove link",
+                        rune::icon(&phosphor::LINK, 16.).color(t.muted),
+                        t,
+                    )
+                    .on_press(|s: &mut State| s.apply_text_link(None)),
+                )
+        }))
         .child(
             col()
                 .w_full()

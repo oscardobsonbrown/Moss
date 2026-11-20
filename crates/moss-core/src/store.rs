@@ -431,6 +431,7 @@ impl Store {
                 }
             }
         }
+        crate::comments::update_block_anchors(&tx, page_id, &saved)?;
         tx.execute("DELETE FROM blocks WHERE page_id=?1", [page_id])?;
         for b in &saved {
             tx.execute(
