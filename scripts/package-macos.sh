@@ -8,13 +8,19 @@ if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|
     exit 1
 fi
 if [ "$profile" = debug ]; then
-    cargo build -p moss --jobs 2
+    cargo build -p moss -p moss-mcp --jobs 2
 else
-    cargo build --profile "$profile" -p moss --jobs 2
+    cargo build --profile "$profile" -p moss -p moss-mcp --jobs 2
 fi
 app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/moss" "$app/Contents/MacOS/Moss"
+cp "target/$profile/moss-mcp" "$app/Contents/MacOS/moss-mcp"
+if [ "${MOSS_RELEASE_BUILD:-}" = 1 ] && [ -n "${MOSS_UPDATE_PUBLIC_KEY:-}" ]; then
+    xcrun swiftc -O scripts/moss-update-helper.swift -o "$app/Contents/MacOS/moss-update-helper"
+else
+    rm -f "$app/Contents/MacOS/moss-update-helper"
+fi
 cp crates/moss-app/assets/Moss.icns "$app/Contents/Resources/Moss.icns"
 cp crates/moss-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
 cp crates/moss-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"

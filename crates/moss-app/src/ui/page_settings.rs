@@ -114,6 +114,30 @@ pub fn overlay(s: &State, t: Theme) -> El {
         }))
         .child(el().w_full().h(1.).fill(t.line))
         .child(
+            button("page-history", "History", t)
+                .w_full()
+                .h(34.)
+                .role("menuitem")
+                .on_press(|s: &mut State| {
+                    if let Some(id) = s.tab().map(|tab| tab.page.id.clone()) {
+                        s.modal = None;
+                        s.open_history(&id);
+                    }
+                }),
+        )
+        .child(
+            button("page-comments", "Comments", t)
+                .w_full()
+                .h(34.)
+                .role("menuitem")
+                .on_press(|s: &mut State| {
+                    if let Some(id) = s.tab().map(|tab| tab.page.id.clone()) {
+                        s.modal = None;
+                        s.open_comments(&id, None);
+                    }
+                }),
+        )
+        .child(
             button("create-subpage", "New subpage", t)
                 .w_full()
                 .h(34.)

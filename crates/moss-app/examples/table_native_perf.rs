@@ -20,6 +20,8 @@ mod chart_view;
 mod child_pages;
 #[path = "../src/computed_refresh.rs"]
 mod computed_refresh;
+#[path = "../src/comments.rs"]
+mod comments;
 #[path = "../src/dashboard_view.rs"]
 mod dashboard_view;
 #[path = "../src/database_properties.rs"]
@@ -38,8 +40,12 @@ mod editor_selection;
 mod emoji_catalog;
 #[path = "../src/fonts.rs"]
 mod fonts;
+#[path = "../src/history.rs"]
+mod history;
 #[path = "../src/inline_links.rs"]
 mod inline_links;
+#[path = "../src/local_service.rs"]
+mod local_service;
 #[path = "../src/map_clusters.rs"]
 mod map_clusters;
 #[path = "../src/map_interaction.rs"]
@@ -82,6 +88,8 @@ mod sidebar_section_menu;
 mod sidebar_sections;
 #[path = "../src/sidebar_tree.rs"]
 mod sidebar_tree;
+#[path = "../src/shared_refresh.rs"]
+mod shared_refresh;
 #[path = "../src/simple_table.rs"]
 mod simple_table;
 #[path = "../src/state.rs"]
@@ -92,8 +100,13 @@ mod table_columns;
 mod table_summaries;
 #[path = "../src/table_window.rs"]
 mod table_window;
+#[path = "../src/text_colors.rs"]
+mod text_colors;
 #[path = "../src/ui/mod.rs"]
 mod ui;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "../src/updater.rs"]
+mod updater;
 #[path = "../src/view_management.rs"]
 mod view_management;
 use rune::*;

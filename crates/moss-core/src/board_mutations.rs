@@ -152,6 +152,7 @@ impl Store {
         before: Option<&str>,
         expected_rank: &[u8],
     ) -> Result<Record> {
+        let actor = self.history_actor.clone();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -272,6 +273,20 @@ impl Store {
             let rank = rank_between(low.as_deref(), high.as_deref())?;
             tx.execute("INSERT INTO board_record_order(view_id,record_id,rank) VALUES(?1,?2,?3) ON CONFLICT(view_id,record_id) DO UPDATE SET rank=excluded.rank",params![view.id,record.id,rank])?;
         }
+        for (prop, value) in
+            std::iter::once((property, &group)).chain(subproperty.map(|p| (p, &subgroup)))
+        {
+            crate::history::record_change(
+                &tx,
+                &owner,
+                "record",
+                &record.id,
+                Some(&prop.id),
+                Some(record.values.get(&prop.id).unwrap_or(&Value::Null)),
+                Some(value),
+                actor.as_ref(),
+            )?;
+        }
         record.values.insert(property.id.clone(), group);
         if let Some(sub) = subproperty {
             record.values.insert(sub.id.clone(), subgroup);
@@ -317,6 +332,7 @@ impl Store {
         old: Option<&Value>,
         name: &str,
     ) -> Result<Database> {
+        let actor = self.history_actor.clone();
         let name = name.trim();
         if name.is_empty() || name.len() > 256 {
             return Err(invalid("Group name must contain 1 to 256 bytes."));
@@ -390,6 +406,16 @@ impl Store {
                         if record.values.get(&expected.id).and_then(Value::as_str) != Some(old) {
                             continue;
                         }
+                        crate::history::record_change(
+                            tx,
+                            owner,
+                            "record",
+                            &record.id,
+                            Some(&expected.id),
+                            Some(&json!(old)),
+                            Some(&json!(name)),
+                            actor.as_ref(),
+                        )?;
                         record.values.insert(expected.id.clone(), json!(name));
                         record.updated_at = now();
                         let values = encode(&record.values)?;

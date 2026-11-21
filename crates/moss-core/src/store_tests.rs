@@ -49,7 +49,7 @@ fn checking_a_todo_updates_only_that_block_and_validates_its_owner() {
         .unwrap();
     let changes = store.local_change_count();
     store.set_todo_checked(&page.id, &todo.id, true).unwrap();
-    assert_eq!(store.local_change_count() - changes, 1);
+    assert_eq!(store.local_change_count() - changes, 2);
     todo.checked = true;
     assert_eq!(
         store.get_blocks(&page.id).unwrap(),

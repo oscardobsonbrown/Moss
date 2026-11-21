@@ -12,6 +12,7 @@ pub struct Tab {
     pub page: Page,
     pub title: TextEdit,
     pub blocks: Vec<EditableBlock>,
+    pub(crate) saved_blocks: Vec<Block>,
     pub choosing_type: bool,
     pub child_pages: Option<PageChildren>,
     pub page_links: BTreeMap<String, Page>,
@@ -59,6 +60,7 @@ pub struct RecordPeek {
     pub page: Page,
     pub title: TextEdit,
     pub blocks: Vec<EditableBlock>,
+    pub(crate) saved_blocks: Vec<Block>,
     pub page_links: BTreeMap<String, Page>,
     pub mode: PeekMode,
     pub dirty_title: bool,
@@ -74,6 +76,7 @@ pub struct NewItemDraft {
 pub enum Modal {
     Search,
     Settings,
+    AgentSetup { feedback: Option<&'static str> },
     PageActions,
     Appearance,
     Trash,
@@ -83,6 +86,10 @@ pub enum Modal {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Preferences {
     pub dark: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_updates: Option<bool>,
+    #[serde(default)]
+    pub mcp_enabled: bool,
     #[serde(default)]
     pub start_week_on_monday: bool,
     #[serde(default)]
@@ -115,6 +122,13 @@ impl Preferences {
     }
 }
 pub struct State {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub updates: crate::updater::Window,
+    pub local_service: std::sync::Arc<std::sync::Mutex<Option<crate::local_service::LocalService>>>,
+    pub agent_presence: std::collections::HashMap<String, Vec<(String, String)>>,
+    pub presence_open: Option<String>,
+    pub comments: crate::comments::CommentsState,
+    pub history: crate::history::HistoryState,
     pub editor_selection: Option<crate::editor_selection::Selection>,
     pub editor_drag: Option<crate::editor_drag::BlockDrag>,
     pub editor_column_resize: Option<crate::editor_drag::ColumnResize>,
@@ -186,6 +200,10 @@ pub struct State {
     pub advanced_property: crate::advanced_properties::AdvancedProperty,
     pub computed_change_count: u64,
     pub computed_refresh_deferred: bool,
+    pub(crate) external_data_version: i64,
+    pub(crate) external_refresh_pending: bool,
+    pub(crate) external_check_at: f64,
+    pub(crate) collaboration_live: bool,
     pub sidebar_page_menu: Option<crate::sidebar_page_menu::SidebarPageMenu>,
     pub sidebar_favorites: crate::sidebar_favorites::SidebarFavorites,
     pub sidebar_page_name: TextEdit,
@@ -219,6 +237,12 @@ impl State {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&path)?;
         let mut store = Store::open(path.join("workspace.sqlite3"))?;
+        store.set_history_actor(Some(moss_core::history::HistoryActor {
+            id: "local-user".into(),
+            name: "You".into(),
+            kind: "person".into(),
+        }))?;
+        let external_data_version = store.external_data_version()?;
         if store.list_workspaces()?.is_empty() {
             if std::env::var_os("MOSS_DEMO").is_some_and(|value| value != "0") {
                 store.seed_demo_workspaces()?;
@@ -255,6 +279,8 @@ impl State {
         let restore = prefs.tabs.get(&workspace.id).cloned().unwrap_or_default();
         let active = *prefs.active.get(&workspace.id).unwrap_or(&0);
         let mut s = Self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            updates: Default::default(),
             editor_selection: None,
             editor_drag: None,
             editor_column_resize: None,
@@ -267,6 +293,11 @@ impl State {
             database_views: Default::default(),
             summary_jobs: Default::default(),
             table_window_jobs: Default::default(),
+            local_service: Default::default(),
+            agent_presence: Default::default(),
+            presence_open: None,
+            comments: Default::default(),
+            history: Default::default(),
             store,
             path,
             workspaces,
@@ -326,6 +357,10 @@ impl State {
             advanced_property: Default::default(),
             computed_change_count: 0,
             computed_refresh_deferred: false,
+            external_data_version,
+            external_refresh_pending: false,
+            external_check_at: 0.,
+            collaboration_live: false,
             sidebar_page_menu: None,
             sidebar_favorites: Default::default(),
             sidebar_page_name: TextEdit::new(""),
@@ -469,6 +504,27 @@ impl State {
         if let Err(e) = result {
             self.error = Some(format!("Could not save window settings: {e}"));
         }
+    }
+    pub fn set_mcp_enabled(&mut self, enabled: bool) {
+        if enabled {
+            if self.local_service.lock().unwrap().is_none() {
+                match crate::local_service::start(&self.path, self.handles.clone()) {
+                    Ok(service) => *self.local_service.lock().unwrap() = Some(service),
+                    Err(error) => { self.error = Some(format!("Could not start local agent access: {error}")); return; }
+                }
+            }
+        } else {
+            let service = self.local_service.lock().unwrap().take();
+            drop(service);
+        }
+        self.shared_preferences.lock().unwrap().mcp_enabled = enabled;
+        self.prefs.mcp_enabled = enabled;
+        if let Ok(handles) = self.handles.lock() {
+            for handle in handles.values() {
+                handle.update(move |s, _| s.prefs.mcp_enabled = enabled);
+            }
+        }
+        self.save_preferences();
     }
     pub fn set_theme(&mut self, dark: Option<bool>) {
         self.shared_preferences.lock().unwrap().dark = dark;
@@ -709,13 +765,17 @@ impl State {
             })
             .collect();
         let page_id = tab.page.id.clone();
-        match self.store.save_editor_blocks(&page_id, &blocks) {
+        match self.store.save_editor_blocks_if_unchanged(&page_id, &tab.saved_blocks, &blocks) {
             Ok(blocks) => {
                 crate::page_covers::sync_saved_image_assets(&mut tab.blocks, &blocks);
+                tab.saved_blocks = blocks.clone();
                 tab.dirty_blocks = false;
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
                 self.keep_draft_for_page(&page_id);
+                if self.comments.threads.get(&page_id).is_some_and(|threads| !threads.is_empty()) {
+                    self.load_comments(&page_id);
+                }
             }
             Err(e) => {
                 self.error = Some(format!(
@@ -745,7 +805,8 @@ impl State {
         let mut edit = suffix;
         edit.set_caret(0);
         edit.focused = true;
-        let mut block = Block::paragraph(&tab.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&tab.page.id, &edit.text, after as i64 + 1);
+        crate::text_colors::copy_suffix(&tab.blocks[after].block, &mut block, end);
         crate::editor_drag::copy_column(&tab.blocks[after].block, &mut block);
         let oldkind = tab.blocks[after].block.kind;
         if matches!(

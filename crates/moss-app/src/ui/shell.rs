@@ -100,6 +100,7 @@ pub fn titlebar(s: &State, cx: &mut Cx<State>, t: Theme, sidebar_width: f32) -> 
                         s.active = i;
                         s.filter = TextEdit::new(&s.tabs[i].title_search);
                         let id = s.tabs[i].page.id.clone();
+                        s.load_comments(&id);
                         s.record_navigation(&id);
                         s.save_preferences();
                     }),
@@ -463,6 +464,7 @@ pub fn content(s: &State, t: Theme, width: f32) -> El {
                 )
         }))
         .child(el().grow(1.))
+        .children(s.tab().and_then(|tab| presence(s, &tab.page.id, "", t)))
         .children(s.tab().map(|_| {
             shell_icon(
                 "page-actions",
@@ -580,4 +582,28 @@ pub fn sidebar_resize(s: &State, t: Theme, width: f32, window_width: f32) -> El 
                 .fill(t.line)
                 .group_opacity(0., 1.),
         )
+}
+
+pub fn presence(s: &State, page_id: &str, prefix: &str, t: Theme) -> Option<El> {
+    let agents = s.agent_presence.get(page_id)?;
+    Some(
+            row().center_y().gap(4.).children(agents.iter().map(|(session, name)| {
+                let session_id = session.clone();
+                let key = format!("{prefix}presence-agent-{session}");
+                let initial = name.chars().next().unwrap_or('?').to_uppercase().to_string();
+                let mut avatar = row().key(&key).size(28., 28.).center().role("button")
+                    .label(name).focusable(true)
+                    .child(super::comments::agent_avatar(initial, 28., t).a11y_hidden())
+                    .on_press(move |s: &mut State| {
+                        s.presence_open = if s.presence_open.as_ref() == Some(&session_id) { None } else { Some(session_id.clone()) };
+                    });
+                if s.presence_open.as_ref() == Some(session) {
+                    avatar = avatar.child(col().key(format!("{prefix}presence-name-{session}"))
+                        .padding(8.).fill(t.bg).border(1., t.line).radius(6.)
+                        .child(t.label(name, t.text))
+                        .anchored(&key, Side::Bottom, Align::End, 4.).raise());
+                }
+                avatar
+            }))
+    )
 }

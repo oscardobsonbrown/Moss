@@ -15,6 +15,9 @@ Date: 2026-11-07. This is a working development build. It is not the complete v1
 - Formula, Relation and Rollup editors are connected to transactional materialized calculations. Local source edits update dependent rows, with cycle guards and explicit calculation errors. This is a tested subset of Notion formulas, not complete syntax or date-time parity.
 - Versioned JSON archive core with corruption checks, new IDs on import, separate-workspace restore, relations and Trash round trips. The app has archive export. This early archive version has a 64 MiB limit and rejects attachments and external relations.
 - Five optional demo workspaces. Set `MOSS_DEMO=1` in a new `MOSS_DATA_DIR` to create them. Normal first launch creates one personal workspace.
+- Local comments support page, block, text and database-cell anchors, replies and resolve/reopen. Text comments have yellow highlights and underlines, with gutter markers. Threads whose anchors no longer exist remain available in the comments panel. Comments and recorded history are included in workspace archives.
+- Opt-in local agent access provides an MCP adapter, page-scoped agent presence and guarded edits. Open pages refresh changes to other blocks while a user edits. Conflicting edits are rejected or kept as unsaved drafts. See [Local agent access](../README.md#local-agent-access) for setup and service limits.
+- Page history shows recorded changes and their actors on demand. It supports scoped block and cell history and restores supported text blocks and simple cell values. History starts when this version records a change; it cannot recover earlier edits.
 
 ## Checks
 
@@ -35,7 +38,8 @@ The PRD remains the scope. In particular:
 - Complete the remaining typed properties, full Formula/Relation/Rollup parity, linked databases, advanced/nested filter editing, grouping details, templates and dependency editing. The current header and advanced-property controls cover a working subset; some filter semantics still differ.
 - Complete Chart, Feed, Map and Dashboard, and full settings and interactions in the six initial layouts. Current views operate on the current record page, so group/calendar totals are not global totals.
 - Add creation and import of workspaces with new windows at runtime. Rune currently registers workspace windows before the event loop starts. Resolve this framework boundary before exposing those actions.
-- Add local people, comments, buttons, automations, recurring templates, reminders and optional Start at login. The resident process alone does not implement scheduled work.
+- Complete collaboration: simultaneous edits within the same block, cross-computer sync, agent cursors, full MCP action coverage and history for all mutations. History currently excludes manual board order and schema and view changes. It cannot restore all content types or record lifecycle changes. History is deleted when its page is permanently deleted, including the existing 30-day Trash purge. Restore of a cell value from a renamed board group does not recreate the old option.
+- Add local people, buttons, automations, recurring templates, reminders and optional Start at login. The resident process alone does not implement scheduled work.
 - Complete attachments and lossless archive support at the agreed scale. Add Markdown/CSV/HTML import and Markdown/CSV/HTML/PDF export with loss reports.
 - Complete per-tab scroll/selection restoration, navigation history, accessibility, keyboard/IME, error/recovery and disk-full checks. Keep unsaved edits available after write failures. App navigation has save guards; native termination still needs an all-window veto path (see NATIVE-CLOSE-GAP.md).
 - Measure full visible content-open time, uncached reads, memory and cold start on this Mac. The 8.8 ms, 20 ms and 300 ms requirements are not yet verified. JSON property queries still scan records; they need indexed projections for large data.

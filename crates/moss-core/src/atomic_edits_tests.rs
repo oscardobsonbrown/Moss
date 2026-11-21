@@ -38,6 +38,22 @@ fn definition() -> Database {
 }
 
 #[test]
+fn stale_editor_snapshot_does_not_overwrite_other_changes() {
+    let mut s = Store::in_memory().unwrap();
+    let w = s.create_workspace("Shared", "").unwrap();
+    let page = s.create_page(&w.id, None, "Page", "", PageKind::Document).unwrap();
+    let original = vec![Block::paragraph(&page.id, "original", 0)];
+    s.save_blocks(&page.id, &original).unwrap();
+    let mut changed = original.clone();
+    changed[0].text = "other editor".into();
+    s.save_editor_blocks_if_unchanged(&page.id, &original, &changed).unwrap();
+    let mut stale = original.clone();
+    stale[0].text = "stale draft".into();
+    assert!(s.save_editor_blocks_if_unchanged(&page.id, &original, &stale).is_err());
+    assert_eq!(s.get_blocks(&page.id).unwrap(), changed);
+}
+
+#[test]
 fn failed_database_insert_leaves_no_page_or_search_entry() {
     let mut s = Store::in_memory().unwrap();
     let w = s.create_workspace("Atomic", "").unwrap();

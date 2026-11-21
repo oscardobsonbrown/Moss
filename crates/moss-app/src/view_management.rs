@@ -1,6 +1,8 @@
 use crate::state::State;
+use crate::text_colors::Palette;
 use moss_core::{Database, DatabaseView, ViewKind};
 use rune::TextEdit;
+use serde_json::Value;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ViewPane {
@@ -724,30 +726,38 @@ impl State {
         if icon.is_some_and(|name| crate::ui::view_icons::catalog_icon(name).is_none()) {
             return;
         }
+        if self.save_view_icon_setting("icon", icon.map(Value::from)) {
+            self.view_management.as_mut().unwrap().pane = ViewPane::Main;
+        }
+    }
+
+    pub fn set_view_icon_color(&mut self, color: Option<Palette>) {
+        self.save_view_icon_setting("icon_color", color.map(|color| serde_json::json!(color)));
+    }
+
+    fn save_view_icon_setting(&mut self, key: &'static str, value: Option<Value>) -> bool {
         let Some((id, Some(view))) = self.view_context() else {
-            return;
+            return false;
         };
-        let expected = view.config.get("icon").cloned();
+        let expected = view.config.get(key);
         let result = self
             .store
             .edit_view_config(&id, &view.id, view.kind, |config| {
-                if config.get("icon").cloned() != expected {
+                if config.get(key) != expected {
                     return Err("View icon changed elsewhere".into());
                 }
                 if config.is_null() {
                     *config = serde_json::json!({});
                 }
                 let config = config.as_object_mut().ok_or("Invalid view settings")?;
-                if let Some(icon) = icon {
-                    config.insert("icon".into(), icon.into());
+                if let Some(value) = value {
+                    config.insert(key.into(), value);
                 } else {
-                    config.remove("icon");
+                    config.remove(key);
                 }
                 Ok(())
             })
             .map_err(|error| error.to_string());
-        if self.view_result(result, None, false) {
-            self.view_management.as_mut().unwrap().pane = ViewPane::Main;
-        }
+        self.view_result(result, None, false)
     }
 }

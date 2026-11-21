@@ -118,17 +118,11 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                             .fill(t.bg)
                             .border(1., t.line)
                             .child(
-                                rune::icon(
-                                    editor
-                                        .expected
-                                        .as_ref()
-                                        .map(super::view_icons::for_view)
-                                        .unwrap_or_else(|| {
-                                            super::view_icons::toolbar_icon(editor.kind)
-                                        }),
-                                    16.,
-                                )
-                                .color(t.muted),
+                                editor.expected.as_ref().map_or_else(
+                                    || rune::icon(super::view_icons::toolbar_icon(editor.kind), 16.)
+                                        .color(t.muted),
+                                    |view| super::view_icons::for_view(view, t.muted, t.dark),
+                                ),
                             )
                             .role("button")
                             .label("Change view icon")
@@ -357,6 +351,9 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             body = super::board_settings::body(s, pane, t)?;
         }
         ViewPane::Icons => {
+            use crate::text_colors::Palette;
+            let current = editor.expected.as_ref().and_then(super::view_icons::color_for_view);
+            let icon_ink = Palette::icon_paint(current, t.dark);
             let query = editor.icon_search.text.to_lowercase().replace(' ', "-");
             let matches: std::rc::Rc<Vec<usize>> = std::rc::Rc::new(
                 super::view_icons::catalog()
@@ -399,6 +396,29 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     )
                     .on_press(|s: &mut State| s.set_view_icon(None)),
                 )
+                .child(t.sized_label("Icon color", 12., t.muted).px(4.).pt(4.))
+                .child(
+                    row().gap(3.).px(4.).pb(4.)
+                        .children(Palette::choices().map(|(color, name)| {
+                            let label = format!("Icon color: {name}");
+                            row()
+                                .key(format!("view-icon-color-{name}"))
+                                .size(22., 24.)
+                                .center()
+                                .radius(4.)
+                                .border(1., if current == color { t.blue } else { t.line })
+                                .hover(t.hover)
+                                .label(&label)
+                                .help(label)
+                                .role("button")
+                                .focusable(true)
+                                .child(el().size(10., 10.).radius(5.).fill(Palette::icon_paint(color, t.dark)))
+                                .on_press_tx(move |s: &mut State, tx| {
+                                    s.set_view_icon_color(color);
+                                    tx.instant();
+                                })
+                        })),
+                )
                 .child(
                     col()
                         .key(format!("view-icon-scroll-{query}"))
@@ -439,7 +459,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                                                     .role("button")
                                                     .label(name.replace('-', " "))
                                                     .focusable(true)
-                                                    .child(rune::icon(icon, 18.).color(t.text))
+                                                    .child(rune::icon(icon, 18.).color(icon_ink))
                                                     .on_press(move |s: &mut State| {
                                                         s.set_view_icon(Some(name))
                                                     }),

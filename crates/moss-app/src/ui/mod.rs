@@ -7,6 +7,7 @@ mod board_settings;
 mod calendar;
 mod cell_recovery;
 mod chart;
+pub(crate) mod comments;
 mod child_pages;
 mod dashboard;
 mod database;
@@ -14,8 +15,10 @@ mod database_new;
 mod database_properties;
 mod database_toolbar;
 mod editor;
+mod editor_colors;
 mod editor_layout;
 mod gallery;
+mod history;
 mod icons;
 mod image_block;
 mod inputs;
@@ -45,7 +48,9 @@ mod sidebar_section_menu;
 mod sidebar_sections;
 mod sidebar_surface;
 mod simple_table;
+mod software_update;
 mod table;
+mod text_toolbar;
 mod theme;
 mod timeline;
 pub(crate) mod view_icons;
@@ -74,6 +79,24 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         expanded_sidebar_width
     };
     let available_width = (window_width - sidebar_width).max(0.);
+    let center_peek_comments = s.record_peek.as_ref().is_some_and(|peek| {
+        peek.mode == crate::state::PeekMode::Center
+            && s.comments.page_id.as_ref().is_some_and(|id| &peek.page.id == id)
+    });
+    let center_peek_history = s.record_peek.as_ref().is_some_and(|peek| {
+        peek.mode == crate::state::PeekMode::Center && s.history.open
+            && s.history.page_id.as_ref() == Some(&peek.page.id)
+    });
+    let history_visible = s.history.open && !center_peek_history && s.history.page_id.as_ref().is_some_and(|id| {
+        s.tab().is_some_and(|tab| &tab.page.id == id)
+            || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
+    });
+    let comments_width = if (!center_peek_comments && s.comments.open
+        && s.comments.page_id.as_ref().is_some_and(|id| {
+            s.tab().is_some_and(|tab| &tab.page.id == id)
+                || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
+        })) || history_visible
+    { 300_f32.min((available_width * 0.4).max(0.)) } else { 0. };
     let peek_width = if has_side_peek {
         (available_width / 2.).min(420.)
     } else {
@@ -110,8 +133,10 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .grow(1.)
                 .min_h(0.)
                 .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
-                .child(shell::content(s, t, available_width - peek_width))
-                .children(record_peek::side(s, t, peek_width)),
+                .child(shell::content(s, t, (available_width - peek_width - comments_width).max(0.)))
+                .children(record_peek::side(s, t, peek_width))
+                .children((!center_peek_comments).then(|| comments::panel(s, t, comments_width)).flatten())
+                .children((!center_peek_history).then(|| history::panel(s, t, comments_width)).flatten()),
         )
         .children(
             (!s.sidebar_collapsed())
@@ -121,6 +146,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         // overlays too, so both paint and pointer input follow overlay order.
         .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
         .children(record_peek::center(s, t).map(El::raise))
+        .children(text_toolbar::view(s, cx, t).map(El::raise))
         .children(database_new::menu(s, t).map(El::raise))
         .children(database::undated_overlay(s, t).map(El::raise))
         .children(gallery::settings(s, t).map(El::raise))
@@ -143,6 +169,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .children(map_clusters::popup(s, t).map(El::raise))
         .children(map_controls::popup(s, t).map(El::raise))
         .children(block_commands::popup(s, t).map(El::raise))
+        .children(software_update::toast(s, t).map(El::raise))
 }
 
 mod sidebar_page_menu;

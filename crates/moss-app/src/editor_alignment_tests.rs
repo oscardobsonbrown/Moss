@@ -128,12 +128,24 @@ fn page_content_edges_remain_aligned_across_window_and_font_modes() {
                                 "paragraph/heading: {input:?} {title:?}"
                             );
                         }
-                        for (id, expected_inset) in ids[4..9].iter().zip([30., 36., 30., 48., 14.])
+                        for (id, expected_inset) in ids[4..9].iter().zip([36., 36., 36., 48., 14.])
                         {
                             let input = info(&rt, &format!("block-input-{id}")).rect;
                             assert!(
                                 (input[0] - title[0] - expected_inset).abs() <= 0.6,
                                 "list, callout or code inset: {input:?} {title:?}; expected {expected_inset}"
+                            );
+                        }
+                        for (index, id) in ids[4..7].iter().enumerate() {
+                            let input = info(&rt, &format!("block-input-{id}")).rect;
+                            let marker = if index == 2 {
+                                info(&rt, &format!("todo-box-{id}")).rect
+                            } else {
+                                info(&rt, &format!("list-marker-{id}")).rect
+                            };
+                            assert!(
+                                (marker[1] + marker[3] / 2. - input[1] - 13.).abs() <= 0.6,
+                                "list marker must stay centered on the first line: {marker:?} {input:?}"
                             );
                         }
                         let divider = info(&rt, &format!("block-{}", ids[9])).rect;

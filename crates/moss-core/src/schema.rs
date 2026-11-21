@@ -32,6 +32,8 @@ pub(crate) fn init(conn: &Connection) -> Result<()> {
         CREATE TRIGGER IF NOT EXISTS block_search_delete AFTER DELETE ON blocks BEGIN DELETE FROM search_fts WHERE key='block:' || old.id; END;
         CREATE TRIGGER IF NOT EXISTS record_search_delete AFTER DELETE ON records BEGIN DELETE FROM search_fts WHERE key='record:' || old.id; END;"
     )?;
+    crate::comments::install_schema(conn)?;
+    crate::history::install_schema(conn)?;
     crate::record_windows::install_schema(conn)?;
     crate::board::install_schema(conn)?;
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;

@@ -55,6 +55,9 @@ impl State {
                 if let Some(block) = page.blocks.iter_mut().find(|b| b.block.id == block_id) {
                     block.block.checked = checked;
                 }
+                if let Some(block) = page.saved_blocks.iter_mut().find(|b| b.id == block_id) {
+                    block.checked = checked;
+                }
             }
         }
         if let Some(page) = self
@@ -64,6 +67,9 @@ impl State {
         {
             if let Some(block) = page.blocks.iter_mut().find(|b| b.block.id == block_id) {
                 block.block.checked = checked;
+            }
+            if let Some(block) = page.saved_blocks.iter_mut().find(|b| b.id == block_id) {
+                block.checked = checked;
             }
         }
         self.keep_draft_for_page(&page_id);

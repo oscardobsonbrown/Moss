@@ -1,6 +1,7 @@
 use rune::*;
 #[derive(Clone, Copy)]
 pub struct Theme {
+    pub dark: bool,
     pub bg: Color,
     pub menu: Color,
     pub family: Family,
@@ -50,6 +51,7 @@ impl Theme {
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
+                dark,
                 bg: hex(0x191919),
                 menu: hex(0x252525),
                 family: Family::Sans,
@@ -69,13 +71,14 @@ impl Theme {
             }
         } else {
             Self {
+                dark,
                 bg: Color::WHITE,
                 menu: Color::WHITE,
                 family: Family::Sans,
                 text_scale: 1.,
                 caret_visible: true,
                 sidebar: hex(0xF7F7F5),
-                text: hex(0x37352F),
+                text: hex(0x373530),
                 muted: hex(0x787774),
                 faint: hex(0x9B9A97),
                 line: hex(0xE9E9E7),

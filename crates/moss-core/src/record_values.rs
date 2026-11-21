@@ -25,6 +25,8 @@ impl Store {
         value: Value,
         required_kind: Option<crate::PropertyKind>,
     ) -> Result<Record> {
+        let actor = self.history_actor.clone();
+        let coalesce = self.history_coalesce;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -73,6 +75,24 @@ impl Store {
         if owner.deleted_at.is_some() || owner.kind != PageKind::Database {
             return Err(invalid("invalid database page"));
         }
+        crate::history::record_text_change(
+            &tx,
+            &owner,
+            "record",
+            &record.id,
+            property_id,
+            record.values.get(property_id).unwrap_or(&Value::Null),
+            &value,
+            actor.as_ref(),
+            coalesce
+                && matches!(
+                    property.kind,
+                    crate::PropertyKind::Text
+                        | crate::PropertyKind::Url
+                        | crate::PropertyKind::Email
+                        | crate::PropertyKind::Phone
+                ),
+        )?;
         let target = if let Some(id) = &record.page_id {
             let page = search::page(&tx, id)?.ok_or_else(|| invalid("record page missing"))?;
             if page.deleted_at.is_some()

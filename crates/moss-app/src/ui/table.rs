@@ -18,6 +18,18 @@ fn cell(
     t: Theme,
 ) -> El {
     let editing = active(s, record, property.as_deref());
+    let comment_target = s.tab().and_then(|tab| {
+        let database = tab.database.as_ref()?;
+        let property_id = property.as_ref().cloned().or_else(|| {
+            database.properties.iter().find(|p| p.kind == PropertyKind::Title).map(|p| p.id.clone())
+        })?;
+        let existing = s.comments.threads.get(&tab.page.id).and_then(|threads| threads.iter().find(|thread| {
+            !thread.resolved && thread.anchor_available && matches!(&thread.anchor,
+                moss_core::comments::CommentAnchor::Cell { record_id, property_id: id }
+                    if record_id == &record.id && id == &property_id)
+        })).map(|thread| thread.id.clone());
+        Some((tab.page.id.clone(), property_id, existing))
+    });
     let selected = s
         .selected_cell
         .as_ref()
@@ -260,6 +272,40 @@ fn cell(
             contents = contents.border(2., t.blue);
         }
         wrapper = contents;
+    }
+    if let Some((page, property_id, existing)) = comment_target.filter(|_| !editing) {
+        let record_id = record.id.clone();
+        let history_page = page.clone();
+        let history_record = record_id.clone();
+        let history_property = property_id.clone();
+        let visible = existing.is_some() || s.sidebar_keyboard_controls;
+        // The title cell reserves its trailing 70 points for the Open page control.
+        let action_inset = if title { 74. } else { 0. };
+        wrapper = wrapper.child(
+            row().key(format!("cell-history-{index}-{property_id}"))
+                .pin(None, Some(0.), Some(action_inset + 20.), None).size(20., 20.).center().radius(4.)
+                .fill(t.bg).hover(t.hover).role("button").label("Show cell changes")
+                .focusable(true).group_opacity(if s.sidebar_keyboard_controls { 1. } else { 0. }, 1.)
+                .child(rune::icon(&super::phosphor::CLOCK_COUNTER_CLOCKWISE, 14.).color(t.muted))
+                .on_press(move |s: &mut State| s.open_item_history(&history_page, &history_record, Some(&history_property))),
+        );
+        wrapper = wrapper.child(
+            row().key(format!("cell-comment-{index}-{property_id}"))
+                .pin(None, Some(0.), Some(action_inset), None).size(20., 20.).center().radius(4.)
+                .fill(t.bg).hover(t.hover).role("button")
+                .label(if existing.is_some() { "Open cell comments" } else { "Add cell comment" })
+                .focusable(true).group_opacity(if visible { 1. } else { 0. }, 1.)
+                .child(rune::icon(super::view_icons::catalog_icon("chat-circle").unwrap(), 14.)
+                    .color(if existing.is_some() { rune::color::oklch(0.68, 0.14, 80.) } else { t.muted }))
+                .on_press_tx(move |s: &mut State, tx| {
+                    let anchor = existing.is_none().then(|| moss_core::comments::CommentAnchor::Cell {
+                        record_id: record_id.clone(), property_id: property_id.clone(),
+                    });
+                    s.open_comments(&page, anchor);
+                    if let Some(id) = &existing { tx.scroll_into_view(format!("comment-thread-{id}")); }
+                    tx.instant();
+                }),
+        );
     }
     wrapper
 }

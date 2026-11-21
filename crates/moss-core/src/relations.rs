@@ -133,6 +133,7 @@ impl Store {
         expected_value: &Value,
         ids: &[String],
     ) -> Result<Record> {
+        let actor = self.history_actor.clone();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -172,6 +173,16 @@ impl Store {
             return Err(invalid("relation value changed in another editor"));
         }
         validate_relation_value(&tx, prop, &json!(ids), &owner.workspace_id)?;
+        crate::history::record_change(
+            &tx,
+            &owner,
+            "relation",
+            &record.id,
+            Some(&prop.id),
+            Some(expected_value),
+            Some(&json!(ids)),
+            actor.as_ref(),
+        )?;
         record.values.insert(prop.id.clone(), json!(ids));
         record.updated_at = now();
         let values = encode(&record.values)?;

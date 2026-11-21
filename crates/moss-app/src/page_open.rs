@@ -14,12 +14,14 @@ impl State {
             self.active = i;
             self.filter = TextEdit::new(&self.tabs[i].title_search);
             self.record_navigation(id);
+            self.load_comments(id);
             self.save_preferences();
             return;
         }
         let result = (|| -> Result<Tab, Box<dyn std::error::Error>> {
             let page = self.store.get_page(id)?.ok_or("Page was not found")?;
             let mut blocks = self.store.get_blocks(id)?;
+            let saved_blocks = blocks.clone();
             let empty_document = blocks.is_empty() && page.kind == PageKind::Document;
             if blocks.is_empty() {
                 blocks.push(Block::paragraph(id, "", 0));
@@ -184,6 +186,7 @@ impl State {
                 });
             let mut tab = Tab {
                 choosing_type,
+                saved_blocks,
                 title: TextEdit::new(&page.title),
                 page,
                 blocks: blocks
@@ -275,6 +278,7 @@ impl State {
                 }
                 self.filter = TextEdit::new("");
                 self.record_navigation(id);
+                self.load_comments(id);
                 self.refresh_table_summaries();
                 self.save_preferences();
             }

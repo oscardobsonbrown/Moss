@@ -25,6 +25,42 @@ pub fn load_links(
 }
 
 impl State {
+    pub fn apply_text_link(&mut self, url: Option<&str>) {
+        let Some(menu) = &self.block_commands else { return };
+        let BlockCommandMode::TextLink { selection, .. } = menu.mode else { return };
+        if menu.error.is_some() {
+            return;
+        }
+        let peek = menu.peek;
+        let blocks = if peek {
+            self.record_peek.as_mut().filter(|p| p.page.id == menu.page_id).map(|p| &mut p.blocks)
+        } else {
+            self.tabs.get_mut(self.active).filter(|t| t.page.id == menu.page_id).map(|t| &mut t.blocks)
+        };
+        let Some(block) = blocks.and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == menu.block_id)) else {
+            return;
+        };
+        if block.edit.range() != selection {
+            self.dismiss_block_commands();
+            return;
+        }
+        block.edit.set_link(url);
+        block.edit.focused = true;
+        let dirty = if peek {
+            self.save_peek_blocks();
+            self.record_peek.as_ref().is_some_and(|p| p.dirty_blocks)
+        } else {
+            self.save_blocks();
+            self.tab().is_some_and(|t| t.dirty_blocks)
+        };
+        if dirty {
+            self.block_commands.as_mut().unwrap().error = Some("Link is not saved. Retry to keep it.".into());
+        } else {
+            self.block_commands = None;
+            self.block_command_search.focused = false;
+        }
+    }
+
     pub fn refresh_block_link_results(&mut self) {
         let query = self.block_command_search.text.trim();
         let results = if query.is_empty() {
@@ -192,6 +228,19 @@ impl State {
         self.finish_peek_block_insert();
     }
     pub fn insert_block_link(&mut self, page: Option<String>, url: Option<String>) {
+        if self.block_commands.as_ref().is_some_and(|menu| matches!(menu.mode, BlockCommandMode::TextLink { .. })) {
+            if let Some(id) = page {
+                match self.store.get_page(&id) {
+                    Ok(Some(p)) if p.workspace_id == self.workspace.id && p.deleted_at.is_none() => {
+                        self.apply_text_link(Some(&format!("moss-page:{id}")));
+                    }
+                    _ => self.error = Some("Page is not available.".into()),
+                }
+            } else if let Some(url) = url.as_deref().filter(|url| url.starts_with("https://") || url.starts_with("http://")) {
+                self.apply_text_link(Some(url));
+            }
+            return;
+        }
         if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
             self.insert_peek_link(page, url);
             return;
@@ -329,6 +378,7 @@ impl State {
             Ok((child, blocks)) => {
                 self.track_new_child_page(&child, &blocks);
                 let tab = &mut self.tabs[self.active];
+                tab.saved_blocks = blocks.clone();
                 tab.blocks = blocks
                     .into_iter()
                     .map(|block| {

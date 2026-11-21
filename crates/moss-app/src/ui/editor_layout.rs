@@ -6,6 +6,39 @@ use crate::{
 use rune::*;
 use std::{collections::BTreeMap, rc::Rc};
 
+pub fn with_list_numbers(
+    blocks: &[EditableBlock],
+) -> impl Iterator<Item = (&EditableBlock, usize)> {
+    blocks.iter().scan(0, |number, block| {
+        if block.block.kind == moss_core::BlockKind::NumberedList {
+            *number += 1;
+        } else {
+            *number = 0;
+        }
+        Some((block, *number))
+    })
+}
+
+pub fn list_marker_width(blocks: &[EditableBlock], scale: f32) -> f32 {
+    let last = with_list_numbers(blocks).map(|(_, number)| number).max().unwrap_or(0);
+    let digits_and_period = last.max(1).ilog10() + 2;
+    30_f32.max(digits_and_period as f32 * 10. * scale)
+}
+
+pub fn list_label(
+    id: &str,
+    label: impl Into<String>,
+    style: TextStyle,
+    width: f32,
+    color: Color,
+) -> El {
+    text(label)
+        .key(format!("list-marker-{id}"))
+        .font(style)
+        .color(color)
+        .size(width, style.line_px())
+}
+
 pub fn zones(tab: &Tab) -> Rc<Vec<DropZone>> {
     zones_for(&tab.blocks, "block", Some("append-block"))
 }
@@ -116,6 +149,7 @@ pub fn decorate_for(s: &State, page_id: &str, id: &str, item: El, t: Theme, peek
     }))
     .child(preview)
     .children(marker)
+    .children(super::comments::markers(s, page_id, id, peek, t))
 }
 pub fn group(s: &State, tab: &Tab, blocks: Vec<El>, t: Theme) -> Vec<El> {
     group_for(s, &tab.page.id, &tab.blocks, blocks, t, false)
