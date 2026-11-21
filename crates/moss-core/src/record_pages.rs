@@ -1,6 +1,6 @@
 use crate::store::{decode, encode, invalid};
 use crate::{Block, Database, Page, PageKind, Record, Store, new_id, now, search};
-use rusqlite::{Connection, OptionalExtension, Result, params};
+use rusqlite::{OptionalExtension, Result, Transaction, params};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -21,7 +21,7 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()?;
-            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM calculation_edges WHERE target_id=?1 AND source_id<>?1) OR EXISTS(SELECT 1 FROM records r, json_tree(r.values_json) value WHERE r.id<>?1 AND instr(r.values_json,?1)>0 AND value.type='text' AND value.value=?1)", [&record.id], |row| row.get(0))?;
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM calculation_edges WHERE target_id=?1 AND source_id<>?1) OR EXISTS(SELECT 1 FROM records r, json_tree(r.values_json) value WHERE r.id<>?1 AND instr(r.values_json,?1)>0 AND value.type='text' AND value.value=?1) OR EXISTS(SELECT 1 FROM comment_threads WHERE json_extract(anchor,'$.type')='cell' AND json_extract(anchor,'$.record_id')=?1)", [&record.id], |row| row.get(0))?;
             if current.map(decode::<Record>).transpose()?.as_ref() != Some(record)
                 || in_use
                 || record.page_id.as_deref() != page.map(|p| p.id.as_str())
@@ -55,18 +55,26 @@ impl Store {
                 let rows = query.query_map([&page.id], |row| row.get::<_, String>(0))?;
                 rows.map(|row| decode(row?)).collect::<Result<_>>()?
             };
-            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pages WHERE parent_id=?1) OR EXISTS(SELECT 1 FROM databases WHERE page_id=?1) OR EXISTS(SELECT 1 FROM blocks b, json_tree(b.data) value WHERE b.page_id<>?1 AND b.id<>?2 AND instr(b.data,?1)>0 AND value.type='text' AND value.value=?1)", params![page.id, created_link.map(|link| link.id.as_str()).unwrap_or("")], |row| row.get(0))?;
+            let in_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pages WHERE parent_id=?1) OR EXISTS(SELECT 1 FROM databases WHERE page_id=?1) OR EXISTS(SELECT 1 FROM comment_threads WHERE page_id=?1) OR EXISTS(SELECT 1 FROM blocks b, json_tree(b.data) value WHERE b.page_id<>?1 AND b.id<>?2 AND instr(b.data,?1)>0 AND value.type='text' AND value.value=?1)", params![page.id, created_link.map(|link| link.id.as_str()).unwrap_or("")], |row| row.get(0))?;
             if current.map(decode::<Page>).transpose()?.as_ref() != Some(page)
                 || current_blocks != blocks
                 || in_use
             {
                 return Ok(false);
             }
+            if let Some(record) = record {
+                tx.execute("DELETE FROM change_history WHERE entity_kind='record_created' AND entity_id=?1", [&record.id])?;
+            }
             if let Some(link) = created_link {
+                tx.execute("UPDATE comment_threads SET orphaned=1 WHERE page_id=?1 AND json_extract(anchor,'$.block_id')=?2", params![link.page_id, link.id])?;
                 tx.execute("DELETE FROM blocks WHERE id=?1", [&link.id])?;
             }
             tx.execute("DELETE FROM pages WHERE id=?1", [&page.id])?;
         } else if let Some(record) = record {
+            tx.execute(
+                "DELETE FROM change_history WHERE entity_kind='record_created' AND entity_id=?1",
+                [&record.id],
+            )?;
             tx.execute("DELETE FROM records WHERE id=?1", [&record.id])?;
         } else {
             return Ok(false);
@@ -174,6 +182,7 @@ impl Store {
 
     /// Rename a record and its linked page atomically.
     pub fn rename_record(&mut self, record_id: &str, title: &str) -> Result<Record> {
+        let actor = self.history_actor.clone();
         let tx = self.conn.transaction()?;
         let raw: String = tx
             .query_row("SELECT data FROM records WHERE id=?1", [record_id], |r| {
@@ -199,6 +208,16 @@ impl Store {
         if owner.deleted_at.is_some() {
             return Err(invalid("database in trash"));
         }
+        crate::history::record_change(
+            &tx,
+            &owner,
+            "record_title",
+            &record.id,
+            None,
+            Some(&serde_json::json!(record.title)),
+            Some(&serde_json::json!(title)),
+            actor.as_ref(),
+        )?;
         let stamp = now();
         record.title = title.into();
         record.updated_at = stamp.clone();
@@ -251,8 +270,9 @@ impl Store {
         if let Some(page) = record.page_id {
             return self.trash(&page, false);
         }
+        let actor = self.history_actor.clone();
         let tx = self.conn.transaction()?;
-        set_record_trash(&tx, id, id, false, &now())?;
+        set_record_trash(&tx, id, id, false, &now(), actor.as_ref())?;
         crate::calculation::refresh(&tx, &[id.to_owned()])?;
         tx.commit()
     }
@@ -266,6 +286,7 @@ impl Store {
         if let Some(page) = record.page_id {
             return self.trash(&page, true);
         }
+        let actor = self.history_actor.clone();
         let tx = self.conn.transaction()?;
         let db_raw: String = tx.query_row(
             "SELECT data FROM databases WHERE id=?1",
@@ -278,7 +299,7 @@ impl Store {
         if owner.deleted_at.is_some() {
             return Err(invalid("restore database first"));
         }
-        set_record_trash(&tx, id, id, true, &now())?;
+        set_record_trash(&tx, id, id, true, &now(), actor.as_ref())?;
         crate::calculation::refresh(&tx, &[id.to_owned()])?;
         tx.commit()
     }
@@ -289,6 +310,7 @@ impl Store {
         self.trash(id, true)
     }
     fn trash(&mut self, id: &str, restore: bool) -> Result<()> {
+        let actor = self.history_actor.clone();
         let root = search::page(&self.conn, id)?.ok_or_else(|| invalid("page missing"))?;
         if restore {
             if root.deleted_at.is_none() {
@@ -351,7 +373,7 @@ impl Store {
                 rows.collect::<Result<_>>()?
             };
             for record_id in record_ids {
-                set_record_trash(&tx, &record_id, id, restore, &stamp)?;
+                set_record_trash(&tx, &record_id, id, restore, &stamp, actor.as_ref())?;
                 changed_records.push(record_id);
             }
         }
@@ -362,11 +384,12 @@ impl Store {
 
 // The root marker prevents a parent restore from reviving previously trashed records.
 fn set_record_trash(
-    conn: &Connection,
+    conn: &Transaction<'_>,
     id: &str,
     root: &str,
     restore: bool,
     stamp: &str,
+    actor: Option<&crate::history::HistoryActor>,
 ) -> Result<()> {
     let raw: String = conn.query_row("SELECT data FROM records WHERE id=?1", [id], |r| r.get(0))?;
     let mut record: Record = decode(raw)?;
@@ -397,6 +420,28 @@ fn set_record_trash(
             params![id, root],
         )?;
     }
+    let raw_db: String = conn.query_row(
+        "SELECT data FROM databases WHERE id=?1",
+        [&record.database_id],
+        |r| r.get(0),
+    )?;
+    let db: Database = decode(raw_db)?;
+    let owner = search::page(conn, &db.page_id)?.ok_or_else(|| invalid("database page missing"))?;
+    let title = serde_json::json!(record.title);
+    crate::history::record_change(
+        conn,
+        &owner,
+        if restore {
+            "record_restored"
+        } else {
+            "record_trashed"
+        },
+        &record.id,
+        None,
+        if restore { None } else { Some(&title) },
+        if restore { Some(&title) } else { None },
+        actor,
+    )?;
     conn.execute(
         "UPDATE records SET deleted_at=?1,data=?2 WHERE id=?3",
         params![record.deleted_at, encode(&record)?, id],

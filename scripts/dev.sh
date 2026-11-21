@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 
 # Keep development data separate: incompatible edits can stop the process without a save.
 export MOSS_DATA_DIR="${MOSS_DATA_DIR:-$PWD/target/dev-data}"
+export MOSS_MCP_ADAPTER="${MOSS_MCP_ADAPTER:-$PWD/target/debug/moss-mcp}"
 export MOSS_DEMO="${MOSS_DEMO:-1}"
 export CARGO_BUILD_JOBS=2
 export RUNE_DX="${RUNE_DX:-${CARGO_HOME:-$HOME/.cargo}/bin/dx}"

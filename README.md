@@ -71,3 +71,42 @@ Omit `--small` to prepare 100,000 pages and 1,000,000 database rows. The probe m
 - [Reference coverage and open checks](docs/REFERENCE-COVERAGE.md)
 
 Private Notion reference captures stay outside Git and release files. The project uses the MIT license. The name, icons and release assets will be reviewed before public distribution.
+
+## Local agent access
+
+1. Open **Settings → Connect an agent…**. Turn on **Local agent access** and keep Moss running. Access is off by default.
+2. For Codex CLI, choose **Copy Codex CLI command** and run the command in Terminal. For a client that uses `mcpServers` JSON, choose **Copy MCP settings as JSON** and add the `moss` entry to the client's MCP configuration.
+3. Start a new session in the client and ask it to list your Moss workspaces. Ask it to read a test page to see the agent badge in the page header.
+
+Connected local clients can read and change workspace data, including workspaces with closed windows. Enable access for clients you trust. Turn off **Local agent access** to disconnect clients. Moss uses a private local socket and token and does not open a network port.
+
+### Manual setup
+
+For Codex CLI and Moss installed in Applications, run:
+
+```sh
+codex mcp add moss -- /Applications/Moss.app/Contents/MacOS/moss-mcp
+```
+
+For a client that uses `mcpServers` JSON, use:
+
+```json
+{
+  "mcpServers": {
+    "moss": {
+      "command": "/Applications/Moss.app/Contents/MacOS/moss-mcp",
+      "env": { "MOSS_AGENT_NAME": "My agent" }
+    }
+  }
+}
+```
+
+Use the absolute path to the adapter if you moved Moss. For a development build, run `cargo build -p moss-mcp` and use the absolute path to `target/debug/moss-mcp`. If Moss uses a custom data folder, set the same `MOSS_DATA_DIR` in the client configuration. The copy buttons in Moss include the paths for the current instance.
+
+If the client cannot connect, check that Moss is running and **Local agent access** is on. Check the adapter path, then restart the client to reconnect. The adapter reads its token from the local data folder. Keep the token out of client configuration.
+
+### Available tools
+
+Available tools are `list_workspaces`, `find_pages`, `read_page`, `status`, `create_page`, `rename_page`, `list_trash`, `trash_page`, `restore_page`, `edit_block`, `edit_cell`, `list_comments`, `create_comment`, `reply_comment`, `resolve_comment`, and `page_history`. Use workspace and page IDs from discovery. `read_page` returns stored blocks, visible draft content, unsaved status, and active text edits, including composition data when present. `edit_block` requires the complete expected stored block and only changes plain text; it rejects changes when a conflicting draft is open. `edit_cell` also checks the expected value. Read again and retry if a value changed.
+
+The service does not yet provide all desktop actions. It cannot permanently delete pages, change rich text or images, edit tables, manage database structure, or restore history. A page subtree must be closed in Moss before an agent moves it to Trash. Rename checks the expected saved title in a transaction. Trash and restore check the expected page before the operation; this check does not guard against a separate process changing the database at the same time. It does not provide live cursor positions for agents or multiplayer sync between computers. Agent presence shows the last page that the session accessed and clears on disconnect or timeout.

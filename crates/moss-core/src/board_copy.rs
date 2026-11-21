@@ -46,6 +46,7 @@ fn remap_config(value: &mut Value, ids: &BTreeMap<String, String>, reference: bo
 impl Store {
     /// Copy a live record and its optional page in one transaction.
     pub fn duplicate_board_record(&mut self, database_id: &str, record_id: &str) -> Result<Record> {
+        let actor = self.history_actor.clone();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -118,6 +119,16 @@ impl Store {
                 record.values.insert(property.id.clone(), value);
             }
         }
+        crate::history::record_change(
+            &tx,
+            &owner,
+            "record_duplicated",
+            &record.id,
+            None,
+            None,
+            Some(&json!(record.title)),
+            actor.as_ref(),
+        )?;
         let target = if let Some(page_id) = &source.page_id {
             let mut page: Page =
                 search::page(&tx, page_id)?.ok_or_else(|| invalid("record page missing"))?;

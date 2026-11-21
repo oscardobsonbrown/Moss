@@ -56,7 +56,7 @@ fn checkbox_click_saves_the_task_in_pages_and_previews() {
         );
         assert_eq!(
             rt.state.store.local_change_count() - changes,
-            1,
+            2,
             "peek={peek}"
         );
         drop(rt);

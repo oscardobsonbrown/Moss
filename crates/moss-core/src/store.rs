@@ -11,6 +11,8 @@ use std::path::Path;
 
 pub struct Store {
     pub(crate) conn: Connection,
+    pub(crate) history_actor: Option<crate::history::HistoryActor>,
+    pub(crate) history_coalesce: bool,
 }
 
 pub(crate) fn invalid(message: &str) -> rusqlite::Error {
@@ -69,21 +71,38 @@ impl Store {
     pub fn local_change_count(&self) -> u64 {
         self.conn.total_changes()
     }
+    /// Detect commits made by other SQLite connections.
+    pub fn external_data_version(&self) -> Result<i64> {
+        self.conn
+            .pragma_query_value(None, "data_version", |row| row.get(0))
+    }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         schema::init(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            history_actor: None,
+            history_coalesce: true,
+        })
     }
     /// Open an existing store for reads without schema changes or cleanup writes.
     pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         conn.pragma_update(None, "query_only", true)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            history_actor: None,
+            history_coalesce: true,
+        })
     }
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            history_actor: None,
+            history_coalesce: true,
+        })
     }
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>> {
         collect_json(
@@ -356,31 +375,64 @@ impl Store {
     /// Replace blocks exactly as provided, including explicit image-asset changes.
     /// Editors with potentially stale image state must use `save_editor_blocks`.
     pub fn save_blocks(&mut self, page_id: &str, blocks: &[Block]) -> Result<()> {
-        self.write_blocks(page_id, blocks, false).map(|_| ())
+        self.write_blocks(page_id, blocks, false, None).map(|_| ())
     }
     /// Save text and layout edits while keeping current assets for existing image blocks.
     /// Use the guarded image attachment methods to replace or clear an image.
     pub fn save_editor_blocks(&mut self, page_id: &str, blocks: &[Block]) -> Result<Vec<Block>> {
-        self.write_blocks(page_id, blocks, true)
+        self.write_blocks(page_id, blocks, true, None)
+    }
+    /// Save an editor snapshot only when the stored blocks still match its base.
+    pub fn save_editor_blocks_if_unchanged(
+        &mut self,
+        page_id: &str,
+        expected: &[Block],
+        blocks: &[Block],
+    ) -> Result<Vec<Block>> {
+        self.write_blocks(page_id, blocks, true, Some(expected))
     }
     /// Update a task without rewriting or reindexing the page's other blocks.
     pub fn set_todo_checked(&mut self, page_id: &str, block_id: &str, checked: bool) -> Result<()> {
         nonempty(page_id)?;
         nonempty(block_id)?;
-        let changed = self.conn.execute(
+        let actor = self.history_actor.clone();
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let page = search::page(&tx, page_id)?.ok_or_else(|| invalid("page does not exist"))?;
+        let before: Option<String> = tx.query_row("SELECT data FROM blocks WHERE id=?1 AND page_id=?2 AND json_extract(data,'$.kind')='todo' AND EXISTS(SELECT 1 FROM pages WHERE id=?2 AND deleted_at IS NULL)", params![block_id, page_id], |row| row.get(0)).optional()?;
+        let before: serde_json::Value =
+            decode(before.ok_or_else(|| invalid("task or page is not available"))?)?;
+        let changed = tx.execute(
             "UPDATE blocks SET data=json_set(data,'$.checked',json(?3)) WHERE id=?1 AND page_id=?2 AND json_extract(data,'$.kind')='todo' AND EXISTS(SELECT 1 FROM pages WHERE id=?2 AND deleted_at IS NULL)",
             params![block_id, page_id, if checked { "true" } else { "false" }],
         )?;
         if changed != 1 {
             return Err(invalid("task or page is not available"));
         }
-        Ok(())
+        let after: serde_json::Value = decode(tx.query_row(
+            "SELECT data FROM blocks WHERE id=?1",
+            [block_id],
+            |row| row.get(0),
+        )?)?;
+        crate::history::record_change(
+            &tx,
+            &page,
+            "block",
+            block_id,
+            None,
+            Some(&before),
+            Some(&after),
+            actor.as_ref(),
+        )?;
+        tx.commit()
     }
     fn write_blocks(
         &mut self,
         page_id: &str,
         blocks: &[Block],
         preserve_images: bool,
+        expected: Option<&[Block]>,
     ) -> Result<Vec<Block>> {
         let mut ids = std::collections::HashSet::new();
         for b in blocks {
@@ -389,12 +441,39 @@ impl Store {
                 return Err(invalid("invalid or duplicate block"));
             }
         }
+        let actor = self.history_actor.clone();
+        let coalesce = self.history_coalesce;
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let page = search::page(&tx, page_id)?.ok_or_else(|| invalid("page does not exist"))?;
         if page.deleted_at.is_some() {
             return Err(invalid("page is in trash"));
+        }
+        if let Some(expected) = expected {
+            let current: Vec<Block> = collect_json(
+                &mut tx
+                    .prepare("SELECT data FROM blocks WHERE page_id=?1 ORDER BY sort_order,id")?,
+                [page_id],
+            )?;
+            let mut base = expected.to_vec();
+            let mut current = current;
+            if preserve_images {
+                for block in base
+                    .iter_mut()
+                    .chain(current.iter_mut())
+                    .filter(|b| b.kind == crate::BlockKind::Image)
+                {
+                    if let Some(config) = block.config.as_object_mut() {
+                        config.remove("asset");
+                    }
+                }
+            }
+            if current != base {
+                return Err(invalid(
+                    "page changed in another editor; reload before saving",
+                ));
+            }
         }
         let mut saved = blocks.to_vec();
         if preserve_images && saved.iter().any(|b| b.kind == crate::BlockKind::Image) {
@@ -431,6 +510,8 @@ impl Store {
                 }
             }
         }
+        crate::history::record_block_changes(&tx, &page, &saved, actor.as_ref(), coalesce)?;
+        crate::comments::update_block_anchors(&tx, page_id, &saved)?;
         tx.execute("DELETE FROM blocks WHERE page_id=?1", [page_id])?;
         for b in &saved {
             tx.execute(
@@ -612,6 +693,8 @@ impl Store {
     }
     pub fn save_record(&mut self, record: &Record) -> Result<()> {
         nonempty(&record.id)?;
+        let actor = self.history_actor.clone();
+        let coalesce = self.history_coalesce;
         let db = self
             .get_database(&record.database_id)?
             .ok_or_else(|| invalid("database missing"))?;
@@ -695,6 +778,78 @@ impl Store {
                     &owner.workspace_id,
                 )?;
             }
+        }
+        if let Some(previous) = &previous {
+            crate::history::record_change(
+                &tx,
+                &owner,
+                "record_title",
+                &record.id,
+                None,
+                Some(&serde_json::json!(previous.title)),
+                Some(&serde_json::json!(record.title)),
+                actor.as_ref(),
+            )?;
+            for property in &db.properties {
+                if matches!(
+                    property.kind,
+                    crate::PropertyKind::Formula
+                        | crate::PropertyKind::Rollup
+                        | crate::PropertyKind::Title
+                ) {
+                    continue;
+                }
+                let before = previous
+                    .values
+                    .get(&property.id)
+                    .unwrap_or(&serde_json::Value::Null);
+                let after = record
+                    .values
+                    .get(&property.id)
+                    .unwrap_or(&serde_json::Value::Null);
+                if property.kind == crate::PropertyKind::Relation {
+                    crate::history::record_change(
+                        &tx,
+                        &owner,
+                        "relation",
+                        &record.id,
+                        Some(&property.id),
+                        Some(before),
+                        Some(after),
+                        actor.as_ref(),
+                    )?;
+                } else {
+                    crate::history::record_text_change(
+                        &tx,
+                        &owner,
+                        "record",
+                        &record.id,
+                        &property.id,
+                        before,
+                        after,
+                        actor.as_ref(),
+                        coalesce
+                            && matches!(
+                                property.kind,
+                                crate::PropertyKind::Text
+                                    | crate::PropertyKind::Url
+                                    | crate::PropertyKind::Email
+                                    | crate::PropertyKind::Phone
+                            ),
+                    )?;
+                }
+            }
+        } else {
+            crate::history::record_change(
+                &tx,
+                &owner,
+                "record_created",
+                &record.id,
+                None,
+                None,
+                Some(&serde_json::json!(record.title)),
+                actor.as_ref(),
+            )?;
         }
         tx.execute("INSERT INTO records(id,database_id,page_id,title,values_json,deleted_at,data) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET title=excluded.title,values_json=excluded.values_json,deleted_at=excluded.deleted_at,data=excluded.data",params![record.id,record.database_id,record.page_id,record.title,encode(&record.values)?,record.deleted_at,encode(record)?])?;
         let target = if let Some(pid) = &record.page_id {

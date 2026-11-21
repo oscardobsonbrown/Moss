@@ -901,13 +901,15 @@ impl State {
                 b.block.clone()
             })
             .collect();
-        match self.store.save_editor_blocks(&peek.page.id, &blocks) {
+        match self.store.save_editor_blocks_if_unchanged(&peek.page.id, &peek.saved_blocks, &blocks) {
             Ok(blocks) => {
                 crate::page_covers::sync_saved_image_assets(&mut peek.blocks, &blocks);
+                peek.saved_blocks = blocks.clone();
                 peek.dirty_blocks = false;
                 let page_id = peek.page.id.clone();
                 for tab in &mut self.tabs {
                     if tab.page.id == page_id && !tab.dirty_blocks {
+                        tab.saved_blocks = blocks.clone();
                         tab.blocks = blocks
                             .iter()
                             .cloned()
@@ -921,6 +923,9 @@ impl State {
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
                 self.keep_draft_for_page(&page_id);
+                if self.comments.threads.get(&page_id).is_some_and(|threads| !threads.is_empty()) {
+                    self.load_comments(&page_id);
+                }
             }
             Err(e) => self.error = Some(format!("Page contents are not saved: {e}")),
         }
@@ -1025,6 +1030,7 @@ impl State {
 }
 
 pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
+    let shared_changed = crate::shared_refresh::poll(s, time, tx);
     let draft_changed = s.discard_closed_items();
     let caret_changed = crate::caret::poll(s, time, tx);
     let computed_changed = crate::computed_refresh::poll(s);
@@ -1035,7 +1041,7 @@ pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
         tx.instant();
         return true;
     }
-    draft_changed || caret_changed || computed_changed || summaries_changed || window_changed
+    shared_changed || draft_changed || caret_changed || computed_changed || summaries_changed || window_changed
 }
 
 #[cfg(test)]

@@ -146,6 +146,24 @@ fn board_move_updates_both_axes_atomically_and_preserves_other_changes() {
     assert_eq!(updated.values["status"], json!("Beta"));
     assert!(updated.values["priority"].is_null());
     assert_eq!(updated.values["notes"], json!("concurrent"));
+    let owner = store.get_page(&db.page_id).unwrap().unwrap();
+    let entries = store
+        .page_history(&owner.workspace_id, &owner.id, Some(&record.id), None, 20)
+        .unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.property_id.as_deref() == Some("status")
+                && e.before == Some(json!("Alpha"))
+                && e.after == Some(json!("Beta")))
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.property_id.as_deref() == Some("priority")
+                && e.before == Some(json!(true))
+                && e.after == Some(Value::Null))
+    );
     assert!(
         store
             .move_board_record(
@@ -162,6 +180,40 @@ fn board_move_updates_both_axes_atomically_and_preserves_other_changes() {
             .is_err()
     );
     assert_eq!(store.get_record(&record.id).unwrap().unwrap(), updated);
+}
+
+#[test]
+fn board_move_rolls_back_position_and_values_when_history_fails() {
+    let (mut store, db) = fixture();
+    let record = store
+        .create_record(&db.id, "Task", &values(json!("Alpha"), json!(true)))
+        .unwrap();
+    let before_rank = store
+        .board_record_rank(&db.views[0].id, &record.id)
+        .unwrap();
+    store.conn.execute_batch("CREATE TRIGGER fail_board_history BEFORE INSERT ON change_history BEGIN SELECT RAISE(ABORT, 'history unavailable'); END;").unwrap();
+    assert!(
+        store
+            .move_board_record(
+                &db.id,
+                &db.views[0],
+                &record,
+                &db.properties[1],
+                Some(&db.properties[2]),
+                json!("Beta"),
+                Value::Null,
+                None,
+                &before_rank
+            )
+            .is_err()
+    );
+    assert_eq!(store.get_record(&record.id).unwrap().unwrap(), record);
+    assert_eq!(
+        store
+            .board_record_rank(&db.views[0].id, &record.id)
+            .unwrap(),
+        before_rank
+    );
 }
 #[test]
 fn board_manual_rank_keeps_untouched_cards_in_order_and_rejects_stale_position() {
@@ -278,18 +330,33 @@ fn board_group_rename_covers_all_records_and_retains_option_metadata() {
     unrelated.config = json!({"board_group_order":[group_key(&json!("Alpha"))]});
     db.views.push(unrelated);
     store.save_database(&db).unwrap();
+    let mut first_id = String::new();
     for i in 0..270 {
-        store
+        let record = store
             .create_record(
                 &db.id,
                 &i.to_string(),
                 &values(json!("Alpha"), json!(false)),
             )
             .unwrap();
+        if i == 0 {
+            first_id = record.id;
+        }
     }
     let db = store
         .save_board_group_name(&db.id, &db.properties[1], Some(&json!("Alpha")), "Renamed")
         .unwrap();
+    let owner = store.get_page(&db.page_id).unwrap().unwrap();
+    let history = store
+        .page_history(&owner.workspace_id, &owner.id, Some(&first_id), None, 20)
+        .unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|e| e.property_id.as_deref() == Some("status")
+                && e.before == Some(json!("Alpha"))
+                && e.after == Some(json!("Renamed")))
+    );
     assert_eq!(
         db.views[0].config["board_hidden_groups"],
         json!([group_key(&json!("Renamed"))])

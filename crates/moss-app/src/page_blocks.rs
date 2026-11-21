@@ -329,6 +329,7 @@ impl State {
             Ok((child, blocks)) => {
                 self.track_new_child_page(&child, &blocks);
                 let tab = &mut self.tabs[self.active];
+                tab.saved_blocks = blocks.clone();
                 tab.blocks = blocks
                     .into_iter()
                     .map(|block| {
