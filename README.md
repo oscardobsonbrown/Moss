@@ -22,7 +22,17 @@ Build the macOS app with `scripts/package-macos.sh`. Local builds create `dist/M
 
 ## Releases
 
-Each push to `main`, including a merged pull request, runs the release workflow. It tests the workspace, increments the latest stable minor version, and creates a GitHub release with an Apple Silicon macOS archive. With no earlier tag, the workspace version is the baseline. A retry reuses the tag for the same commit. The app archive uses an ad hoc signature and is not notarized. Releases remain private while the repository is private.
+Each push to `main`, including a merged pull request, runs the release workflow. It tests the workspace, increments the latest stable minor version, and creates a [GitHub release](https://github.com/oscardobsonbrown/Moss/releases) with an Apple Silicon macOS archive. With no earlier tag, the workspace version is the baseline. A retry reuses the tag for the same commit. The app archive uses an ad hoc signature and is not notarized.
+
+GitHub release builds with an update public key check for a newer stable release at launch and every six hours. Download progress appears in Software update settings. When an update is ready, choose **Restart to install**, or quit Moss to install it. The installer replaces the app bundle. Workspace data stays in its current folder.
+
+Install the first release with updater support manually. Update checks use the public release feed and require no GitHub account. To disable update checks for a launch, set `MOSS_DISABLE_UPDATES=1`.
+
+### Sign update archives
+
+On a Mac that you control, build the signing tool with `xcrun swiftc -O scripts/moss-update-helper.swift -o moss-update-helper`. Use `./moss-update-helper keygen /path/to/private-key` to save the new key with owner-only permissions and print its public key. Set the GitHub repository Actions variable `MOSS_UPDATE_PUBLIC_KEY` to that public value. Keep the private key separate from GitHub and its release workflow.
+
+After you review a release archive, sign the exact ZIP that GitHub serves with `./moss-update-helper sign /path/to/private-key Moss-v0.9.0-macos-arm64.zip Moss-v0.9.0-macos-arm64.zip.sig`. Upload the `.sig` file to the same release. Moss requires the signature before it extracts the archive. Keep the same public key in future builds so that installed copies can verify new releases.
 
 ## Hot reload
 

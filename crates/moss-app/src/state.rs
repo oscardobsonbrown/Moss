@@ -86,6 +86,8 @@ pub enum Modal {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Preferences {
     pub dark: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_updates: Option<bool>,
     #[serde(default)]
     pub mcp_enabled: bool,
     #[serde(default)]
@@ -120,6 +122,8 @@ impl Preferences {
     }
 }
 pub struct State {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    pub updates: crate::updater::Window,
     pub local_service: std::sync::Arc<std::sync::Mutex<Option<crate::local_service::LocalService>>>,
     pub agent_presence: std::collections::HashMap<String, Vec<(String, String)>>,
     pub presence_open: Option<String>,
@@ -275,6 +279,8 @@ impl State {
         let restore = prefs.tabs.get(&workspace.id).cloned().unwrap_or_default();
         let active = *prefs.active.get(&workspace.id).unwrap_or(&0);
         let mut s = Self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            updates: Default::default(),
             editor_selection: None,
             editor_drag: None,
             editor_column_resize: None,

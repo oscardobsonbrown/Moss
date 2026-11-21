@@ -35,6 +35,8 @@ jobs:
       - name: Build and package Moss
         env:
           MOSS_VERSION: ${{ steps.version.outputs.tag }}
+          MOSS_RELEASE_BUILD: "1"
+          MOSS_UPDATE_PUBLIC_KEY: ${{ vars.MOSS_UPDATE_PUBLIC_KEY }}
         run: |
           MOSS_VERSION="${MOSS_VERSION#v}" scripts/package-macos.sh
           ditto -c -k --sequesterRsrc --keepParent dist/Moss.app "dist/Moss-${{ steps.version.outputs.tag }}-macos-arm64.zip"
@@ -45,8 +47,10 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           archive="dist/Moss-${TAG}-macos-arm64.zip"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$archive" --clobber
+          if assets=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null); then
+            if ! printf '%s\n' "$assets" | grep -Fx "${archive##*/}" >/dev/null; then
+              gh release upload "$TAG" "$archive"
+            fi
           else
             gh release create "$TAG" "$archive" --target "$GITHUB_SHA" --title "Moss $TAG" --generate-notes
           fi

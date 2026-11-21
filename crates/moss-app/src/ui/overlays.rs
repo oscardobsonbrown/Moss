@@ -232,6 +232,7 @@ fn settings(s: &State, t: Theme) -> El {
     col()
         .w_full()
         .gap(12.)
+        .children(super::software_update::settings(s, t))
         .child(label("Appearance", t.muted))
         .child(appearance)
         .child(label("Start week on", t.muted))

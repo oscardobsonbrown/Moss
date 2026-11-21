@@ -104,6 +104,9 @@ mod table_window;
 mod text_colors;
 #[path = "../src/ui/mod.rs"]
 mod ui;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "../src/updater.rs"]
+mod updater;
 #[path = "../src/view_management.rs"]
 mod view_management;
 use rune::*;

@@ -50,6 +50,8 @@ mod table_summaries;
 mod table_window;
 mod text_colors;
 mod ui;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod updater;
 mod view_management;
 use rune::*;
 use state::State;
@@ -196,6 +198,10 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
     false
 }
 fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let updater = s.updates.poll(tx, s.modal == Some(state::Modal::Settings));
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let updater = false;
     let history = history::poll(s, time, tx);
     let records = records::poll(s, time, tx);
     let sidebar = sidebar_reveal::poll(s, time, tx);
@@ -205,7 +211,7 @@ fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
     let archives = archive_transfer::poll(s, time, tx);
     let place = place_property::poll(s, tx);
     let appearance = page_appearance::poll(s, time, tx);
-    history || records || sidebar || sidebar_drag || views || covers || archives || appearance || place
+    updater || history || records || sidebar || sidebar_drag || views || covers || archives || appearance || place
 }
 fn spec() -> AppSpec<State> {
     AppSpec {
@@ -213,6 +219,8 @@ fn spec() -> AppSpec<State> {
         on_key: Some(key),
         poll: Some(poll),
         setup: Some(|s, wake| {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            s.updates.register(wake.clone());
             s.database_views.map.set_waker(wake.clone());
             s.database_views.dashboard.set_waker(wake.clone());
             s.page_cover.set_waker(wake.clone());
@@ -223,19 +231,36 @@ fn spec() -> AppSpec<State> {
         ..AppSpec::new("Moss", (1440., 900.), init, ui::view)
     }
 }
+fn save_before_close(s: &mut State, _: &mut Tx) {
+    if s.flush_current() {
+        s.discard_all_drafts();
+    } else {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        updater::defer_install();
+    }
+    s.save_preferences();
+}
+
 fn main() {
     if let Err(error) = rune::set_app_icon(include_bytes!("../assets/Moss.png").to_vec()) {
         eprintln!("Moss could not load its app icon: {error}");
     }
     rune::prewarm_gpu();
     let path = State::data_path();
-    let first = match State::open(path.clone(), None) {
+    #[allow(unused_mut)]
+    let mut first = match State::open(path.clone(), None) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Moss could not open its local data: {e}");
             std::process::exit(1)
         }
     };
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let updater = updater::Updater::start(&path, first.prefs.automatic_updates.unwrap_or(true));
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if let Some(updater) = &updater {
+        first.updates.client = Some(updater.client.clone());
+    }
     let workspaces = first.workspaces.clone();
     let first_id = first.workspace.id.clone();
     let handles = first.handles.clone();
@@ -258,12 +283,7 @@ fn main() {
                 s.save_preferences();
             }
         })
-        .on_close(|s, _| {
-            if s.flush_current() {
-                s.discard_all_drafts();
-            }
-            s.save_preferences();
-        });
+        .on_close(save_before_close);
     handles
         .lock()
         .unwrap()
@@ -271,6 +291,10 @@ fn main() {
     for workspace in workspaces.into_iter().filter(|w| w.id != first_id) {
         match State::open(path.clone(), Some(&workspace.id)) {
             Ok(mut state) => {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                if let Some(updater) = &updater {
+                    state.updates.client = Some(updater.client.clone());
+                }
                 state.handles = handles.clone();
                 state.shared_preferences = shared_preferences.clone();
                 state.local_service = local_service.clone();
@@ -292,12 +316,7 @@ fn main() {
                             s.save_preferences();
                         }
                     })
-                    .on_close(|s, _| {
-                        if s.flush_current() {
-                            s.discard_all_drafts();
-                        }
-                        s.save_preferences();
-                    });
+                    .on_close(save_before_close);
                 let (handle, _) = app.window(WindowSpec::from_app(id.clone(), secondary));
                 handles.lock().unwrap().insert(id, handle);
             }
@@ -315,6 +334,10 @@ fn main() {
     }
     app.run();
     drop(local_service.lock().unwrap().take());
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if let Some(updater) = updater {
+        updater.install_on_quit();
+    }
 }
 
 #[cfg(test)]

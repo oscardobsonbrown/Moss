@@ -48,6 +48,7 @@ mod sidebar_section_menu;
 mod sidebar_sections;
 mod sidebar_surface;
 mod simple_table;
+mod software_update;
 mod table;
 mod text_toolbar;
 mod theme;
@@ -168,6 +169,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         .children(map_clusters::popup(s, t).map(El::raise))
         .children(map_controls::popup(s, t).map(El::raise))
         .children(block_commands::popup(s, t).map(El::raise))
+        .children(software_update::toast(s, t).map(El::raise))
 }
 
 mod sidebar_page_menu;
