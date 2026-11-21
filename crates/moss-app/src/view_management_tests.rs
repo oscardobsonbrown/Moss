@@ -12,6 +12,8 @@ fn view_icon_picker_searches_saves_and_resets() {
     rt.frame(1.);
     click(&mut rt, "view-name-icon");
     rt.frame(1.);
+    click(&mut rt, "view-icon-color-Orange");
+    assert_eq!(rt.state.store.get_database(&db_id).unwrap().unwrap().views[0].config["icon_color"], "orange");
     click(&mut rt, "view-icon-search");
     press(&mut rt, Key::Text("anchor".into()));
     rt.frame(0.);
@@ -22,6 +24,10 @@ fn view_icon_picker_searches_saves_and_resets() {
     assert_eq!(rt.state.store.get_database(&db_id).unwrap().unwrap().views[0].config["icon"], "anchor");
     click(&mut rt, "view-name-icon");
     rt.frame(1.);
+    click(&mut rt, "view-icon-color-Default");
+    let saved = rt.state.store.get_database(&db_id).unwrap().unwrap();
+    assert_eq!(saved.views[0].config["icon"], "anchor");
+    assert!(saved.views[0].config.get("icon_color").is_none());
     click(&mut rt, "view-icon-remove");
     assert!(rt.state.store.get_database(&db_id).unwrap().unwrap().views[0].config.get("icon").is_none());
     drop(rt);

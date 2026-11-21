@@ -1,8 +1,5 @@
 use moss_core::Block;
-use rune::{
-    Color, Span, TextEdit,
-    color::{hex, oklch},
-};
+use rune::{Color, Span, TextEdit, color::hex};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::ops::Range;
@@ -22,7 +19,7 @@ pub enum Palette {
 }
 
 impl Palette {
-    pub const ALL: [(Self, &'static str); 9] = [
+    const ALL: [(Self, &'static str); 9] = [
         (Self::Gray, "Gray"),
         (Self::Brown, "Brown"),
         (Self::Orange, "Orange"),
@@ -34,37 +31,49 @@ impl Palette {
         (Self::Red, "Red"),
     ];
 
-    pub fn paint(self, channel: Channel, surface: Color) -> Color {
-        let dark = surface.luminance() < 0.3;
-        let (hue, chroma) = match self {
-            Self::Gray => (260., 0.012),
-            Self::Brown => (57., 0.085),
-            Self::Orange | Self::Yellow => {
-                let value = match (self, dark, channel) {
-                    (Self::Orange, false, Channel::Text) => "#A74703",
-                    (Self::Orange, false, Channel::Background) => "#FFE3C9",
-                    (Self::Orange, true, Channel::Text) => "#FFAA63",
-                    (Self::Orange, true, Channel::Background) => "#633819",
-                    (_, false, Channel::Text) => "#765B00",
-                    (_, false, Channel::Background) => "#FFF4C5",
-                    (_, true, Channel::Text) => "#F4D66D",
-                    (_, true, Channel::Background) => "#514717",
-                };
-                return hex(value).unwrap();
-            }
-            Self::Green => (150., 0.13),
-            Self::Blue => (252., 0.16),
-            Self::Purple => (305., 0.16),
-            Self::Pink => (350., 0.16),
-            Self::Red => (25., 0.18),
-        };
-        match channel {
-            Channel::Text => oklch(if dark { 0.81 } else { 0.43 }, chroma, hue),
-            Channel::Background => surface.mix(
-                oklch(if dark { 0.57 } else { 0.80 }, chroma, hue),
-                if dark { 0.28 } else { 0.30 },
-            ),
+    pub fn choices() -> impl Iterator<Item = (Option<Self>, &'static str)> {
+        std::iter::once((None, "Default"))
+            .chain(Self::ALL.into_iter().map(|(color, name)| (Some(color), name)))
+    }
+
+    // Text, background and icon, from https://matthiasfrank.de/en/notion-colors/
+    fn tokens(color: Option<Self>, dark: bool) -> [&'static str; 3] {
+        use Palette::*;
+        match (color, dark) {
+            (None, false) => ["#373530", "#FFFFFF", "#55534E"],
+            (Some(Gray), false) => ["#787774", "#F1F1EF", "#A6A299"],
+            (Some(Brown), false) => ["#976D57", "#F3EEEE", "#9F6B53"],
+            (Some(Orange), false) => ["#CC782F", "#F8ECDF", "#D87620"],
+            (Some(Yellow), false) => ["#C29343", "#FAF3DD", "#CB912F"],
+            (Some(Green), false) => ["#548164", "#EEF3ED", "#448361"],
+            (Some(Blue), false) => ["#487CA5", "#E9F3F7", "#337EA9"],
+            (Some(Purple), false) => ["#8A67AB", "#F6F3F8", "#9065B0"],
+            (Some(Pink), false) => ["#B35488", "#F9F2F5", "#C14C8A"],
+            (Some(Red), false) => ["#C4554D", "#FAECEC", "#D44C47"],
+            (None, true) => ["#D4D4D4", "#191919", "#D3D3D3"],
+            (Some(Gray), true) => ["#9B9B9B", "#252525", "#7F7F7F"],
+            (Some(Brown), true) => ["#A27763", "#2E2724", "#AA755F"],
+            (Some(Orange), true) => ["#CB7B37", "#36291F", "#D9730D"],
+            (Some(Yellow), true) => ["#C19138", "#372E20", "#CA8E1B"],
+            (Some(Green), true) => ["#4F9768", "#242B26", "#2D9964"],
+            (Some(Blue), true) => ["#447ACB", "#1F282D", "#2E7CD1"],
+            (Some(Purple), true) => ["#865DBB", "#2A2430", "#8D5BC1"],
+            (Some(Pink), true) => ["#BA4A78", "#2E2328", "#C94079"],
+            (Some(Red), true) => ["#BE524B", "#332523", "#CD4945"],
         }
+    }
+
+    pub fn paint(color: Option<Self>, channel: Channel, dark: bool) -> Color {
+        let [text, background, _] = Self::tokens(color, dark);
+        hex(match channel {
+            Channel::Text => text,
+            Channel::Background => background,
+        })
+        .unwrap()
+    }
+
+    pub fn icon_paint(color: Option<Self>, dark: bool) -> Color {
+        hex(Self::tokens(color, dark)[2]).unwrap()
     }
 }
 
@@ -191,10 +200,10 @@ pub fn active_color(
     }
 }
 
-pub fn spans(block: &Block, surface: Color) -> impl Iterator<Item = Span> {
+pub fn spans(block: &Block, dark: bool) -> impl Iterator<Item = Span> {
     runs(block).into_iter().map(move |r| {
         let span = Span::new(r.start, r.end);
-        let color = r.color.paint(r.channel, surface);
+        let color = Palette::paint(Some(r.color), r.channel, dark);
         match r.channel {
             Channel::Text => span.color(color),
             Channel::Background => span.bg(color, 0.),
@@ -270,6 +279,19 @@ pub fn copy_suffix(source: &Block, suffix: &mut Block, start: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orange_uses_separate_text_background_and_icon_colors_in_each_theme() {
+        let orange = Some(Palette::Orange);
+        for (dark, [text, background, icon]) in [
+            (false, ["#CC782F", "#F8ECDF", "#D87620"]),
+            (true, ["#CB7B37", "#36291F", "#D9730D"]),
+        ] {
+            assert_eq!(Palette::paint(orange, Channel::Text, dark), hex(text).unwrap());
+            assert_eq!(Palette::paint(orange, Channel::Background, dark), hex(background).unwrap());
+            assert_eq!(Palette::icon_paint(orange, dark), hex(icon).unwrap());
+        }
+    }
 
     #[test]
     fn inline_colors_follow_edits_and_split_with_the_text() {

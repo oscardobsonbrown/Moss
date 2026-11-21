@@ -36,7 +36,7 @@ pub fn can_color(s: &State, menu: &BlockCommands) -> bool {
 }
 
 pub fn block_paint(block: &Block, channel: Channel, t: Theme) -> Option<Color> {
-    text_colors::block_color(block, channel).map(|color| color.paint(channel, t.bg))
+    text_colors::block_color(block, channel).map(|color| Palette::paint(Some(color), channel, t.dark))
 }
 
 pub fn popup(
@@ -46,14 +46,7 @@ pub fn popup(
     t: Theme,
 ) -> Option<El> {
     let block = &target(s, menu)?.block;
-    let surface = block_paint(block, Channel::Background, t).unwrap_or(t.bg);
-    let colors: Vec<_> = std::iter::once((None, "Default"))
-        .chain(
-            Palette::ALL
-                .into_iter()
-                .map(|(color, name)| (Some(color), name)),
-        )
-        .collect();
+    let colors: Vec<_> = Palette::choices().collect();
     let groups = [
         (
             Channel::Text,
@@ -110,10 +103,8 @@ pub fn popup(
                         .gap(5.)
                         .children(colors.iter().copied().map(|(color, name)| {
                             let current = color.is_some() && color == active;
-                            let ink =
-                                color.map_or(t.text, |color| color.paint(Channel::Text, surface));
-                            let fill = color
-                                .map_or(t.menu, |color| color.paint(Channel::Background, surface));
+                            let ink = Palette::paint(color, Channel::Text, t.dark);
+                            let fill = Palette::paint(color, Channel::Background, t.dark);
                             let label = format!("{title}: {name}");
                             row()
                                 .key(format!("editor-color-{key}-{name}"))

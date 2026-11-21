@@ -19,6 +19,26 @@ pub fn with_list_numbers(
     })
 }
 
+pub fn list_marker_width(blocks: &[EditableBlock], scale: f32) -> f32 {
+    let last = with_list_numbers(blocks).map(|(_, number)| number).max().unwrap_or(0);
+    let digits_and_period = last.max(1).ilog10() + 2;
+    30_f32.max(digits_and_period as f32 * 10. * scale)
+}
+
+pub fn list_label(
+    id: &str,
+    label: impl Into<String>,
+    style: TextStyle,
+    width: f32,
+    color: Color,
+) -> El {
+    text(label)
+        .key(format!("list-marker-{id}"))
+        .font(style)
+        .color(color)
+        .size(width, style.line_px())
+}
+
 pub fn zones(tab: &Tab) -> Rc<Vec<DropZone>> {
     zones_for(&tab.blocks, "block", Some("append-block"))
 }

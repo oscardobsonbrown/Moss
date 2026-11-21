@@ -168,6 +168,7 @@ fn panel(s: &State, t: Theme) -> El {
     let zones = super::editor_layout::peek_zones(peek);
     let selection_page = page_id.clone();
     let selection_zones = zones.clone();
+    let marker_width = super::editor_layout::list_marker_width(&peek.blocks, scale);
     let mut block_views = Vec::with_capacity(peek.blocks.len());
     for (i, (block, number)) in super::editor_layout::with_list_numbers(&peek.blocks).enumerate() {
         let view = (|| {
@@ -280,7 +281,7 @@ fn panel(s: &State, t: Theme) -> El {
                 .map(|layer| layer.on_link(|s: &mut State, target, tx| s.open_peek_inline_link(target, tx)));
             let background = super::editor_colors::block_paint(&block.block, Channel::Background, t);
             let foreground = super::editor_colors::block_paint(&block.block, Channel::Text, t);
-            let mut spans: Vec<_> = text_colors::spans(&block.block, background.unwrap_or(t.bg)).collect();
+            let mut spans: Vec<_> = text_colors::spans(&block.block, t.dark).collect();
             spans.extend(hidden);
             spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
             let input = super::inputs::text(&block.edit, style, t)
@@ -362,16 +363,18 @@ fn panel(s: &State, t: Theme) -> El {
                     tx.instant();
                 });
             let marker = match kind {
-                BlockKind::BulletedList => Some(t.sized_label("•", 16., t.muted).w(24.)),
-                BlockKind::NumberedList => {
-                    Some(t.sized_label(format!("{number}."), 16., t.muted).w(30.))
-                }
+                BlockKind::BulletedList => Some(super::editor_layout::list_label(
+                    &block.block.id, "•", style, marker_width, foreground.unwrap_or(t.muted),
+                )),
+                BlockKind::NumberedList => Some(super::editor_layout::list_label(
+                    &block.block.id, format!("{number}."), style, marker_width, foreground.unwrap_or(t.muted),
+                )),
                 BlockKind::Todo => Some(super::editor::todo_checkbox(
                     &block.block.id,
                     block.block.checked,
                     i,
                     true,
-                    line * scale,
+                    [marker_width, style.line_px()],
                     t,
                 )),
                 BlockKind::Quote => Some(t.sized_label("▏", 16., t.muted).w(24.)),

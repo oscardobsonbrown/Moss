@@ -1,6 +1,8 @@
+use crate::text_colors::{Channel, Palette};
 use rune::*;
 #[derive(Clone, Copy)]
 pub struct Theme {
+    pub dark: bool,
     pub bg: Color,
     pub menu: Color,
     pub family: Family,
@@ -50,13 +52,14 @@ impl Theme {
     pub fn new(dark: bool) -> Self {
         if dark {
             Self {
-                bg: hex(0x191919),
+                dark,
+                bg: Palette::paint(None, Channel::Background, dark),
                 menu: hex(0x252525),
                 family: Family::Sans,
                 text_scale: 1.,
                 caret_visible: true,
                 sidebar: hex(0x202020),
-                text: hex(0xD4D4D4),
+                text: Palette::paint(None, Channel::Text, dark),
                 muted: hex(0x9B9B9B),
                 faint: hex(0x6E6E6E),
                 line: hex(0x303030),
@@ -69,13 +72,14 @@ impl Theme {
             }
         } else {
             Self {
-                bg: Color::WHITE,
+                dark,
+                bg: Palette::paint(None, Channel::Background, dark),
                 menu: Color::WHITE,
                 family: Family::Sans,
                 text_scale: 1.,
                 caret_visible: true,
                 sidebar: hex(0xF7F7F5),
-                text: hex(0x37352F),
+                text: Palette::paint(None, Channel::Text, dark),
                 muted: hex(0x787774),
                 faint: hex(0x9B9A97),
                 line: hex(0xE9E9E7),
