@@ -7,6 +7,9 @@ pub enum BlockCommandMode {
     Change,
     InsertAfter,
     Slash,
+    TextType,
+    TextLink { selection: (usize, usize) },
+    Color { selection: Option<(usize, usize)> },
 }
 
 pub struct BlockCommands {
@@ -44,6 +47,19 @@ pub const COMMANDS: [(BlockKind, &str, &str); 15] = [
 ];
 pub const DIVIDER: (BlockKind, &str, &str) = (BlockKind::Divider, "Divider", "line separator");
 
+fn is_text_type(kind: BlockKind) -> bool {
+    matches!(kind, BlockKind::Paragraph | BlockKind::Heading1 | BlockKind::Heading2
+        | BlockKind::Heading3 | BlockKind::Todo | BlockKind::BulletedList
+        | BlockKind::NumberedList | BlockKind::Quote
+        | BlockKind::Callout | BlockKind::Code)
+}
+
+fn set_kind(block: &mut EditableBlock, kind: BlockKind) {
+    block.block.checked &= block.block.kind == BlockKind::Todo && kind == BlockKind::Todo;
+    block.block.kind = kind;
+    block.edit.focused = true;
+}
+
 pub fn matches(query: &str) -> Vec<(BlockKind, &'static str)> {
     let query = query.trim().to_lowercase();
     COMMANDS
@@ -57,6 +73,40 @@ pub fn matches(query: &str) -> Vec<(BlockKind, &'static str)> {
 }
 
 impl State {
+    pub fn apply_editor_color(
+        &mut self,
+        channel: crate::text_colors::Channel,
+        color: Option<crate::text_colors::Palette>,
+    ) {
+        let Some(menu) = &self.block_commands else { return };
+        let BlockCommandMode::Color { selection } = menu.mode else { return };
+        if menu.error.is_some() { return; }
+        let blocks = if menu.peek {
+            self.record_peek.as_mut().filter(|p| p.page.id == menu.page_id).map(|p| &mut p.blocks)
+        } else {
+            self.tabs.get_mut(self.active).filter(|p| p.page.id == menu.page_id).map(|p| &mut p.blocks)
+        };
+        let Some(block) = blocks.and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == menu.block_id)) else {
+            return;
+        };
+        if let Some((start, end)) = selection {
+            if block.edit.range() != (start, end) || start >= end {
+                self.dismiss_block_commands();
+                return;
+            }
+            crate::text_colors::sync(&mut block.block, &block.edit);
+            block.block.text.clone_from(&block.edit.text);
+            crate::text_colors::apply_inline(&mut block.block, start..end, channel, color);
+        } else {
+            crate::text_colors::set_block_color(&mut block.block, channel, color);
+        }
+        block.edit.focused = true;
+        self.retry_block_command();
+        if let Some(menu) = &mut self.block_commands {
+            menu.error = Some("The color change is not saved. Retry to keep it.".into());
+        }
+    }
+
     pub fn open_block_commands(&mut self, block_id: &str, anchor: &str, mode: BlockCommandMode) {
         if self
             .block_commands
@@ -129,8 +179,12 @@ impl State {
     }
     pub fn block_command_matches(&self) -> Vec<(BlockKind, &'static str)> {
         let mut results = matches(&self.block_command_search.text);
-        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
-            results.retain(|(kind, _)| matches!(kind, BlockKind::Bookmark | BlockKind::Image));
+        if let Some(menu) = &self.block_commands {
+            if menu.mode == BlockCommandMode::TextType {
+                results.retain(|(kind, _)| is_text_type(*kind));
+            } else if menu.peek {
+                results.retain(|(kind, _)| matches!(kind, BlockKind::Bookmark | BlockKind::Image));
+            }
         }
         results
     }
@@ -141,7 +195,7 @@ impl State {
         if menu.error.is_some() {
             return;
         }
-        if menu.link_picker {
+        if menu.link_picker && !matches!(menu.mode, BlockCommandMode::TextLink { .. }) {
             self.block_commands.as_mut().unwrap().link_picker = false;
             self.block_command_search.replace_text("link");
             return;
@@ -232,6 +286,30 @@ impl State {
         self.block_command_search.focused = false;
     }
     pub fn apply_block_command(&mut self, kind: BlockKind) {
+        if let Some(menu) = &self.block_commands
+            && menu.mode == BlockCommandMode::TextType
+        {
+            if menu.error.is_some() || !is_text_type(kind) {
+                return;
+            }
+            if menu.peek {
+                let Some(peek) = self.record_peek.as_mut().filter(|p| p.page.id == menu.page_id) else {
+                    return;
+                };
+                let Some(block) = peek.blocks.iter_mut().find(|b| b.block.id == menu.block_id) else {
+                    return;
+                };
+                set_kind(block, kind);
+                self.save_peek_blocks();
+                if self.record_peek.as_ref().is_some_and(|p| p.dirty_blocks) {
+                    self.block_commands.as_mut().unwrap().error = Some("Block change is not saved. Retry to keep it.".into());
+                } else {
+                    self.block_commands = None;
+                    self.block_command_search.focused = false;
+                }
+                return;
+            }
+        }
         if kind == BlockKind::Bookmark {
             if let Some(menu) = &mut self.block_commands {
                 menu.link_picker = true;
@@ -311,11 +389,7 @@ impl State {
             tab.blocks.insert(index + 1, EditableBlock { block, edit });
             index + 1
         } else {
-            let keep_checked =
-                tab.blocks[index].block.kind == BlockKind::Todo && kind == BlockKind::Todo;
-            tab.blocks[index].block.checked &= keep_checked;
-            tab.blocks[index].block.kind = kind;
-            tab.blocks[index].edit.focused = true;
+            set_kind(&mut tab.blocks[index], kind);
             index
         };
         let target_id = tab.blocks[target_index].block.id.clone();

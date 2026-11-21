@@ -521,8 +521,7 @@ fn views(s: &State, t: Theme) -> El {
                             super::menu::row_item(
                                 format!("select-view-{i}"),
                                 &v.name,
-                                rune::icon(super::view_icons::for_view(v), 16.)
-                                    .color(t.muted)
+                                super::view_icons::for_view(v, t.muted, t.dark)
                                     .key(format!("view-option-icon-{i}")),
                                 t,
                             )

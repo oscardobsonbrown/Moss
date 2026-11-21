@@ -100,6 +100,8 @@ mod table_columns;
 mod table_summaries;
 #[path = "../src/table_window.rs"]
 mod table_window;
+#[path = "../src/text_colors.rs"]
+mod text_colors;
 #[path = "../src/ui/mod.rs"]
 mod ui;
 #[path = "../src/view_management.rs"]

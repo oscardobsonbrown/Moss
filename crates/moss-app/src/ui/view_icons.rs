@@ -1,5 +1,7 @@
-use moss_core::ViewKind;
+use crate::text_colors::Palette;
+use moss_core::{DatabaseView, ViewKind};
 use rune::*;
+use serde::Deserialize;
 
 include!("../../assets/phosphor/catalog.rs");
 
@@ -14,12 +16,22 @@ pub fn catalog() -> &'static [(&'static str, Icon)] {
     CATALOG
 }
 
-pub fn for_view(view: &moss_core::DatabaseView) -> &'static Icon {
-    view.config
+pub fn color_for_view(view: &DatabaseView) -> Option<Palette> {
+    Palette::deserialize(view.config.get("icon_color")?).ok()
+}
+
+pub fn for_view(view: &DatabaseView, fallback: Color, dark: bool) -> El {
+    let custom = view.config
         .get("icon")
         .and_then(serde_json::Value::as_str)
-        .and_then(catalog_icon)
-        .unwrap_or_else(|| toolbar_icon(view.kind))
+        .and_then(catalog_icon);
+    let color = color_for_view(view);
+    let ink = if custom.is_some() || color.is_some() {
+        Palette::icon_paint(color, dark)
+    } else {
+        fallback
+    };
+    rune::icon(custom.unwrap_or_else(|| toolbar_icon(view.kind)), 16.).color(ink)
 }
 
 use super::phosphor::{

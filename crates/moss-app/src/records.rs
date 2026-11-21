@@ -948,7 +948,8 @@ impl State {
         edit.focused = false;
         suffix.set_caret(0);
         suffix.focused = true;
-        let mut block = Block::paragraph(&peek.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&peek.page.id, &suffix.text, after as i64 + 1);
+        crate::text_colors::copy_suffix(&peek.blocks[after].block, &mut block, end);
         crate::editor_drag::copy_column(&peek.blocks[after].block, &mut block);
         peek.blocks.insert(
             after + 1,

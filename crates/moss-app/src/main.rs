@@ -48,6 +48,7 @@ mod state;
 mod table_columns;
 mod table_summaries;
 mod table_window;
+mod text_colors;
 mod ui;
 mod view_management;
 use rune::*;

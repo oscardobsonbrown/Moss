@@ -799,7 +799,8 @@ impl State {
         let mut edit = suffix;
         edit.set_caret(0);
         edit.focused = true;
-        let mut block = Block::paragraph(&tab.page.id, "", after as i64 + 1);
+        let mut block = Block::paragraph(&tab.page.id, &edit.text, after as i64 + 1);
+        crate::text_colors::copy_suffix(&tab.blocks[after].block, &mut block, end);
         crate::editor_drag::copy_column(&tab.blocks[after].block, &mut block);
         let oldkind = tab.blocks[after].block.kind;
         if matches!(

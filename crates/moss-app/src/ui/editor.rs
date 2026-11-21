@@ -1,6 +1,7 @@
 use super::theme::{Theme, icon_button};
 use crate::{block_commands::BlockCommandMode, state::State};
 use moss_core::BlockKind;
+use crate::text_colors::{self, Channel};
 use rune::*;
 use std::hash::{Hash, Hasher};
 
@@ -32,11 +33,13 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
         }
     }
     let zone_version = zone_hasher.finish();
-    let blocks: Vec<_> = tab
-        .blocks
-        .iter()
+    let marker_width = super::editor_layout::list_marker_width(
+        &tab.blocks,
+        crate::fonts::scale(tab.page.settings),
+    );
+    let blocks: Vec<_> = super::editor_layout::with_list_numbers(&tab.blocks)
         .enumerate()
-        .map(|(i, b)| {
+        .map(|(i, (b, number))| {
             let render_item = || {
                 let kind = b.block.kind;
                 if kind == BlockKind::ChildPage {
@@ -121,7 +124,12 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                         overlay.on_link(|s: &mut State, target, tx| s.open_inline_link(target, tx)),
                     )
                 };
-                let mut spans = hidden;
+                let rich_links = super::inputs::link_hit_layer(&b.edit, style, &hidden, t)
+                    .map(|layer| layer.on_link(|s: &mut State, target, tx| s.open_inline_link(target, tx)));
+                let background = super::editor_colors::block_paint(&b.block, Channel::Background, t);
+                let foreground = super::editor_colors::block_paint(&b.block, Channel::Text, t);
+                let mut spans: Vec<_> = text_colors::spans(&b.block, t.dark).collect();
+                spans.extend(hidden);
                 spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
                 let input = super::inputs::text(&b.edit, style, t)
                     .spans(spans)
@@ -130,11 +138,11 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                     .w_full()
                     .min_w(0.)
                     .min_h(line * crate::fonts::scale(tab.page.settings))
-                    .color(if kind == BlockKind::Todo && b.block.checked {
+                    .color(foreground.unwrap_or(if kind == BlockKind::Todo && b.block.checked {
                         t.faint
                     } else {
                         t.text
-                    })
+                    }))
                     .label("Block text")
                     .on_edit(move |s: &mut State| &mut s.tabs[s.active].blocks[i].edit)
                     .on_input_change(|s: &mut State, _| {
@@ -150,6 +158,9 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                         handled
                     })
                     .on_input_key(move |s: &mut State, event, tx| {
+                        if super::text_toolbar::shortcut(s, &key_id, false, event, tx) {
+                            return true;
+                        }
                         if event.key == Key::Text("-".into())
                             && s.editor_markdown_divider(&key_id, false)
                         {
@@ -214,13 +225,15 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                         b.block.checked,
                         i,
                         false,
-                        line * crate::fonts::scale(tab.page.settings),
+                        [marker_width, style.line_px()],
                         t,
                     ),
-                    BlockKind::BulletedList => super::theme::sized_label("•", 18., t.text).w(24.),
-                    BlockKind::NumberedList => {
-                        super::theme::sized_label(format!("{}.", i + 1), 16., t.text).w(30.)
-                    }
+                    BlockKind::BulletedList => super::editor_layout::list_label(
+                        &b.block.id, "•", style, marker_width, foreground.unwrap_or(t.text),
+                    ),
+                    BlockKind::NumberedList => super::editor_layout::list_label(
+                        &b.block.id, format!("{number}."), style, marker_width, foreground.unwrap_or(t.text),
+                    ),
                     BlockKind::Quote => el().w(3.).h(26.).fill(t.text),
                     BlockKind::Callout => super::theme::sized_label("💡", 20., t.text).w(28.),
                     BlockKind::Toggle => row()
@@ -288,6 +301,7 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                             .min_w(0.)
                             .child(input)
                             .children(overlay)
+                            .children(rich_links)
                             .children(b.edit.text.is_empty().then(|| {
                                 text("Press / to insert blocks")
                                     .key(format!("block-hint-{}", b.block.id))
@@ -300,7 +314,9 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                             })),
                     );
                 if matches!(kind, BlockKind::Code | BlockKind::Callout) {
-                    row.padding(14.).radius(4.).fill(t.sidebar)
+                    row.padding(14.).radius(4.).fill(background.unwrap_or(t.sidebar))
+                } else if let Some(background) = background {
+                    row.radius(6.).fill(background)
                 } else {
                     row
                 }
@@ -321,8 +337,9 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                     (
                         i,
                         &b.edit,
+                        &b.block.config,
                         b.block.checked,
-                        zone_version,
+                        (zone_version, marker_width.to_bits()),
                         menu_open,
                         settings.font as u8,
                         settings.small_text,
@@ -476,7 +493,7 @@ pub(super) fn todo_checkbox(
     checked: bool,
     index: usize,
     peek: bool,
-    line: f32,
+    [width, line]: [f32; 2],
     t: Theme,
 ) -> El {
     let id = id.to_owned();
@@ -486,7 +503,7 @@ pub(super) fn todo_checkbox(
         } else {
             format!("todo-{index}")
         })
-        .size(24., line)
+        .size(width, line)
         .center_y()
         .role("checkbox")
         .label("Complete task")

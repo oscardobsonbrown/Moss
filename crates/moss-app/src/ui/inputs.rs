@@ -1,5 +1,5 @@
 use super::theme::Theme;
-use rune::{El, TextEdit, TextStyle};
+use rune::{Color, El, Span, TextEdit, TextStyle, edit::RichStyle};
 
 pub fn text(edit: &TextEdit, style: TextStyle, t: Theme) -> El {
     rune::text_input(edit, style)
@@ -18,6 +18,32 @@ pub fn text(edit: &TextEdit, style: TextStyle, t: Theme) -> El {
 
 pub fn line(edit: &TextEdit, style: TextStyle, t: Theme) -> El {
     text(edit, style, t).single_line().h(style.line_px())
+}
+
+pub fn link_hit_layer(edit: &TextEdit, style: TextStyle, hidden: &[Span], t: Theme) -> Option<El> {
+    if edit.focused || !edit.marks().iter().any(|mark| mark.mark.link_url().is_some()) {
+        return None;
+    }
+    // shortcut: Rune consumes primary link presses in editable fields, remove this layer when it can route them.
+    let clear = Color::TRANSPARENT;
+    Some(
+        text(edit, style, t)
+            .role("presentation")
+            .rich_style(RichStyle {
+                code_fg: Some(clear),
+                code_bg: clear,
+                code_block_bg: clear,
+                link: clear,
+                quote_bar: clear,
+                marker: Some(clear),
+            })
+            .pill_colors(clear, Some(clear))
+            .spans(hidden.to_vec())
+            .caret(clear, clear)
+            .color(clear)
+            .absolute(0., 0.)
+            .w_full(),
+    )
 }
 
 pub fn field(edit: &TextEdit, key: impl Into<String>, placeholder: &str, t: Theme) -> El {

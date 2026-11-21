@@ -2,6 +2,7 @@ use super::theme::{Theme, icon_button};
 use crate::state::{PeekMode, State};
 use moss_core::BlockKind;
 use rune::*;
+use crate::text_colors::{self, Channel};
 
 pub fn side(s: &State, t: Theme, width: f32) -> Option<El> {
     let peek = s.record_peek.as_ref()?;
@@ -169,8 +170,9 @@ fn panel(s: &State, t: Theme) -> El {
     let zones = super::editor_layout::peek_zones(peek);
     let selection_page = page_id.clone();
     let selection_zones = zones.clone();
+    let marker_width = super::editor_layout::list_marker_width(&peek.blocks, scale);
     let mut block_views = Vec::with_capacity(peek.blocks.len());
-    for (i, block) in peek.blocks.iter().enumerate() {
+    for (i, (block, number)) in super::editor_layout::with_list_numbers(&peek.blocks).enumerate() {
         let view = (|| {
             let kind = block.block.kind;
             if kind == BlockKind::Image {
@@ -277,7 +279,12 @@ fn panel(s: &State, t: Theme) -> El {
                         .on_link(|s: &mut State, target, tx| s.open_peek_inline_link(target, tx)),
                 )
             };
-            let mut spans = hidden;
+            let rich_links = super::inputs::link_hit_layer(&block.edit, style, &hidden, t)
+                .map(|layer| layer.on_link(|s: &mut State, target, tx| s.open_peek_inline_link(target, tx)));
+            let background = super::editor_colors::block_paint(&block.block, Channel::Background, t);
+            let foreground = super::editor_colors::block_paint(&block.block, Channel::Text, t);
+            let mut spans: Vec<_> = text_colors::spans(&block.block, t.dark).collect();
+            spans.extend(hidden);
             spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
             let input = super::inputs::text(&block.edit, style, t)
                 .spans(spans)
@@ -287,11 +294,11 @@ fn panel(s: &State, t: Theme) -> El {
                 .w_full()
                 .min_w(0.)
                 .min_h(line * scale)
-                .color(if kind == BlockKind::Todo && block.block.checked {
+                .color(foreground.unwrap_or(if kind == BlockKind::Todo && block.block.checked {
                     t.faint
                 } else {
                     t.text
-                })
+                }))
                 .placeholder(if i == 0 { "Type something…" } else { "" }, t.input_hint)
                 .label("Block text")
                 .on_edit(move |s: &mut State| &mut s.record_peek.as_mut().unwrap().blocks[i].edit)
@@ -308,6 +315,9 @@ fn panel(s: &State, t: Theme) -> El {
                     handled
                 })
                 .on_input_key(move |s: &mut State, event, tx| {
+                    if super::text_toolbar::shortcut(s, &divider_id, true, event, tx) {
+                        return true;
+                    }
                     if event.key == Key::Text("-".into())
                         && s.editor_markdown_divider(&divider_id, true)
                     {
@@ -355,14 +365,18 @@ fn panel(s: &State, t: Theme) -> El {
                     tx.instant();
                 });
             let marker = match kind {
-                BlockKind::BulletedList => Some(t.sized_label("•", 16., t.muted).w(24.)),
-                BlockKind::NumberedList => Some(t.sized_label("1.", 16., t.muted).w(24.)),
+                BlockKind::BulletedList => Some(super::editor_layout::list_label(
+                    &block.block.id, "•", style, marker_width, foreground.unwrap_or(t.muted),
+                )),
+                BlockKind::NumberedList => Some(super::editor_layout::list_label(
+                    &block.block.id, format!("{number}."), style, marker_width, foreground.unwrap_or(t.muted),
+                )),
                 BlockKind::Todo => Some(super::editor::todo_checkbox(
                     &block.block.id,
                     block.block.checked,
                     i,
                     true,
-                    line * scale,
+                    [marker_width, style.line_px()],
                     t,
                 )),
                 BlockKind::Quote => Some(t.sized_label("▏", 16., t.muted).w(24.)),
@@ -380,13 +394,14 @@ fn panel(s: &State, t: Theme) -> El {
                 .py(2. * scale)
                 .gap(6.)
                 .children(marker)
-                .child(col().grow(1.).min_w(0.).child(input).children(overlay));
+                .child(col().grow(1.).min_w(0.).child(input).children(overlay).children(rich_links));
             if matches!(kind, BlockKind::Code | BlockKind::Callout) {
-                item.padding(12.).radius(4.).fill(t.sidebar)
+                item.padding(12.).radius(4.).fill(background.unwrap_or(t.sidebar))
             } else {
                 item
             }
         })();
+        let background = super::editor_colors::block_paint(&block.block, Channel::Background, t);
         let row = row()
             .key(format!("peek-drag-block-{}", block.block.id))
             .w_full()
@@ -401,6 +416,7 @@ fn panel(s: &State, t: Theme) -> El {
                 &zones,
             ))
             .child(view.grow(1.).min_w(0.));
+        let row = if let Some(background) = background { row.radius(6.).fill(background) } else { row };
         block_views.push(super::editor_layout::decorate_for(
             s,
             page_id,

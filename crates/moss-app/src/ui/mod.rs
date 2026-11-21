@@ -15,6 +15,7 @@ mod database_new;
 mod database_properties;
 mod database_toolbar;
 mod editor;
+mod editor_colors;
 mod editor_layout;
 mod gallery;
 mod history;
@@ -48,6 +49,7 @@ mod sidebar_sections;
 mod sidebar_surface;
 mod simple_table;
 mod table;
+mod text_toolbar;
 mod theme;
 mod timeline;
 pub(crate) mod view_icons;
@@ -143,6 +145,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         // overlays too, so both paint and pointer input follow overlay order.
         .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
         .children(record_peek::center(s, t).map(El::raise))
+        .children(text_toolbar::view(s, cx, t).map(El::raise))
         .children(database_new::menu(s, t).map(El::raise))
         .children(database::undated_overlay(s, t).map(El::raise))
         .children(gallery::settings(s, t).map(El::raise))
