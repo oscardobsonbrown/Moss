@@ -620,26 +620,7 @@ impl Store {
                 if unchanged {
                     continue;
                 }
-                let target = property
-                    .config
-                    .get("target_database_id")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| invalid("relation target missing"))?;
-                let target_raw: String = tx
-                    .query_row("SELECT data FROM databases WHERE id=?1", [target], |row| {
-                        row.get(0)
-                    })
-                    .optional()?
-                    .ok_or_else(|| invalid("relation target missing"))?;
-                let target_db: Database = decode(target_raw)?;
-                let target_page = search::page(&tx, &target_db.page_id)?
-                    .ok_or_else(|| invalid("relation target missing"))?;
-                if target_page.deleted_at.is_some()
-                    || target_page.kind != PageKind::Database
-                    || target_page.workspace_id != page.workspace_id
-                {
-                    return Err(invalid("invalid relation target"));
-                }
+                crate::properties::validate_relation_target(&tx, &page.workspace_id, &property.config)?;
             }
             crate::advanced_properties::graph(&tx, &page.workspace_id, &updated, None)?;
             let mut after = String::new();

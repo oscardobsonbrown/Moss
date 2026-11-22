@@ -18,7 +18,11 @@ fn header_actions_persist_query_settings_and_relative_insertion() {
     s.open_database_property(Some(&title));
     s.set_table_sort(Some(true));
     s.open_database_property(Some(&title));
-    s.table_filter_input.replace_text("Alpha");
+    s.database_property_editor
+        .as_mut()
+        .unwrap()
+        .filter_input
+        .replace_text("Alpha");
     s.set_table_filter();
     s.open_database_property(Some(&title));
     s.set_table_group();
@@ -28,11 +32,19 @@ fn header_actions_persist_query_settings_and_relative_insertion() {
     s.set_table_config("freeze_through", json!(title));
     s.open_database_property(Some(&title));
     s.insert_table_property(true);
-    s.database_property_input.replace_text("Details");
+    s.database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
+        .replace_text("Details");
     assert!(s.save_database_property());
     s.open_database_property(Some(&title));
     s.insert_table_property(false);
-    s.database_property_input.replace_text("Before title");
+    s.database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
+        .replace_text("Before title");
     assert!(s.save_database_property());
     let saved = s.store.get_database(&db.id).unwrap().unwrap();
     assert_eq!(saved.properties[0].name, "Before title");
@@ -336,7 +348,11 @@ fn tab_traversal_follows_inserted_column_order() {
         .clone();
     s.open_database_property(Some(&title));
     s.insert_table_property(false);
-    s.database_property_input.replace_text("Before");
+    s.database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
+        .replace_text("Before");
     assert!(s.save_database_property());
     let before = s.tab().unwrap().database.as_ref().unwrap().properties[0]
         .id
@@ -415,7 +431,11 @@ fn removing_property_filter_keeps_unrelated_filters() {
     s.tabs[s.active].database = Some(changed);
     for text in ["one", "two"] {
         s.open_database_property(Some(&title));
-        s.table_filter_input.replace_text(text);
+        s.database_property_editor
+            .as_mut()
+            .unwrap()
+            .filter_input
+            .replace_text(text);
         s.set_table_filter();
     }
     s.open_database_property(Some(&title));

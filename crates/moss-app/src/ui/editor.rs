@@ -402,6 +402,14 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                                     let anchor = key.clone();
                                     let control = if tab.page.icon.is_empty() {
                                         super::page_cover::header_action(key, "Add icon", t)
+                                            .group_opacity(
+                                                super::page_cover::header_action_visibility(
+                                                    s,
+                                                    &tab.page.id,
+                                                    tab.title.focused,
+                                                ),
+                                                1.,
+                                            )
                                     } else {
                                         el().key(key)
                                             .radius(6.)

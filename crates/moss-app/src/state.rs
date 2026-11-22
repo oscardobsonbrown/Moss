@@ -191,13 +191,7 @@ pub struct State {
     pub database_new_open: bool,
     pub database_property_editor: Option<crate::database_properties::PropertyEditor>,
     pub metadata_menu: Option<crate::database_properties::MetadataMenu>,
-    pub metadata_drag: Option<String>,
-    pub metadata_drop_before: Option<String>,
-    pub metadata_suppress_press: bool,
-    pub database_property_input: TextEdit,
-    pub database_property_options_input: TextEdit,
-    pub table_filter_input: TextEdit,
-    pub advanced_property: crate::advanced_properties::AdvancedProperty,
+    pub metadata_drag: crate::database_properties::MetadataDrag,
     pub computed_change_count: u64,
     pub computed_refresh_deferred: bool,
     pub(crate) external_data_version: i64,
@@ -207,17 +201,10 @@ pub struct State {
     pub sidebar_page_menu: Option<crate::sidebar_page_menu::SidebarPageMenu>,
     pub sidebar_favorites: crate::sidebar_favorites::SidebarFavorites,
     pub sidebar_page_name: TextEdit,
-    pub property_visibility_open: bool,
-    pub property_visibility_from_view_settings: bool,
-    pub property_visibility_search: TextEdit,
+    pub property_visibility: Option<crate::database_properties::PropertyVisibility>,
     pub undated_open: bool,
     pub undated_search: TextEdit,
-    pub property_picker: Option<crate::property_controls::PropertyPicker>,
-    pub place_picker: Option<crate::place_property::PlacePicker>,
-    pub property_picker_input: TextEdit,
-    pub date_end_input: TextEdit,
-    pub date_start_time_input: TextEdit,
-    pub date_end_time_input: TextEdit,
+    pub cell_picker: Option<crate::property_controls::CellPicker>,
     pub timeline_drag: Option<(chrono::NaiveDate, chrono::NaiveDate)>,
     pub handles: std::sync::Arc<std::sync::Mutex<BTreeMap<String, rune::AppHandle<State>>>>,
 }
@@ -348,13 +335,7 @@ impl State {
             database_new_open: false,
             database_property_editor: None,
             metadata_menu: None,
-            metadata_drag: None,
-            metadata_drop_before: None,
-            metadata_suppress_press: false,
-            database_property_input: TextEdit::new(""),
-            database_property_options_input: TextEdit::new(""),
-            table_filter_input: TextEdit::new(""),
-            advanced_property: Default::default(),
+            metadata_drag: Default::default(),
             computed_change_count: 0,
             computed_refresh_deferred: false,
             external_data_version,
@@ -364,17 +345,10 @@ impl State {
             sidebar_page_menu: None,
             sidebar_favorites: Default::default(),
             sidebar_page_name: TextEdit::new(""),
-            property_visibility_open: false,
-            property_visibility_from_view_settings: false,
-            property_visibility_search: TextEdit::new(""),
+            property_visibility: None,
             undated_open: false,
             undated_search: TextEdit::new(""),
-            property_picker: None,
-            place_picker: None,
-            property_picker_input: TextEdit::new(""),
-            date_end_input: TextEdit::new(""),
-            date_start_time_input: TextEdit::new(""),
-            date_end_time_input: TextEdit::new(""),
+            cell_picker: None,
             timeline_drag: None,
             handles: Default::default(),
         };
@@ -650,21 +624,16 @@ impl State {
         if self.page_icon_picker.is_some() {
             return false;
         }
-        self.close_relation_picker();
-        if self.advanced_property.relation_picker.is_some() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() {
             return false;
         }
         self.database_new_open = false;
         self.gallery_settings_open = false;
-        self.property_visibility_open = false;
-        self.property_visibility_search = TextEdit::new("");
+        self.property_visibility = None;
         self.undated_open = false;
         self.undated_search = TextEdit::new("");
         self.selected_cell = None;
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() {
-            return false;
-        }
         if !self.finish_cell(false) || !self.close_peek() {
             return false;
         }
@@ -819,13 +788,12 @@ impl State {
         self.save_blocks();
     }
     pub fn open_view_chooser(&mut self) {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() {
             return;
         }
         self.gallery_settings_open = false;
-        self.property_visibility_open = false;
-        self.property_visibility_search.focused = false;
+        self.property_visibility = None;
         self.undated_open = false;
         self.undated_search.focused = false;
         self.view_search = TextEdit::new("");
@@ -839,13 +807,12 @@ impl State {
         self.start_search(true);
     }
     fn start_search(&mut self, new_tab: bool) {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() {
             return;
         }
         self.gallery_settings_open = false;
-        self.property_visibility_open = false;
-        self.property_visibility_search.focused = false;
+        self.property_visibility = None;
         self.undated_open = false;
         self.undated_search.focused = false;
         self.search = TextEdit::new("");

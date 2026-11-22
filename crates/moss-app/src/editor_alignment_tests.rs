@@ -262,6 +262,7 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
             let mut rt = runtime(state, 850., dark, scale);
             rt.pointer_move(840., 1390.);
             rt.frame(0.3);
+            assert!(info(&rt, &icon).opacity < 0.01);
             assert!(info(&rt, &cover).opacity < 0.01);
             let title = info(&rt, &format!("title-{page}")).rect;
             let icon_label = info(&rt, &format!("{icon}-label"));
@@ -276,10 +277,12 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
             rt.pointer_move(button[0] + button[2] / 2., button[1] + button[3] / 2.);
             rt.frame(0.);
             assert!(info(&rt, &icon).hover > 0.99);
+            assert!(info(&rt, &icon).opacity > 0.99);
             assert!(info(&rt, &cover).opacity > 0.99);
             click(&mut rt, &format!("title-{page}"));
             rt.pointer_move(840., 1390.);
             rt.frame(0.2);
+            assert!(info(&rt, &icon).opacity > 0.99);
             assert!(info(&rt, &cover).opacity > 0.99);
             let block_id = rt.state.tab().unwrap().blocks[0].block.id.clone();
             click(&mut rt, &format!("block-input-{block_id}"));
@@ -313,7 +316,9 @@ fn record_page_customization_controls_align_with_title() {
     rt.invalidate();
     rt.pointer_move(5., 5.);
     rt.frame(0.3);
+    let icon_key = format!("peek-icon-{page}");
     let cover_key = format!("page-cover-open-{page}-peek");
+    assert!(info(&rt, &icon_key).opacity < 0.01);
     assert!(info(&rt, &cover_key).opacity < 0.01);
     let title = info(&rt, &format!("peek-title-{page}")).rect;
     let icon = info(&rt, &format!("peek-icon-{page}-label")).rect;
@@ -322,10 +327,12 @@ fn record_page_customization_controls_align_with_title() {
     assert!((icon[1] - cover[1]).abs() < 1.);
     rt.pointer_move(title[0] + 2., title[1] + title[3] / 2.);
     rt.frame(0.3);
+    assert!(info(&rt, &icon_key).opacity > 0.99);
     assert!(info(&rt, &cover_key).opacity > 0.99);
     click(&mut rt, &format!("peek-title-{page}"));
     rt.pointer_move(5., 5.);
     rt.frame(0.3);
+    assert!(info(&rt, &icon_key).opacity > 0.99);
     assert!(info(&rt, &cover_key).opacity > 0.99);
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();

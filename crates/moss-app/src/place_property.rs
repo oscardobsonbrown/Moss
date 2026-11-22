@@ -1,5 +1,6 @@
+use crate::property_controls::CellPicker;
 use crate::state::State;
-use moss_core::{PlaceValue, PropertyKind, ViewKind};
+use moss_core::{PlaceValue, PropertyKind};
 use rune::{TextEdit, Tx};
 use serde_json::Value;
 use std::time::{Duration, Instant};
@@ -15,8 +16,8 @@ pub struct PlacePicker {
 
 impl State {
     pub fn open_place_picker(&mut self, record_id: &str, property_id: &str) {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() || !self.finish_cell(false) {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() || !self.finish_cell(false) {
             return;
         }
         if !self.record_database(record_id).is_some_and(|db| {
@@ -37,56 +38,9 @@ impl State {
                 return;
             }
         };
-        let anchor =
-            if self
-                .record_peek
-                .as_ref()
-                .is_some_and(|p| p.record.id == record_id)
-            {
-                format!("peek-property-{property_id}")
-            } else if self
-                .tab()
-                .and_then(|tab| tab.record_context.as_ref())
-                .is_some_and(|(_, record)| record.id == record_id)
-            {
-                format!("page-place-{property_id}")
-            } else if self
-                .tab()
-                .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-                .is_some_and(|v| v.kind == ViewKind::Calendar)
-            {
-                let Some(anchor) = self.database_views.calendar.property_anchor.clone() else {
-                    return;
-                };
-                anchor
-            } else if self
-                .tab()
-                .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-                .is_some_and(|v| v.kind == ViewKind::Board)
-            {
-                if record.values.get(property_id).is_none_or(|value| {
-                    value.is_null() || value.as_str().is_some_and(str::is_empty)
-                }) {
-                    format!("board-card-{record_id}")
-                } else {
-                    format!("board-value-{record_id}-{property_id}")
-                }
-            } else if let Some(index) = self
-                .tab()
-                .and_then(|tab| tab.records.iter().position(|r| r.id == record_id))
-            {
-                match self
-                    .tab()
-                    .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-                    .map(|view| view.kind)
-                {
-                    Some(ViewKind::Gallery) => format!("gallery-value-{index}-{property_id}"),
-                    Some(ViewKind::List) => format!("list-value-{index}-{property_id}"),
-                    _ => format!("cell-{index}-{property_id}"),
-                }
-            } else {
-                return;
-            };
+        let Some(anchor) = self.property_anchor(record_id, property_id, PropertyKind::Place) else {
+            return;
+        };
         let expected = record
             .values
             .get(property_id)
@@ -97,27 +51,19 @@ impl State {
         map.place_query = TextEdit::new(&crate::state::display_value(&expected));
         map.place_query.focused = true;
         map.search_selected = 0;
-        self.place_picker = Some(PlacePicker {
+        self.cell_picker = Some(CellPicker::Place(PlacePicker {
             record_id: record_id.into(),
             property_id: property_id.into(),
             anchor,
             expected,
             error: None,
             search_at: None,
-        });
+        }));
         self.error = None;
     }
 
-    pub fn dismiss_place_picker(&mut self) {
-        if self.place_picker.take().is_some() {
-            let map = &mut self.database_views.map;
-            map.search_changed();
-            map.place_query.focused = false;
-        }
-    }
-
     pub fn save_place_choice(&mut self, place: Option<PlaceValue>, as_text: bool) {
-        let Some(picker) = &self.place_picker else {
+        let Some(picker) = self.place_picker() else {
             return;
         };
         let (record, property, expected) = (
@@ -141,11 +87,11 @@ impl State {
                 self.sync_record(&record);
                 self.database_views.map.invalidate();
                 self.database_views.board.invalidate();
-                self.dismiss_place_picker();
+                self.dismiss_cell_picker();
                 self.error = None;
             }
             Err(error) => {
-                if let Some(picker) = &mut self.place_picker {
+                if let Some(picker) = self.place_picker_mut() {
                     picker.error = Some(format!("Place is not saved: {error}"));
                 }
             }
@@ -154,7 +100,7 @@ impl State {
 }
 
 pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
-    let Some(picker) = &mut s.place_picker else {
+    let Some(picker) = s.place_picker_mut() else {
         return false;
     };
     let Some(at) = picker.search_at else {

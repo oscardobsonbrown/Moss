@@ -1,11 +1,13 @@
 use crate::state::State;
 use moss_core::{Page, PageCover, Store};
-use rune::{Image, ImageCache, Tx, Waker};
+use rune::{Image, ImageCache, TextEdit, Tx, Waker};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::mpsc,
 };
+
+pub const DEFAULT_GRADIENT: (&str, &str) = ("#acc7df", "#efd3c2");
 
 pub struct CoverEditor {
     pub page_id: String,
@@ -14,6 +16,10 @@ pub struct CoverEditor {
     pub expected: Option<PageCover>,
     pub draft: Option<PageCover>,
     pub reposition: bool,
+    pub gradient_picker: bool,
+    pub gradient_start: TextEdit,
+    pub gradient_end: TextEdit,
+    pub gradient_error: Option<String>,
     pub error: Option<String>,
 }
 #[derive(Default)]
@@ -91,6 +97,10 @@ impl State {
         {
             return;
         }
+        let (start, end) = match &page.cover {
+            Some(PageCover::Gradient { start, end }) => (start.as_str(), end.as_str()),
+            _ => DEFAULT_GRADIENT,
+        };
         self.page_cover.editor_generation = self.page_cover.editor_generation.wrapping_add(1);
         self.page_cover.editor = Some(CoverEditor {
             generation: self.page_cover.editor_generation,
@@ -99,8 +109,115 @@ impl State {
             expected: page.cover.clone(),
             draft: page.cover.clone(),
             reposition: false,
+            gradient_picker: false,
+            gradient_start: TextEdit::new(start),
+            gradient_end: TextEdit::new(end),
+            gradient_error: None,
             error: None,
         });
+    }
+    pub fn open_gradient_picker(&mut self) {
+        let Some(editor) = &mut self.page_cover.editor else {
+            return;
+        };
+        editor.gradient_picker = true;
+        editor.gradient_error = None;
+        if let Some(PageCover::Gradient { start, end }) = editor.draft.clone() {
+            editor.gradient_start = TextEdit::new(&start);
+            editor.gradient_end = TextEdit::new(&end);
+        } else {
+            let (start, end) = DEFAULT_GRADIENT;
+            editor.gradient_start = TextEdit::new(start);
+            editor.gradient_end = TextEdit::new(end);
+            self.set_cover_draft(Some(PageCover::Gradient {
+                start: start.into(),
+                end: end.into(),
+            }));
+        }
+    }
+    pub fn set_gradient_colors(&mut self, start: &str, end: &str) {
+        let start = start.to_ascii_lowercase();
+        let end = end.to_ascii_lowercase();
+        if let Some(editor) = &mut self.page_cover.editor {
+            editor.gradient_start.replace_text(&start);
+            editor.gradient_end.replace_text(&end);
+            editor.gradient_error = None;
+        }
+        self.set_cover_draft(Some(PageCover::Gradient { start, end }));
+    }
+    pub fn set_gradient_stop(&mut self, is_start: bool, hex: &str) {
+        let (start, end) = {
+            let Some(editor) = &mut self.page_cover.editor else {
+                return;
+            };
+            let current = match &editor.draft {
+                Some(PageCover::Gradient { start, end }) => (start.clone(), end.clone()),
+                _ => (DEFAULT_GRADIENT.0.into(), DEFAULT_GRADIENT.1.into()),
+            };
+            let next = if is_start {
+                (hex.to_ascii_lowercase(), current.1)
+            } else {
+                (current.0, hex.to_ascii_lowercase())
+            };
+            editor.gradient_start.replace_text(&next.0);
+            editor.gradient_end.replace_text(&next.1);
+            editor.gradient_error = None;
+            next
+        };
+        self.set_cover_draft(Some(PageCover::Gradient { start, end }));
+    }
+    pub fn swap_gradient_colors(&mut self) {
+        let next = {
+            let Some(editor) = &mut self.page_cover.editor else {
+                return;
+            };
+            let (start, end) = match &editor.draft {
+                Some(PageCover::Gradient { start, end }) => (end.clone(), start.clone()),
+                _ => (DEFAULT_GRADIENT.1.into(), DEFAULT_GRADIENT.0.into()),
+            };
+            editor.gradient_start.replace_text(&start);
+            editor.gradient_end.replace_text(&end);
+            editor.gradient_error = None;
+            (start, end)
+        };
+        self.set_cover_draft(Some(PageCover::Gradient {
+            start: next.0,
+            end: next.1,
+        }));
+    }
+    pub fn apply_gradient_inputs(&mut self, strict: bool) {
+        fn normalize_hex(raw: &str) -> Option<String> {
+            let trimmed = raw.trim();
+            let digits = trimmed.strip_prefix('#').unwrap_or(trimmed);
+            if digits.len() == 6 && digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Some(format!("#{}", digits.to_ascii_lowercase()))
+            } else {
+                None
+            }
+        }
+        let parsed = {
+            let Some(editor) = &mut self.page_cover.editor else {
+                return;
+            };
+            match (
+                normalize_hex(&editor.gradient_start.text),
+                normalize_hex(&editor.gradient_end.text),
+            ) {
+                (Some(start), Some(end)) => {
+                    editor.gradient_error = None;
+                    Some((start, end))
+                }
+                _ => {
+                    if strict {
+                        editor.gradient_error = Some("Enter hex colors like #acc7df.".into());
+                    }
+                    None
+                }
+            }
+        };
+        if let Some((start, end)) = parsed {
+            self.set_cover_draft(Some(PageCover::Gradient { start, end }));
+        }
     }
     pub fn set_cover_draft(&mut self, cover: Option<PageCover>) {
         if let Some(editor) = &mut self.page_cover.editor {
@@ -925,6 +1042,112 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert!(!rt.state.page_cover.image_errors.contains_key(&asset));
+        drop(rt);
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn gradient_picker_loads_default_applies_presets_and_custom_colors() {
+        use rune::{Env, Runtime};
+        let path = std::env::temp_dir().join(format!("moss-cover-grad-{}", new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        state.new_page(false, None);
+        let page = state.tab().unwrap().page.clone();
+        let mut rt = Runtime::new(state, crate::ui::view, (1000., 800.), Env::default());
+        rt.frame(0.);
+        let click = |rt: &mut Runtime<State>, key: &str| {
+            let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+            rt.pointer_move(x, y);
+            rt.frame(1. / 60.);
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(1. / 60.);
+        };
+        click(&mut rt, &format!("page-cover-open-{}-document", page.id));
+        rt.frame(1. / 60.);
+        click(&mut rt, "cover-gradient");
+        assert!(rt.state.page_cover.editor.as_ref().unwrap().gradient_picker);
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: DEFAULT_GRADIENT.0.into(),
+                end: DEFAULT_GRADIENT.1.into(),
+            })
+        );
+        // Pick Sunset preset.
+        click(&mut rt, "cover-gradient-preset-1");
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: "#e96443".into(),
+                end: "#904e95".into(),
+            })
+        );
+        // Pick custom start and end swatches, then swap.
+        click(&mut rt, "cover-gradient-start-#3b82f6");
+        click(&mut rt, "cover-gradient-end-#34d399");
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: "#3b82f6".into(),
+                end: "#34d399".into(),
+            })
+        );
+        click(&mut rt, "cover-gradient-swap");
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: "#34d399".into(),
+                end: "#3b82f6".into(),
+            })
+        );
+        // Custom hex inputs persist valid colors and reject invalid hex cleanly.
+        rt.state
+            .page_cover
+            .editor
+            .as_mut()
+            .unwrap()
+            .gradient_start
+            .replace_text("#123456");
+        rt.state
+            .page_cover
+            .editor
+            .as_mut()
+            .unwrap()
+            .gradient_end
+            .replace_text("#abcdef");
+        rt.state.apply_gradient_inputs(true);
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: "#123456".into(),
+                end: "#abcdef".into(),
+            })
+        );
+        rt.state
+            .page_cover
+            .editor
+            .as_mut()
+            .unwrap()
+            .gradient_start
+            .replace_text("nope");
+        rt.state.apply_gradient_inputs(true);
+        assert!(
+            rt.state
+                .page_cover
+                .editor
+                .as_ref()
+                .unwrap()
+                .gradient_error
+                .is_some()
+        );
+        assert_eq!(
+            rt.state.tab().unwrap().page.cover,
+            Some(PageCover::Gradient {
+                start: "#123456".into(),
+                end: "#abcdef".into(),
+            })
+        );
         drop(rt);
         let _ = std::fs::remove_dir_all(path);
     }

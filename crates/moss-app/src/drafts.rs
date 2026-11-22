@@ -165,18 +165,9 @@ impl State {
                     .as_ref()
                     .is_some_and(|peek| peek.record.id == id)
                 || self
-                    .property_picker
+                    .cell_picker
                     .as_ref()
-                    .is_some_and(|picker| picker.record_id == id)
-                || self
-                    .place_picker
-                    .as_ref()
-                    .is_some_and(|picker| picker.record_id == id)
-                || self
-                    .advanced_property
-                    .relation_picker
-                    .as_ref()
-                    .is_some_and(|picker| picker.record_id == id)
+                    .is_some_and(|picker| picker.record_id() == id)
                 || self.tabs.iter().any(|tab| {
                     tab.record_context
                         .as_ref()

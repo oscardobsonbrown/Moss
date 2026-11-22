@@ -422,10 +422,7 @@ pub fn note_discarded(s: &mut State, database_id: &str) {
 }
 
 fn is_editing(s: &State, index: usize) -> bool {
-    index == s.active
-        && (s.editing_cell.is_some()
-            || s.property_picker.is_some()
-            || s.advanced_property.relation_picker.is_some())
+    index == s.active && (s.editing_cell.is_some() || s.cell_picker.is_some())
 }
 
 fn install(s: &mut State, index: usize, response: Response) -> bool {
@@ -659,17 +656,7 @@ pub fn poll(s: &mut State, tx: &mut Tx) -> bool {
             .editing_cell
             .as_ref()
             .map(|cell| cell.record_id.as_str())
-            .or_else(|| {
-                s.property_picker
-                    .as_ref()
-                    .map(|picker| picker.record_id.as_str())
-            })
-            .or_else(|| {
-                s.advanced_property
-                    .relation_picker
-                    .as_ref()
-                    .map(|picker| picker.record_id.as_str())
-            });
+            .or_else(|| s.cell_picker.as_ref().map(|picker| picker.record_id()));
         let window = s.tabs[index].table_window.as_ref().unwrap();
         let at = window.scroll.get();
         if editing && at.viewport[1] > 0. {

@@ -5,6 +5,296 @@ use crate::{
 use rusqlite::{OptionalExtension, Result, Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 
+pub const OPTION_COLORS: [&str; 10] = [
+    "default", "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red",
+];
+
+pub const AUTO_OPTION_COLORS: [&str; 8] = [
+    "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red",
+];
+
+pub const DATE_FORMATS: [(&str, &str); 6] = [
+    ("full", "Full date"),
+    ("month_day_year_full", "Month Day, Year"),
+    ("day_month_year", "Day/Month/Year"),
+    ("month_day_year", "Month/Day/Year"),
+    ("year_month_day", "Year/Month/Day"),
+    ("relative", "Relative"),
+];
+
+pub fn is_valid_date_format(format: &str) -> bool {
+    DATE_FORMATS.iter().any(|(id, _)| *id == format)
+}
+
+pub fn default_status_option_color(name: &str) -> Option<&'static str> {
+    match name {
+        "Not started" => Some("gray"),
+        "In progress" => Some("blue"),
+        "Done" => Some("green"),
+        _ => None,
+    }
+}
+
+pub fn is_valid_option_color(color: &str) -> bool {
+    OPTION_COLORS.contains(&color)
+}
+
+pub fn option_name(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("name").and_then(Value::as_str))
+}
+
+fn fnv1a_hash(parts: &[&str]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for part in parts {
+        for byte in part.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+pub fn auto_option_color(property_id: &str, option_index: usize) -> &'static str {
+    let base = (fnv1a_hash(&[property_id]) as usize) % AUTO_OPTION_COLORS.len();
+    AUTO_OPTION_COLORS[(base + option_index) % AUTO_OPTION_COLORS.len()]
+}
+
+pub fn resolved_option_color<'a>(property: &'a Property, name: &str) -> &'a str {
+    if let Some(options) = property.config.get("options").and_then(Value::as_array) {
+        if let Some((index, entry)) = options
+            .iter()
+            .enumerate()
+            .find(|(_, v)| option_name(v) == Some(name))
+        {
+            if let Some(color) = entry
+                .get("color")
+                .and_then(Value::as_str)
+                .filter(|c| is_valid_option_color(c))
+            {
+                return color;
+            }
+            if property.kind == PropertyKind::Status {
+                if let Some(color) = default_status_option_color(name) {
+                    return color;
+                }
+            }
+            return auto_option_color(&property.id, index);
+        }
+    }
+    if property.kind == PropertyKind::Status {
+        if let Some(color) = default_status_option_color(name) {
+            return color;
+        }
+    }
+    let idx = (fnv1a_hash(&[&property.id, name]) as usize) % AUTO_OPTION_COLORS.len();
+    AUTO_OPTION_COLORS[idx]
+}
+
+pub(crate) fn pick_unused_option_color(
+    property_id: &str,
+    existing: &[Value],
+) -> &'static str {
+    let used: std::collections::HashSet<&str> = existing
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            entry
+                .get("color")
+                .and_then(Value::as_str)
+                .filter(|c| is_valid_option_color(c))
+                .unwrap_or_else(|| auto_option_color(property_id, index))
+        })
+        .collect();
+    let base = (fnv1a_hash(&[property_id]) as usize) % AUTO_OPTION_COLORS.len();
+    for offset in 0..AUTO_OPTION_COLORS.len() {
+        let candidate = AUTO_OPTION_COLORS[(base + existing.len() + offset) % AUTO_OPTION_COLORS.len()];
+        if !used.contains(candidate) {
+            return candidate;
+        }
+    }
+    auto_option_color(property_id, existing.len())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropertyOption {
+    pub name: String,
+    pub color: String,
+}
+
+pub fn property_options(property: &Property) -> Vec<PropertyOption> {
+    property
+        .config
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    let name = option_name(entry)?.to_owned();
+                    let color = entry
+                        .get("color")
+                        .and_then(Value::as_str)
+                        .filter(|c| is_valid_option_color(c))
+                        .or_else(|| {
+                            (property.kind == PropertyKind::Status)
+                                .then(|| default_status_option_color(&name))
+                                .flatten()
+                        })
+                        .unwrap_or_else(|| auto_option_color(&property.id, index))
+                        .to_owned();
+                    Some(PropertyOption { name, color })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn normalize_options(options: &[String]) -> Result<Vec<String>> {
+    if options.is_empty() {
+        return Err(invalid("select requires at least one option"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut values = Vec::with_capacity(options.len());
+    for option in options {
+        let option = option.trim();
+        if option.is_empty() {
+            return Err(invalid("select option cannot be empty"));
+        }
+        if !seen.insert(option.to_owned()) {
+            return Err(invalid("select options must be unique"));
+        }
+        values.push(option.to_owned());
+    }
+    Ok(values)
+}
+
+pub(crate) fn snapshot_formula_bindings(db: &mut Database) {
+    let schema = db.properties.clone();
+    for property in &mut db.properties {
+        if property.kind == PropertyKind::Formula && property.config.get("_bindings").is_none() {
+            if let Some(source) = property.config.get("expression").and_then(Value::as_str) {
+                if let Ok(bindings) = crate::formula::bindings(source, &schema) {
+                    if let Some(config) = property.config.as_object_mut() {
+                        config.insert("_bindings".into(), json!(bindings));
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_relation_target(
+    tx: &Transaction<'_>,
+    workspace_id: &str,
+    config: &Value,
+) -> Result<()> {
+    let target = config
+        .get("target_database_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("relation target missing"))?;
+    let raw: String = tx
+        .query_row("SELECT data FROM databases WHERE id=?1", [target], |row| {
+            row.get(0)
+        })
+        .optional()?
+        .ok_or_else(|| invalid("relation target missing"))?;
+    let target_db: Database = decode(raw)?;
+    let target_page =
+        search::page(tx, &target_db.page_id)?.ok_or_else(|| invalid("relation target missing"))?;
+    if target_page.deleted_at.is_some()
+        || target_page.kind != PageKind::Database
+        || target_page.workspace_id != workspace_id
+    {
+        return Err(invalid("invalid relation target"));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_rollup_operation(config: &Value) -> Result<()> {
+    let op = config
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !matches!(
+        op,
+        "original"
+            | "unique"
+            | "count"
+            | "count_values"
+            | "count_empty"
+            | "percent_empty"
+            | "sum"
+            | "average"
+            | "min"
+            | "max"
+    ) {
+        return Err(invalid("unsupported rollup operation"));
+    }
+    Ok(())
+}
+
+pub(crate) fn update_record_values(
+    tx: &Transaction<'_>,
+    owner: &Page,
+    record: &Record,
+) -> Result<()> {
+    let values = encode(&record.values)?;
+    tx.execute(
+        "UPDATE records SET values_json=?1,data=?2 WHERE id=?3",
+        params![values, encode(record)?, record.id],
+    )?;
+    if record.deleted_at.is_none() {
+        let target = match &record.page_id {
+            Some(id) => search::page(tx, id)?.ok_or_else(|| invalid("record page missing"))?,
+            None => owner.clone(),
+        };
+        search::index(
+            tx,
+            &format!("record:{}", record.id),
+            &target,
+            &format!("{} {}", record.title, values),
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn refresh_all_records(tx: &Transaction<'_>, database_id: &str) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let ids: Vec<String> = {
+            let mut q = tx.prepare(
+                "SELECT id FROM records WHERE database_id=?1 AND id>?2 ORDER BY id LIMIT 256",
+            )?;
+            let rows = q.query_map(params![database_id, after], |row| row.get(0))?;
+            rows.collect::<Result<Vec<_>>>()?
+        };
+        if ids.is_empty() {
+            break;
+        }
+        after = ids.last().unwrap().clone();
+        crate::calculation::refresh(tx, &ids)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn colored_options(property_id: &str, options: &[String]) -> Vec<Value> {
+    options
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            json!({
+                "name": name,
+                "color": auto_option_color(property_id, index),
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn with_database(
     store: &mut Store,
     id: &str,
@@ -33,7 +323,7 @@ pub(crate) fn with_database(
     Ok(db)
 }
 
-fn name(value: &str) -> Result<&str> {
+pub(crate) fn name(value: &str) -> Result<&str> {
     let value = value.trim();
     if value.is_empty() {
         Err(invalid("property name cannot be empty"))
@@ -41,7 +331,7 @@ fn name(value: &str) -> Result<&str> {
         Ok(value)
     }
 }
-fn existing(db: &Database, expected: &Property) -> Result<usize> {
+pub(crate) fn existing(db: &Database, expected: &Property) -> Result<usize> {
     let index = db
         .properties
         .iter()
@@ -115,7 +405,7 @@ impl Store {
         let property_name = name(property_name)?.to_owned();
         let config = match kind {
             PropertyKind::Status => json!({"options": ["Not started", "In progress", "Done"]}),
-            PropertyKind::Select => json!({"options": []}),
+            PropertyKind::Select | PropertyKind::MultiSelect => json!({"options": []}),
             PropertyKind::Text
             | PropertyKind::Number
             | PropertyKind::Date
@@ -142,28 +432,28 @@ impl Store {
         property_name: &str,
         options: &[String],
     ) -> Result<Database> {
+        self.add_options_property(database_id, property_name, PropertyKind::Select, options)
+    }
+    pub fn add_options_property(
+        &mut self,
+        database_id: &str,
+        property_name: &str,
+        kind: PropertyKind,
+        options: &[String],
+    ) -> Result<Database> {
+        if !matches!(kind, PropertyKind::Select | PropertyKind::MultiSelect) {
+            return Err(invalid("unsupported options property type"));
+        }
         let property_name = name(property_name)?.to_owned();
-        if options.is_empty() {
-            return Err(invalid("select requires at least one option"));
-        }
-        let mut seen = std::collections::HashSet::new();
-        let mut values = Vec::with_capacity(options.len());
-        for option in options {
-            let option = option.trim();
-            if option.is_empty() {
-                return Err(invalid("select option cannot be empty"));
-            }
-            if !seen.insert(option.to_owned()) {
-                return Err(invalid("select options must be unique"));
-            }
-            values.push(option.to_owned());
-        }
+        let values = normalize_options(options)?;
         with_database(self, database_id, |_, db, _| {
+            let id = new_id();
+            let colored = colored_options(&id, &values);
             db.properties.push(Property {
-                id: new_id(),
+                id,
                 name: property_name,
-                kind: PropertyKind::Select,
-                config: json!({"options": values}),
+                kind,
+                config: json!({"options": colored}),
             });
             Ok(())
         })
@@ -178,21 +468,11 @@ impl Store {
         after: bool,
     ) -> Result<Database> {
         let property_name = name(property_name)?.to_owned();
+        let id = new_id();
         let config = match kind {
-            PropertyKind::Select => {
-                if options.is_empty() {
-                    return Err(invalid("select requires at least one option"));
-                }
-                let mut seen = std::collections::HashSet::new();
-                let mut values = Vec::new();
-                for option in options {
-                    let option = option.trim();
-                    if option.is_empty() || !seen.insert(option.to_owned()) {
-                        return Err(invalid("select options must be nonempty and unique"));
-                    }
-                    values.push(option.to_owned());
-                }
-                json!({"options": values})
+            PropertyKind::Select | PropertyKind::MultiSelect => {
+                let values = normalize_options(options)?;
+                json!({"options": colored_options(&id, &values)})
             }
             PropertyKind::Status => json!({"options": ["Not started", "In progress", "Done"]}),
             PropertyKind::Text
@@ -214,12 +494,244 @@ impl Store {
             db.properties.insert(
                 position,
                 Property {
-                    id: new_id(),
+                    id,
                     name: property_name,
                     kind,
                     config,
                 },
             );
+            Ok(())
+        })
+    }
+    pub fn set_property_option_color(
+        &mut self,
+        database_id: &str,
+        expected: &Property,
+        target_name: &str,
+        color: &str,
+    ) -> Result<Database> {
+        if !matches!(
+            expected.kind,
+            PropertyKind::Select | PropertyKind::MultiSelect | PropertyKind::Status
+        ) {
+            return Err(invalid("this property does not have colored options"));
+        }
+        if !is_valid_option_color(color) {
+            return Err(invalid("invalid option color"));
+        }
+        let target_name = target_name.trim();
+        if target_name.is_empty() {
+            return Err(invalid("option name cannot be empty"));
+        }
+        with_database(self, database_id, |_, db, _| {
+            let index = existing(db, expected)?;
+            let property = &mut db.properties[index];
+            if !property.config.is_object() {
+                property.config = json!({});
+            }
+            let options = property
+                .config
+                .as_object_mut()
+                .unwrap()
+                .entry("options")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| invalid("property options are invalid"))?;
+            if let Some(entry) = options
+                .iter_mut()
+                .find(|entry| option_name(entry) == Some(target_name))
+            {
+                *entry = json!({"name": target_name, "color": color});
+            } else {
+                options.push(json!({"name": target_name, "color": color}));
+            }
+            Ok(())
+        })
+    }
+    pub fn add_property_option(
+        &mut self,
+        database_id: &str,
+        expected: &Property,
+        target_name: &str,
+        color: Option<&str>,
+    ) -> Result<Database> {
+        if !matches!(
+            expected.kind,
+            PropertyKind::Select | PropertyKind::MultiSelect | PropertyKind::Status
+        ) {
+            return Err(invalid("this property does not accept new options"));
+        }
+        let target_name = target_name.trim();
+        if target_name.is_empty() {
+            return Err(invalid("option name cannot be empty"));
+        }
+        if let Some(color) = color {
+            if !is_valid_option_color(color) {
+                return Err(invalid("invalid option color"));
+            }
+        }
+        with_database(self, database_id, |_, db, _| {
+            let index = existing(db, expected)?;
+            let property = &mut db.properties[index];
+            let property_id = property.id.clone();
+            let kind = property.kind;
+            if !property.config.is_object() {
+                property.config = json!({});
+            }
+            let options = property
+                .config
+                .as_object_mut()
+                .unwrap()
+                .entry("options")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| invalid("property options are invalid"))?;
+            if kind == PropertyKind::Status {
+                for entry in options.iter_mut() {
+                    if let Some(raw) = entry.as_str().map(str::to_owned) {
+                        let preserved = default_status_option_color(&raw).unwrap_or("gray");
+                        *entry = json!({"name": raw, "color": preserved});
+                    }
+                }
+            }
+            if options
+                .iter()
+                .any(|entry| option_name(entry) == Some(target_name))
+            {
+                return Ok(());
+            }
+            let chosen = color.unwrap_or_else(|| pick_unused_option_color(&property_id, options));
+            options.push(json!({"name": target_name, "color": chosen}));
+            Ok(())
+        })
+    }
+    pub fn update_property_option(
+        &mut self,
+        database_id: &str,
+        expected: &Property,
+        old_name: &str,
+        new_name: &str,
+        color: &str,
+    ) -> Result<Database> {
+        if !matches!(
+            expected.kind,
+            PropertyKind::Select | PropertyKind::MultiSelect | PropertyKind::Status
+        ) {
+            return Err(invalid("this property does not have editable options"));
+        }
+        if !is_valid_option_color(color) {
+            return Err(invalid("invalid option color"));
+        }
+        let old_name = old_name.trim();
+        let new_name = new_name.trim();
+        if old_name.is_empty() || new_name.is_empty() {
+            return Err(invalid("option name cannot be empty"));
+        }
+        let renamed = old_name != new_name;
+        with_database(self, database_id, |tx, db, owner| {
+            let index = existing(db, expected)?;
+            let property = &mut db.properties[index];
+            let kind = property.kind;
+            if !property.config.is_object() {
+                property.config = json!({});
+            }
+            let options = property
+                .config
+                .as_object_mut()
+                .unwrap()
+                .entry("options")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| invalid("property options are invalid"))?;
+            if kind == PropertyKind::Status {
+                for entry in options.iter_mut() {
+                    if let Some(raw) = entry.as_str().map(str::to_owned) {
+                        let preserved = default_status_option_color(&raw).unwrap_or("gray");
+                        *entry = json!({"name": raw, "color": preserved});
+                    }
+                }
+            }
+            let pos = options
+                .iter()
+                .position(|entry| option_name(entry) == Some(old_name))
+                .ok_or_else(|| invalid("option was not found"))?;
+            if renamed
+                && options
+                    .iter()
+                    .enumerate()
+                    .any(|(i, entry)| i != pos && option_name(entry) == Some(new_name))
+            {
+                return Err(invalid("an option with that name already exists"));
+            }
+            options[pos] = json!({"name": new_name, "color": color});
+            if !renamed {
+                return Ok(());
+            }
+            let mut after = String::new();
+            loop {
+                let batch: Vec<Record> = {
+                    let mut query = tx.prepare("SELECT data FROM records WHERE database_id=?1 AND id>?2 ORDER BY id LIMIT 256")?;
+                    let rows =
+                        query.query_map(params![database_id, after], |row| decode(row.get(0)?))?;
+                    rows.collect::<Result<Vec<_>>>()?
+                };
+                if batch.is_empty() {
+                    break;
+                }
+                for mut record in batch {
+                    after = record.id.clone();
+                    let changed = match record.values.get_mut(&expected.id) {
+                        Some(Value::String(val)) if val == old_name => {
+                            *val = new_name.to_owned();
+                            true
+                        }
+                        Some(Value::Array(items)) => {
+                            let mut hit = false;
+                            for item in items.iter_mut() {
+                                if item.as_str() == Some(old_name) {
+                                    *item = Value::String(new_name.to_owned());
+                                    hit = true;
+                                }
+                            }
+                            hit
+                        }
+                        _ => false,
+                    };
+                    if changed {
+                        update_record_values(tx, owner, &record)?;
+                    }
+                }
+            }
+            tx.execute(
+                "UPDATE databases SET data=?1 WHERE id=?2",
+                params![encode(db)?, db.id],
+            )?;
+            refresh_all_records(tx, database_id)
+        })
+    }
+    pub fn set_date_property_format(
+        &mut self,
+        database_id: &str,
+        expected: &Property,
+        format: &str,
+    ) -> Result<Database> {
+        if expected.kind != PropertyKind::Date {
+            return Err(invalid("only date properties have a date format"));
+        }
+        if !is_valid_date_format(format) {
+            return Err(invalid("invalid date format"));
+        }
+        with_database(self, database_id, |_, db, _| {
+            let index = existing(db, expected)?;
+            let property = &mut db.properties[index];
+            if !property.config.is_object() {
+                property.config = json!({});
+            }
+            property
+                .config
+                .as_object_mut()
+                .unwrap()
+                .insert("date_format".into(), json!(format));
             Ok(())
         })
     }
@@ -233,21 +745,7 @@ impl Store {
         with_database(self, database_id, |_, db, _| {
             let index = existing(db, expected)?;
             // Older formulas may not yet have stable ID bindings.
-            let schema = db.properties.clone();
-            for property in &mut db.properties {
-                if property.kind == PropertyKind::Formula
-                    && property.config.get("_bindings").is_none()
-                {
-                    if let Some(source) = property.config.get("expression").and_then(Value::as_str)
-                    {
-                        if let Ok(bindings) = crate::formula::bindings(source, &schema) {
-                            if let Some(config) = property.config.as_object_mut() {
-                                config.insert("_bindings".into(), json!(bindings));
-                            }
-                        }
-                    }
-                }
-            }
+            snapshot_formula_bindings(db);
             db.properties[index].name = property_name;
             Ok(())
         })
@@ -278,24 +776,7 @@ impl Store {
                     if record.values.remove(&expected.id).is_none() {
                         continue;
                     }
-                    let values = encode(&record.values)?;
-                    tx.execute(
-                        "UPDATE records SET values_json=?1,data=?2 WHERE id=?3",
-                        params![values, encode(&record)?, record.id],
-                    )?;
-                    if record.deleted_at.is_none() {
-                        let target = match &record.page_id {
-                            Some(id) => search::page(tx, id)?
-                                .ok_or_else(|| invalid("record page missing"))?,
-                            None => owner.clone(),
-                        };
-                        search::index(
-                            tx,
-                            &format!("record:{}", record.id),
-                            &target,
-                            &format!("{} {}", record.title, values),
-                        )?;
-                    }
+                    update_record_values(tx, owner, &record)?;
                 }
             }
             // Recalculate local formulas and downstream rollups against the new schema.
@@ -303,20 +784,7 @@ impl Store {
                 "UPDATE databases SET data=?1 WHERE id=?2",
                 params![encode(db)?, db.id],
             )?;
-            let mut after = String::new();
-            loop {
-                let ids: Vec<String> = {
-                    let mut q = tx.prepare("SELECT id FROM records WHERE database_id=?1 AND id>?2 ORDER BY id LIMIT 256")?;
-                    let rows = q.query_map(params![database_id, after], |row| row.get(0))?;
-                    rows.collect::<Result<Vec<_>>>()?
-                };
-                if ids.is_empty() {
-                    break;
-                }
-                after = ids.last().unwrap().clone();
-                crate::calculation::refresh(tx, &ids)?;
-            }
-            Ok(())
+            refresh_all_records(tx, database_id)
         })
     }
 }
@@ -496,10 +964,26 @@ mod tests {
         let db = s
             .add_select_property(&db.id, " Choice ", &[" One ".into(), "Two".into()])
             .unwrap();
-        assert_eq!(
-            db.properties.last().unwrap().config["options"],
-            json!(["One", "Two"])
+        let choice = db.properties.last().unwrap().clone();
+        let option_names: Vec<_> = choice.config["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(option_name)
+            .collect();
+        assert_eq!(option_names, vec!["One", "Two"]);
+        for entry in choice.config["options"].as_array().unwrap() {
+            let color = entry.get("color").and_then(Value::as_str).unwrap();
+            assert!(AUTO_OPTION_COLORS.contains(&color));
+        }
+        assert_ne!(
+            choice.config["options"][0]["color"],
+            choice.config["options"][1]["color"]
         );
+        let db = s
+            .set_property_option_color(&db.id, &choice, "One", "purple")
+            .unwrap();
+        assert_eq!(resolved_option_color(&db.properties[1], "One"), "purple");
         let db = s
             .rename_property(&db.id, &db.properties[0], "Task name")
             .unwrap();

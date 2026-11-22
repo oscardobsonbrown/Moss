@@ -695,23 +695,7 @@ fn card(
                         })
                         .min_w(0.)
                 });
-            if !floating
-                && !editing
-                && matches!(
-                    kind,
-                    moss_core::PropertyKind::Select
-                        | moss_core::PropertyKind::Status
-                        | moss_core::PropertyKind::Date
-                        | moss_core::PropertyKind::Text
-                        | moss_core::PropertyKind::Number
-                        | moss_core::PropertyKind::Url
-                        | moss_core::PropertyKind::Email
-                        | moss_core::PropertyKind::Phone
-                        | moss_core::PropertyKind::Checkbox
-                        | moss_core::PropertyKind::Relation
-                        | moss_core::PropertyKind::Place
-                )
-            {
+            if !floating && !editing && crate::property_controls::is_editable_property(kind) {
                 let drag_record = record.clone();
                 let drag_property = calendar_property_id.clone();
                 value_row = value_row
@@ -736,51 +720,7 @@ fn card(
                             return;
                         }
                         s.database_views.calendar.property_anchor = Some(anchor.clone());
-                        match kind {
-                            moss_core::PropertyKind::Select
-                            | moss_core::PropertyKind::Status
-                            | moss_core::PropertyKind::Date => {
-                                s.open_property_picker(&id, &property_id)
-                            }
-                            moss_core::PropertyKind::Place => {
-                                s.open_place_picker(&id, &property_id)
-                            }
-                            moss_core::PropertyKind::Relation => {
-                                s.open_relation_picker(&id, &property_id)
-                            }
-                            moss_core::PropertyKind::Checkbox => {
-                                if let Ok(Some(record)) = s.store.get_record(&id) {
-                                    let old = record
-                                        .values
-                                        .get(&property_id)
-                                        .cloned()
-                                        .unwrap_or(serde_json::Value::Null);
-                                    let checked = match old {
-                                        serde_json::Value::Null
-                                        | serde_json::Value::Bool(false) => false,
-                                        serde_json::Value::Bool(true) => true,
-                                        _ => {
-                                            s.error =
-                                                Some("This checkbox value is not valid.".into());
-                                            return;
-                                        }
-                                    };
-                                    match s.store.set_record_value_if_unchanged(
-                                        &id,
-                                        &property_id,
-                                        &old,
-                                        serde_json::Value::Bool(!checked),
-                                    ) {
-                                        Ok(record) => {
-                                            s.sync_record(&record);
-                                            s.database_views.calendar.invalidate();
-                                        }
-                                        Err(error) => s.error = Some(error.to_string()),
-                                    }
-                                }
-                            }
-                            _ => s.edit_record_property(&id, Some(property_id.clone())),
-                        }
+                        s.open_property_editor(&id, &property_id);
                         tx.instant();
                     });
             }

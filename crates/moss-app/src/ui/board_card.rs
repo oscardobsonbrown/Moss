@@ -336,22 +336,7 @@ fn card(
         let id = record.id.clone();
         let property = prop.id.clone();
         let kind = prop.kind;
-        if !editing
-            && matches!(
-                kind,
-                PropertyKind::Select
-                    | PropertyKind::Status
-                    | PropertyKind::Date
-                    | PropertyKind::Text
-                    | PropertyKind::Number
-                    | PropertyKind::Url
-                    | PropertyKind::Email
-                    | PropertyKind::Phone
-                    | PropertyKind::Checkbox
-                    | PropertyKind::Relation
-                    | PropertyKind::Place
-            )
-        {
+        if !editing && crate::property_controls::is_editable_property(kind) {
             let drag_record = record.clone();
             let group = p.group_property.clone();
             let subgroup = p.subgroup_property.clone();
@@ -376,34 +361,7 @@ fn card(
                         tx.instant();
                         return;
                     }
-                    if matches!(
-                        kind,
-                        PropertyKind::Select | PropertyKind::Status | PropertyKind::Date
-                    ) {
-                        s.open_property_picker(&id, &property);
-                    } else if kind == PropertyKind::Place {
-                        s.open_place_picker(&id, &property);
-                    } else if kind == PropertyKind::Relation {
-                        s.open_relation_picker(&id, &property);
-                    } else if kind == PropertyKind::Checkbox {
-                        if let Ok(Some(record)) = s.store.get_record(&id) {
-                            let old = record.values.get(&property).cloned().unwrap_or(Value::Null);
-                            match s.store.set_record_value_if_unchanged(
-                                &id,
-                                &property,
-                                &old,
-                                Value::Bool(!old.as_bool().unwrap_or(false)),
-                            ) {
-                                Ok(record) => {
-                                    s.sync_record(&record);
-                                    s.database_views.board.invalidate();
-                                }
-                                Err(e) => s.error = Some(e.to_string()),
-                            }
-                        }
-                    } else {
-                        s.edit_record_property(&id, Some(property.clone()));
-                    }
+                    s.open_property_editor(&id, &property);
                     tx.instant();
                 });
         }

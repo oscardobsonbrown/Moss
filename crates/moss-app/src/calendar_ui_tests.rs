@@ -191,7 +191,7 @@ fn calendar_cards_align_properties_and_show_linked_pages() {
         &mut rt,
         &format!("calendar-value-{}-{}-2026-11-10", source.id, relation.id),
     );
-    assert!(rt.state.advanced_property.relation_picker.is_some());
+    assert!(rt.state.relation_picker().is_some());
     assert!(rt.state.record_peek.is_none());
     let related = rt
         .state
@@ -1334,7 +1334,7 @@ fn monday_preference_changes_calendar_and_date_picker_and_persists() {
         .id
         .clone();
     rt.state.open_property_picker(&id, &date);
-    rt.state.property_picker.as_mut().unwrap().month =
+    rt.state.property_picker_mut().unwrap().month =
         chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
     rt.invalidate();
     rt.frame(0.3);
@@ -1376,7 +1376,7 @@ fn any_weekday_can_start_the_week_and_persists() {
     let date_property = rt.state.tab().unwrap().database.as_ref().unwrap().properties.iter()
         .find(|p| p.kind == PropertyKind::Date).unwrap().id.clone();
     rt.state.open_property_picker(&record, &date_property);
-    rt.state.property_picker.as_mut().unwrap().month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+    rt.state.property_picker_mut().unwrap().month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
     rt.invalidate();
     rt.frame(0.3);
     assert!(rect(&rt, "date-2026-10-28")[0] < rect(&rt, "date-2026-11-01")[0]);

@@ -4,6 +4,114 @@ use moss_core::PropertyKind;
 use rune::TextEdit;
 use serde_json::{Value, json};
 
+pub fn is_editable_property(kind: PropertyKind) -> bool {
+    matches!(
+        kind,
+        PropertyKind::Select
+            | PropertyKind::MultiSelect
+            | PropertyKind::Status
+            | PropertyKind::Date
+            | PropertyKind::Text
+            | PropertyKind::Number
+            | PropertyKind::Url
+            | PropertyKind::Email
+            | PropertyKind::Phone
+            | PropertyKind::Checkbox
+            | PropertyKind::Relation
+            | PropertyKind::Place
+    )
+}
+
+pub fn is_popup_picker_kind(kind: PropertyKind) -> bool {
+    matches!(
+        kind,
+        PropertyKind::Date
+            | PropertyKind::Status
+            | PropertyKind::Select
+            | PropertyKind::MultiSelect
+    )
+}
+
+pub enum CellPicker {
+    Property(PropertyPicker),
+    Relation(crate::advanced_properties::RelationPicker),
+    Place(crate::place_property::PlacePicker),
+}
+
+impl CellPicker {
+    pub fn record_id(&self) -> &str {
+        match self {
+            Self::Property(p) => &p.record_id,
+            Self::Relation(p) => &p.record_id,
+            Self::Place(p) => &p.record_id,
+        }
+    }
+
+    pub fn is_relation(&self) -> bool {
+        matches!(self, Self::Relation(_))
+    }
+
+    pub fn is_place(&self) -> bool {
+        matches!(self, Self::Place(_))
+    }
+
+    pub fn as_property(&self) -> Option<&PropertyPicker> {
+        match self {
+            Self::Property(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_property_mut(&mut self) -> Option<&mut PropertyPicker> {
+        match self {
+            Self::Property(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_relation(&self) -> Option<&crate::advanced_properties::RelationPicker> {
+        match self {
+            Self::Relation(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_relation_mut(&mut self) -> Option<&mut crate::advanced_properties::RelationPicker> {
+        match self {
+            Self::Relation(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_place(&self) -> Option<&crate::place_property::PlacePicker> {
+        match self {
+            Self::Place(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_place_mut(&mut self) -> Option<&mut crate::place_property::PlacePicker> {
+        match self {
+            Self::Place(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn save_failed(&self) -> bool {
+        match self {
+            Self::Property(p) => p.save_failed,
+            Self::Relation(p) => p.save_failed,
+            Self::Place(_) => false,
+        }
+    }
+}
+
+pub struct OptionEditor {
+    pub original_name: String,
+    pub name_input: TextEdit,
+    pub color: String,
+}
+
 pub struct PropertyPicker {
     pub record_id: String,
     pub property_id: String,
@@ -12,7 +120,11 @@ pub struct PropertyPicker {
     pub selected: Option<usize>,
     pub error: Option<String>,
     pub save_failed: bool,
+    pub input: TextEdit,
     pub date: Option<DateDraft>,
+    pub date_format_pane: bool,
+    pub option_editor: Option<OptionEditor>,
+    pub multi_selected: Vec<String>,
 }
 
 pub struct DateDraft {
@@ -22,6 +134,9 @@ pub struct DateDraft {
     pub has_end: bool,
     pub has_time: bool,
     pending_clear: bool,
+    pub end_input: TextEdit,
+    pub start_time_input: TextEdit,
+    pub end_time_input: TextEdit,
 }
 
 fn endpoint(value: &str) -> Option<(NaiveDate, Option<String>, String)> {
@@ -62,20 +177,170 @@ fn timed_endpoint(value: &str) -> Option<(NaiveDateTime, Option<i32>)> {
 }
 
 impl State {
+    pub fn property_picker(&self) -> Option<&PropertyPicker> {
+        self.cell_picker.as_ref().and_then(CellPicker::as_property)
+    }
+
+    pub fn property_picker_mut(&mut self) -> Option<&mut PropertyPicker> {
+        self.cell_picker
+            .as_mut()
+            .and_then(CellPicker::as_property_mut)
+    }
+
+    pub fn relation_picker(&self) -> Option<&crate::advanced_properties::RelationPicker> {
+        self.cell_picker.as_ref().and_then(CellPicker::as_relation)
+    }
+
+    pub fn relation_picker_mut(
+        &mut self,
+    ) -> Option<&mut crate::advanced_properties::RelationPicker> {
+        self.cell_picker
+            .as_mut()
+            .and_then(CellPicker::as_relation_mut)
+    }
+
+    pub fn place_picker(&self) -> Option<&crate::place_property::PlacePicker> {
+        self.cell_picker.as_ref().and_then(CellPicker::as_place)
+    }
+
+    pub fn place_picker_mut(&mut self) -> Option<&mut crate::place_property::PlacePicker> {
+        self.cell_picker.as_mut().and_then(CellPicker::as_place_mut)
+    }
+
+    pub fn dismiss_cell_picker(&mut self) {
+        if let Some(CellPicker::Property(picker)) = self.cell_picker.as_mut() {
+            if picker.save_failed {
+                picker.input.focused = true;
+                return;
+            }
+        }
+        if let Some(CellPicker::Relation(picker)) = self.cell_picker.as_ref() {
+            if picker.save_failed {
+                return;
+            }
+        }
+        match self.cell_picker.take() {
+            Some(CellPicker::Property(_)) => {
+                self.editing_cell = None;
+                self.cell.focused = false;
+            }
+            Some(CellPicker::Place(_)) => {
+                let map = &mut self.database_views.map;
+                map.search_changed();
+                map.place_query.focused = false;
+            }
+            Some(CellPicker::Relation(_)) | None => {}
+        }
+    }
+
+    pub fn property_anchor(
+        &self,
+        record_id: &str,
+        property_id: &str,
+        kind: PropertyKind,
+    ) -> Option<String> {
+        if self
+            .record_peek
+            .as_ref()
+            .is_some_and(|p| p.record.id == record_id)
+        {
+            return Some(format!("peek-property-{property_id}"));
+        }
+        if self
+            .tab()
+            .and_then(|tab| tab.record_context.as_ref())
+            .is_some_and(|(_, record)| record.id == record_id)
+        {
+            return Some(if kind == PropertyKind::Place {
+                format!("page-place-{property_id}")
+            } else {
+                format!("page-property-{property_id}")
+            });
+        }
+        let view_kind = self
+            .tab()
+            .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
+            .map(|view| view.kind);
+        match view_kind {
+            Some(moss_core::ViewKind::Calendar) => {
+                self.database_views.calendar.property_anchor.clone()
+            }
+            Some(moss_core::ViewKind::Board) => {
+                if kind == PropertyKind::Place {
+                    let empty = self
+                        .store
+                        .get_record(record_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|r| r.values.get(property_id).cloned())
+                        .is_none_or(|v| v.is_null() || v.as_str().is_some_and(str::is_empty));
+                    if empty {
+                        return Some(format!("board-card-{record_id}"));
+                    }
+                }
+                Some(format!("board-value-{record_id}-{property_id}"))
+            }
+            _ => {
+                let index = self
+                    .tab()?
+                    .records
+                    .iter()
+                    .position(|r| r.id == record_id)?;
+                Some(match view_kind {
+                    Some(moss_core::ViewKind::Gallery) => {
+                        format!("gallery-value-{index}-{property_id}")
+                    }
+                    Some(moss_core::ViewKind::List) => {
+                        format!("list-value-{index}-{property_id}")
+                    }
+                    _ => format!("cell-{index}-{property_id}"),
+                })
+            }
+        }
+    }
+
+    pub fn open_property_editor(&mut self, record_id: &str, property_id: &str) -> Option<PropertyKind> {
+        let kind = self
+            .record_database(record_id)
+            .and_then(|db| db.properties.iter().find(|p| p.id == property_id))
+            .map(|p| p.kind)?;
+        match kind {
+            PropertyKind::Checkbox => self.toggle_table_checkbox(record_id, property_id),
+            PropertyKind::Place => self.open_place_picker(record_id, property_id),
+            PropertyKind::Relation => self.open_relation_picker(record_id, property_id),
+            PropertyKind::Formula | PropertyKind::Rollup => {}
+            PropertyKind::Date
+            | PropertyKind::Status
+            | PropertyKind::Select
+            | PropertyKind::MultiSelect => self.open_property_picker(record_id, property_id),
+            _ => {
+                self.dismiss_cell_picker();
+                self.edit_record_property(record_id, Some(property_id.to_owned()));
+            }
+        }
+        Some(kind)
+    }
+
     pub fn open_property_picker(&mut self, record_id: &str, property_id: &str) {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() {
             return;
         }
         let kind = self
             .record_database(record_id)
             .and_then(|d| d.properties.iter().find(|p| p.id == property_id))
             .map(|p| p.kind);
-        let Some(kind @ (PropertyKind::Date | PropertyKind::Status | PropertyKind::Select)) = kind
+        let Some(
+            kind @ (PropertyKind::Date
+            | PropertyKind::Status
+            | PropertyKind::Select
+            | PropertyKind::MultiSelect),
+        ) = kind
         else {
             return;
         };
         let mut date_draft = None;
+        let mut multi_selected = Vec::new();
         let display;
         let month;
         if kind == PropertyKind::Date {
@@ -177,31 +442,76 @@ impl State {
                 save_failed: false,
                 repeat_values: None,
             });
-            self.date_end_input = TextEdit::new(
-                &end.as_ref()
-                    .map(|(d, _, _)| d.format("%d/%m/%Y").to_string())
-                    .unwrap_or_default(),
-            );
-            self.date_start_time_input = TextEdit::new(
-                start
-                    .as_ref()
-                    .and_then(|(_, t, _)| t.as_deref())
-                    .unwrap_or(""),
-            );
-            self.date_end_time_input = TextEdit::new(
-                end.as_ref()
-                    .and_then(|(_, t, _)| t.as_deref())
-                    .unwrap_or(""),
-            );
             date_draft = Some(DateDraft {
                 original,
-                start_suffix: start.map(|(_, _, s)| s).unwrap_or_default(),
+                start_suffix: start.as_ref().map(|(_, _, s)| s.clone()).unwrap_or_default(),
                 end_suffix: end.as_ref().map(|(_, _, s)| s.clone()).unwrap_or_default(),
                 has_end: end.is_some(),
                 has_time,
                 pending_clear: false,
+                end_input: TextEdit::new(
+                    &end.as_ref()
+                        .map(|(d, _, _)| d.format("%d/%m/%Y").to_string())
+                        .unwrap_or_default(),
+                ),
+                start_time_input: TextEdit::new(
+                    start
+                        .as_ref()
+                        .and_then(|(_, t, _)| t.as_deref())
+                        .unwrap_or(""),
+                ),
+                end_time_input: TextEdit::new(
+                    end.as_ref()
+                        .and_then(|(_, t, _)| t.as_deref())
+                        .unwrap_or(""),
+                ),
             });
             self.error = None;
+        } else if kind == PropertyKind::MultiSelect {
+            if !self.finish_cell(false) {
+                return;
+            }
+            let record = match self.store.get_record(record_id) {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    self.error = Some("Record was not found.".into());
+                    return;
+                }
+                Err(e) => {
+                    self.error = Some(e.to_string());
+                    return;
+                }
+            };
+            let original = record
+                .values
+                .get(property_id)
+                .cloned()
+                .unwrap_or(Value::Null);
+            multi_selected = match &original {
+                Value::Null => Vec::new(),
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                Value::String(s) if !s.trim().is_empty() => vec![s.trim().to_owned()],
+                _ => {
+                    self.error = Some("This value needs a different editor.".into());
+                    return;
+                }
+            };
+            self.editing_cell = Some(CellTarget {
+                record_id: record_id.into(),
+                property_id: Some(property_id.into()),
+                expected_value: original,
+                save_failed: false,
+                repeat_values: None,
+            });
+            self.error = None;
+            month = chrono::Local::now().date_naive().with_day(1).unwrap();
+            display = String::new();
         } else {
             self.edit_record_property(record_id, Some(property_id.to_owned()));
             if !self.editing_cell.as_ref().is_some_and(|c| {
@@ -217,8 +527,7 @@ impl State {
         if kind == PropertyKind::Date {
             input.set_selection(0, display.len());
         }
-        self.property_picker_input = input;
-        self.property_picker = Some(PropertyPicker {
+        self.cell_picker = Some(CellPicker::Property(PropertyPicker {
             record_id: record_id.into(),
             property_id: property_id.into(),
             kind,
@@ -226,81 +535,77 @@ impl State {
             selected: None,
             error: None,
             save_failed: false,
+            input,
             date: date_draft,
-        });
-    }
-    pub fn dismiss_property_picker(&mut self) {
-        self.dismiss_place_picker();
-        if self.property_picker.as_ref().is_some_and(|p| p.save_failed) {
-            self.property_picker_input.focused = true;
-            return;
-        }
-        if self.property_picker.take().is_some() {
-            self.property_picker_input.focused = false;
-            self.editing_cell = None;
-            self.cell.focused = false;
-        }
+            date_format_pane: false,
+            option_editor: None,
+            multi_selected,
+        }));
     }
     pub fn discard_failed_property_change(&mut self) {
         let Some(record_id) = self
-            .property_picker
-            .as_ref()
+            .property_picker()
             .map(|picker| picker.record_id.clone())
         else {
             return;
         };
         if !self.reload_record_for_discard(&record_id) {
-            if let Some(picker) = &mut self.property_picker {
-                picker.error = self.error.clone();
+            let error = self.error.clone();
+            if let Some(picker) = self.property_picker_mut() {
+                picker.error = error;
+                picker.input.focused = true;
             }
-            self.property_picker_input.focused = true;
             return;
         }
-        if let Some(picker) = &mut self.property_picker {
+        if let Some(picker) = self.property_picker_mut() {
             picker.save_failed = false;
         }
-        self.dismiss_property_picker();
+        self.dismiss_cell_picker();
     }
     pub fn retry_property_change(&mut self) {
-        if let Some(date) = self.property_picker.as_ref().and_then(|p| p.date.as_ref()) {
+        if let Some(date) = self.property_picker().and_then(|p| p.date.as_ref()) {
             if date.pending_clear {
                 self.clear_date_picker();
             } else {
                 self.submit_date_picker();
             }
+        } else if self
+            .property_picker()
+            .is_some_and(|p| p.kind == PropertyKind::MultiSelect)
+        {
+            let selected = self
+                .property_picker()
+                .map(|p| p.multi_selected.clone())
+                .unwrap_or_default();
+            self.save_multi_select_values(selected);
         } else {
             let draft = self.cell.text.clone();
             self.choose_property_value(&draft);
         }
     }
     pub fn date_draft_changed(&mut self) {
-        if let Some(draft) = self.property_picker.as_mut().and_then(|p| p.date.as_mut()) {
+        if let Some(draft) = self.property_picker_mut().and_then(|p| p.date.as_mut()) {
             draft.pending_clear = false;
         }
     }
     pub fn property_options(&self) -> Vec<String> {
-        let Some(picker) = &self.property_picker else {
+        let Some(picker) = self.property_picker() else {
             return vec![];
         };
-        let query = self.property_picker_input.text.to_lowercase();
+        let query = picker.input.text.to_lowercase();
         self.record_database(&picker.record_id)
             .and_then(|d| d.properties.iter().find(|p| p.id == picker.property_id))
-            .and_then(|p| p.config.get("options"))
-            .and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| {
-                        v.as_str()
-                            .or_else(|| v.get("name").and_then(|n| n.as_str()))
-                    })
-                    .filter(|s| s.to_lowercase().contains(&query))
-                    .map(str::to_owned)
+            .map(|p| {
+                moss_core::property_options(p)
+                    .into_iter()
+                    .map(|opt| opt.name)
+                    .filter(|name| name.to_lowercase().contains(&query))
                     .collect()
             })
             .unwrap_or_default()
     }
     pub fn choose_property_value(&mut self, value: &str) -> bool {
-        let Some(picker) = &self.property_picker else {
+        let Some(picker) = self.property_picker() else {
             return false;
         };
         if !self.editing_cell.as_ref().is_some_and(|target| {
@@ -310,35 +615,36 @@ impl State {
             let message =
                 "The property editor lost its target. Discard this change and open it again.";
             self.error = Some(message.into());
-            let picker = self.property_picker.as_mut().unwrap();
+            let picker = self.property_picker_mut().unwrap();
             picker.error = Some(message.into());
             picker.save_failed = true;
             return false;
         }
         self.cell.replace_text(value);
         if self.save_cell() {
-            if let Some(picker) = &mut self.property_picker {
+            if let Some(picker) = self.property_picker_mut() {
                 picker.save_failed = false;
             }
-            self.dismiss_property_picker();
+            self.dismiss_cell_picker();
             true
         } else {
-            if let Some(picker) = &mut self.property_picker {
+            let error = self.error.clone();
+            if let Some(picker) = self.property_picker_mut() {
                 picker.save_failed = true;
-                picker.error = self.error.clone();
-                self.property_picker_input.focused = true;
+                picker.error = error;
+                picker.input.focused = true;
             }
             false
         }
     }
     pub fn toggle_date_end(&mut self) {
-        if let Some(draft) = self.property_picker.as_mut().and_then(|p| p.date.as_mut()) {
+        if let Some(draft) = self.property_picker_mut().and_then(|p| p.date.as_mut()) {
             draft.has_end = !draft.has_end;
             draft.pending_clear = false;
         }
     }
     pub fn toggle_date_time(&mut self) {
-        let Some(draft) = self.property_picker.as_mut().and_then(|p| p.date.as_mut()) else {
+        let Some(draft) = self.property_picker_mut().and_then(|p| p.date.as_mut()) else {
             return;
         };
         if draft.has_time
@@ -346,7 +652,7 @@ impl State {
                 .iter()
                 .any(|suffix| suffix.contains(['Z', 'z', '+', '-']))
         {
-            self.property_picker.as_mut().unwrap().error = Some(
+            self.property_picker_mut().unwrap().error = Some(
                 "The existing time zone must be preserved. Clear the date to remove it.".into(),
             );
             return;
@@ -356,12 +662,14 @@ impl State {
     }
     pub fn choose_calendar_date(&mut self, date: NaiveDate) {
         self.date_draft_changed();
-        self.property_picker_input
-            .replace_text(&date.format("%d/%m/%Y").to_string());
+        if let Some(picker) = self.property_picker_mut() {
+            picker
+                .input
+                .replace_text(&date.format("%d/%m/%Y").to_string());
+        }
         self.cell.replace_text(&date.to_string());
         let extended = self
-            .property_picker
-            .as_ref()
+            .property_picker()
             .and_then(|p| p.date.as_ref())
             .is_some_and(|d| d.has_end || d.has_time);
         if !extended {
@@ -372,10 +680,13 @@ impl State {
         self.save_date_value(Value::Null, true);
     }
     fn submit_date_picker(&mut self) {
-        let Some(draft) = self.property_picker.as_ref().and_then(|p| p.date.as_ref()) else {
+        let Some(picker) = self.property_picker() else {
             return;
         };
-        let start_text = self.property_picker_input.text.trim();
+        let Some(draft) = picker.date.as_ref() else {
+            return;
+        };
+        let start_text = picker.input.text.trim();
         if start_text.is_empty() && !draft.has_end && !draft.has_time {
             self.save_date_value(Value::Null, false);
             return;
@@ -385,7 +696,7 @@ impl State {
             return;
         };
         let end = if draft.has_end {
-            let Some(end) = parse_date(&self.date_end_input.text) else {
+            let Some(end) = parse_date(&draft.end_input.text) else {
                 self.date_error("Enter a valid end date (DD/MM/YYYY).");
                 return;
             };
@@ -398,15 +709,14 @@ impl State {
             None
         };
         let (start_time, end_time) = if draft.has_time {
-            let Ok(start_time) =
-                NaiveTime::parse_from_str(self.date_start_time_input.text.trim(), "%H:%M")
+            let Ok(start_time) = NaiveTime::parse_from_str(draft.start_time_input.text.trim(), "%H:%M")
             else {
                 self.date_error("Enter a valid start time (HH:MM).");
                 return;
             };
             let end_time = if end.is_some() {
                 let Ok(end_time) =
-                    NaiveTime::parse_from_str(self.date_end_time_input.text.trim(), "%H:%M")
+                    NaiveTime::parse_from_str(draft.end_time_input.text.trim(), "%H:%M")
                 else {
                     self.date_error("Enter a valid end time (HH:MM).");
                     return;
@@ -466,12 +776,12 @@ impl State {
         self.save_date_value(value, false);
     }
     fn date_error(&mut self, message: &str) {
-        if let Some(picker) = &mut self.property_picker {
+        if let Some(picker) = self.property_picker_mut() {
             picker.error = Some(message.into());
         }
     }
     fn save_date_value(&mut self, value: Value, clear: bool) -> bool {
-        let Some(picker) = &self.property_picker else {
+        let Some(picker) = self.property_picker() else {
             return false;
         };
         let Some(draft) = &picker.date else {
@@ -488,7 +798,7 @@ impl State {
             self.date_error(
                 "The property editor lost its target. Discard this change and open it again.",
             );
-            self.property_picker.as_mut().unwrap().save_failed = true;
+            self.property_picker_mut().unwrap().save_failed = true;
             return false;
         }
         let result = self
@@ -499,36 +809,336 @@ impl State {
             Ok(record) => {
                 self.sync_record(&record);
                 self.error = None;
-                self.property_picker.as_mut().unwrap().save_failed = false;
-                self.dismiss_property_picker();
+                self.property_picker_mut().unwrap().save_failed = false;
+                self.dismiss_cell_picker();
                 true
             }
             Err(error) => {
                 self.error = Some(format!("Changes are not saved: {error}"));
-                let picker = self.property_picker.as_mut().unwrap();
-                picker.error = self.error.clone();
+                let message = self.error.clone();
+                let picker = self.property_picker_mut().unwrap();
+                picker.error = message;
                 picker.save_failed = true;
                 picker.date.as_mut().unwrap().pending_clear = clear;
-                self.property_picker_input.focused = true;
+                picker.input.focused = true;
                 false
             }
         }
     }
+    pub fn toggle_multi_select_value(&mut self, value: &str) -> bool {
+        let Some(picker) = self.property_picker() else {
+            return false;
+        };
+        if picker.kind != PropertyKind::MultiSelect {
+            return false;
+        }
+        let mut next = picker.multi_selected.clone();
+        if let Some(pos) = next.iter().position(|item| item == value) {
+            next.remove(pos);
+        } else {
+            next.push(value.to_owned());
+        }
+        self.save_multi_select_values(next)
+    }
+    fn save_multi_select_values(&mut self, next: Vec<String>) -> bool {
+        let Some(picker) = self.property_picker() else {
+            return false;
+        };
+        let (record_id, property_id) = (picker.record_id.clone(), picker.property_id.clone());
+        let expected = match self.editing_cell.as_ref() {
+            Some(target)
+                if target.record_id == record_id
+                    && target.property_id.as_deref() == Some(property_id.as_str()) =>
+            {
+                target.expected_value.clone()
+            }
+            _ => {
+                let message =
+                    "The property editor lost its target. Discard this change and open it again.";
+                self.error = Some(message.into());
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.error = Some(message.into());
+                    picker.save_failed = true;
+                }
+                return false;
+            }
+        };
+        let value = if next.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(next.iter().cloned().map(Value::String).collect())
+        };
+        match self
+            .store
+            .set_record_value_if_unchanged(&record_id, &property_id, &expected, value)
+        {
+            Ok(record) => {
+                let saved = record
+                    .values
+                    .get(&property_id)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                self.sync_record(&record);
+                self.error = None;
+                if let Some(target) = &mut self.editing_cell {
+                    target.expected_value = saved;
+                    target.save_failed = false;
+                }
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.multi_selected = next;
+                    picker.save_failed = false;
+                    picker.error = None;
+                }
+                true
+            }
+            Err(error) => {
+                self.error = Some(format!("Changes are not saved: {error}"));
+                let message = self.error.clone();
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.multi_selected = next;
+                    picker.save_failed = true;
+                    picker.error = message;
+                    picker.input.focused = true;
+                }
+                false
+            }
+        }
+    }
+    pub fn open_picker_option_editor(&mut self, original_name: &str) {
+        let Some(picker) = self.property_picker() else {
+            return;
+        };
+        let (record_id, property_id) = (picker.record_id.clone(), picker.property_id.clone());
+        let Some(property) = self
+            .record_database(&record_id)
+            .and_then(|db| db.properties.iter().find(|p| p.id == property_id))
+            .cloned()
+        else {
+            return;
+        };
+        let initial_color = moss_core::resolved_option_color(&property, original_name).to_owned();
+        let mut name_input = TextEdit::new(original_name);
+        name_input.focused = true;
+        if let Some(picker) = self.property_picker_mut() {
+            picker.input.focused = false;
+            picker.option_editor = Some(OptionEditor {
+                original_name: original_name.to_owned(),
+                name_input,
+                color: initial_color,
+            });
+            picker.error = None;
+        }
+    }
+    pub fn save_picker_option_editor(&mut self, color_override: Option<&str>) -> bool {
+        let Some(picker) = self.property_picker() else {
+            return false;
+        };
+        let Some(editor) = &picker.option_editor else {
+            return false;
+        };
+        let (record_id, property_id) = (picker.record_id.clone(), picker.property_id.clone());
+        let old_name = editor.original_name.clone();
+        let new_name = editor.name_input.text.trim().to_owned();
+        let color = color_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| editor.color.clone());
+        if new_name.is_empty() {
+            if let Some(picker) = self.property_picker_mut() {
+                picker.error = Some("Enter an option name.".into());
+            }
+            return false;
+        }
+        let Some((database_id, property)) = self.record_database(&record_id).and_then(|db| {
+            db.properties
+                .iter()
+                .find(|p| p.id == property_id)
+                .cloned()
+                .map(|p| (db.id.clone(), p))
+        }) else {
+            return false;
+        };
+        match self.store.update_property_option(
+            &database_id,
+            &property,
+            &old_name,
+            &new_name,
+            &color,
+        ) {
+            Ok(database) => {
+                self.sync_database_schema(&database);
+                if old_name != new_name {
+                    if self.cell.text == old_name {
+                        self.cell.replace_text(&new_name);
+                    }
+                    if let Some(target) = &mut self.editing_cell {
+                        if target.expected_value.as_str() == Some(old_name.as_str()) {
+                            target.expected_value = Value::String(new_name.clone());
+                        } else if let Some(items) = target.expected_value.as_array_mut() {
+                            for item in items.iter_mut() {
+                                if item.as_str() == Some(old_name.as_str()) {
+                                    *item = Value::String(new_name.clone());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(picker) = self.property_picker_mut() {
+                        for item in &mut picker.multi_selected {
+                            if item == &old_name {
+                                *item = new_name.clone();
+                            }
+                        }
+                    }
+                    if let Ok(Some(fresh)) = self.store.get_record(&record_id) {
+                        self.sync_record(&fresh);
+                    }
+                }
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.option_editor = None;
+                    picker.input.focused = true;
+                    picker.error = None;
+                }
+                true
+            }
+            Err(error) => {
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.error = Some(format!("Option is not saved: {error}"));
+                }
+                false
+            }
+        }
+    }
+    pub fn set_picker_date_format(&mut self, format: &str) -> bool {
+        let Some(picker) = self.property_picker() else {
+            return false;
+        };
+        let (record_id, property_id) = (picker.record_id.clone(), picker.property_id.clone());
+        let Some((database_id, property)) = self.record_database(&record_id).and_then(|db| {
+            db.properties
+                .iter()
+                .find(|p| p.id == property_id)
+                .cloned()
+                .map(|p| (db.id.clone(), p))
+        }) else {
+            return false;
+        };
+        match self
+            .store
+            .set_date_property_format(&database_id, &property, format)
+        {
+            Ok(database) => {
+                self.sync_database_schema(&database);
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.date_format_pane = false;
+                    picker.error = None;
+                }
+                true
+            }
+            Err(error) => {
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.error = Some(format!("Date format is not saved: {error}"));
+                }
+                false
+            }
+        }
+    }
+    pub fn create_and_choose_option(&mut self, name: &str) -> bool {
+        let trimmed = name.trim().to_owned();
+        if trimmed.is_empty() {
+            return false;
+        }
+        let Some(picker) = self.property_picker() else {
+            return false;
+        };
+        let (record_id, property_id, kind) = (
+            picker.record_id.clone(),
+            picker.property_id.clone(),
+            picker.kind,
+        );
+        let Some((database_id, property)) = self.record_database(&record_id).and_then(|db| {
+            db.properties
+                .iter()
+                .find(|p| p.id == property_id)
+                .cloned()
+                .map(|p| (db.id.clone(), p))
+        }) else {
+            return false;
+        };
+        match self
+            .store
+            .add_property_option(&database_id, &property, &trimmed, None)
+        {
+            Ok(database) => {
+                self.sync_database_schema(&database);
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.input.replace_text("");
+                }
+                if kind == PropertyKind::MultiSelect {
+                    self.toggle_multi_select_value(&trimmed)
+                } else {
+                    self.choose_property_value(&trimmed)
+                }
+            }
+            Err(error) => {
+                if let Some(picker) = self.property_picker_mut() {
+                    picker.error = Some(format!("Option is not saved: {error}"));
+                }
+                false
+            }
+        }
+    }
+    pub(crate) fn sync_database_schema(&mut self, database: &moss_core::Database) {
+        for tab in &mut self.tabs {
+            if tab
+                .database
+                .as_ref()
+                .is_some_and(|db| db.id == database.id)
+            {
+                tab.database = Some(database.clone());
+            }
+            if let Some((db, _)) = &mut tab.record_context {
+                if db.id == database.id {
+                    *db = database.clone();
+                }
+            }
+        }
+        if let Some(peek) = self
+            .record_peek
+            .as_mut()
+            .filter(|p| p.database.id == database.id)
+        {
+            peek.database = database.clone();
+        }
+    }
     pub fn submit_property_picker(&mut self) {
-        let Some(picker) = &self.property_picker else {
+        let Some(picker) = self.property_picker() else {
             return;
         };
         if picker.kind == PropertyKind::Date {
             self.submit_date_picker();
         } else {
+            let kind = picker.kind;
             let selected = picker.selected.unwrap_or(0);
-            let next = (picker.kind == PropertyKind::Status && self.record_peek.is_none())
+            let next = (kind == PropertyKind::Status && self.record_peek.is_none())
                 .then(|| (picker.record_id.clone(), picker.property_id.clone()));
-            if let Some(value) = self.property_options().get(selected).cloned() {
-                if self.choose_property_value(&value) {
+            let options = self.property_options();
+            if let Some(value) = options.get(selected).cloned() {
+                if kind == PropertyKind::MultiSelect {
+                    self.toggle_multi_select_value(&value);
+                } else if self.choose_property_value(&value) {
                     if let Some((record_id, property_id)) = next {
                         self.select_next_table_row(&record_id, &property_id);
                     }
+                }
+            } else if matches!(
+                kind,
+                PropertyKind::Select | PropertyKind::MultiSelect | PropertyKind::Status
+            ) {
+                let typed = self
+                    .property_picker()
+                    .map(|p| p.input.text.trim().to_owned())
+                    .unwrap_or_default();
+                if !typed.is_empty() {
+                    self.create_and_choose_option(&typed);
                 }
             }
         }

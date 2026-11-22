@@ -23,6 +23,13 @@ mod page_icons;
 mod page_titles;
 mod previews;
 mod properties;
+mod property_type_change;
+pub use properties::{
+    AUTO_OPTION_COLORS, DATE_FORMATS, OPTION_COLORS, PropertyOption, auto_option_color,
+    default_status_option_color, is_valid_date_format, is_valid_option_color, option_name,
+    property_options, resolved_option_color,
+};
+pub use property_type_change::{is_type_change_lossy, property_type_convertible};
 mod record_icons;
 mod record_pages;
 mod record_paging;

@@ -157,8 +157,8 @@ impl State {
         }
     }
     pub fn select_database_view(&mut self, view: usize) -> bool {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() || !self.finish_cell(false) || !self.close_peek() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() || !self.finish_cell(false) || !self.close_peek() {
             return false;
         }
         if self
@@ -205,7 +205,7 @@ impl State {
         self.gallery_settings_open = false;
         self.database_property_editor = None;
         self.database_new_open = false;
-        self.property_visibility_open = false;
+        self.property_visibility = None;
         self.undated_open = false;
         self.undated_search = TextEdit::new("");
         self.save_preferences();
@@ -598,9 +598,7 @@ impl State {
             != Some(ViewKind::Table)
             || self.modal.is_some()
             || self.record_peek.is_some()
-            || self.property_picker.is_some()
-            || self.place_picker.is_some()
-            || self.advanced_property.relation_picker.is_some()
+            || self.cell_picker.is_some()
             || self.editing_cell.is_some()
         {
             return false;
@@ -619,38 +617,17 @@ impl State {
             }
             rune::Key::Enter => {
                 self.selected_cell = None;
-                let kind = property
-                    .as_deref()
-                    .and_then(|id| {
-                        self.tab()?
-                            .database
-                            .as_ref()?
-                            .properties
-                            .iter()
-                            .find(|p| p.id == id)
-                    })
-                    .map(|p| p.kind);
-                if kind == Some(PropertyKind::Checkbox) {
-                    self.toggle_table_checkbox(&record_id, property.as_deref().unwrap());
-                } else if kind == Some(PropertyKind::Relation) {
-                    self.open_relation_picker(&record_id, property.as_deref().unwrap());
-                } else if kind == Some(PropertyKind::Place) {
-                    self.open_place_picker(&record_id, property.as_deref().unwrap());
-                } else if matches!(kind, Some(PropertyKind::Formula | PropertyKind::Rollup)) {
-                    self.selected_cell = Some((record_id, property));
-                    return true;
-                } else if matches!(
-                    kind,
-                    Some(PropertyKind::Date | PropertyKind::Status | PropertyKind::Select)
-                ) {
-                    self.open_property_picker(&record_id, property.as_deref().unwrap());
+                if let Some(id) = property.as_deref() {
+                    if let Some(kind) = self.open_property_editor(&record_id, id) {
+                        if matches!(kind, PropertyKind::Formula | PropertyKind::Rollup) {
+                            self.selected_cell = Some((record_id, property));
+                            return true;
+                        }
+                    }
                 } else {
-                    self.edit_record_property(&record_id, property.clone());
+                    self.edit_record_property(&record_id, None);
                 }
-                if self.editing_cell.is_none()
-                    && self.property_picker.is_none()
-                    && self.place_picker.is_none()
-                {
+                if self.editing_cell.is_none() && self.cell_picker.is_none() {
                     self.selected_cell = Some((record_id, property));
                 }
                 true
@@ -663,13 +640,12 @@ impl State {
         }
     }
     pub fn toggle_table_checkbox(&mut self, record_id: &str, property_id: &str) {
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() || !self.finish_cell(false) {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() || !self.finish_cell(false) {
             return;
         }
         let kind = self
-            .tab()
-            .and_then(|tab| tab.database.as_ref())
+            .record_database(record_id)
             .and_then(|db| db.properties.iter().find(|p| p.id == property_id))
             .map(|p| p.kind);
         if kind != Some(PropertyKind::Checkbox) {
@@ -679,11 +655,19 @@ impl State {
             .record_peek
             .as_ref()
             .filter(|p| p.record.id == record_id)
-            .map(|p| &p.record)
+            .map(|p| p.record.clone())
+            .or_else(|| {
+                self.tab()
+                    .and_then(|t| t.record_context.as_ref().map(|(_, r)| r))
+                    .filter(|r| r.id == record_id)
+                    .cloned()
+            })
             .or_else(|| {
                 self.tab()
                     .and_then(|t| t.records.iter().find(|r| r.id == record_id))
-            });
+                    .cloned()
+            })
+            .or_else(|| self.store.get_record(record_id).ok().flatten());
         let Some(record) = record else {
             self.error = Some("Record was not found.".into());
             return;
@@ -709,6 +693,8 @@ impl State {
         ) {
             Ok(record) => {
                 self.sync_record(&record);
+                self.database_views.board.invalidate();
+                self.database_views.calendar.invalidate();
                 self.error = None;
             }
             Err(e) => self.error = Some(format!("Changes are not saved: {e}")),
@@ -733,8 +719,7 @@ impl State {
         let result = (|| -> Result<Record, String> {
             if let Some(p) = property.as_ref() {
                 let kind = self
-                    .tab()
-                    .and_then(|t| t.database.as_ref())
+                    .record_database(&id)
                     .and_then(|d| d.properties.iter().find(|x| &x.id == p))
                     .map(|p| p.kind);
                 let text = self.cell.text.trim();
@@ -973,7 +958,9 @@ impl State {
         if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
             return false;
         }
-        self.dismiss_place_picker();
+        if self.cell_picker.as_ref().is_some_and(|p| p.is_place()) {
+            self.dismiss_cell_picker();
+        }
         if !self.finish_map_interaction() {
             return false;
         }
@@ -984,9 +971,9 @@ impl State {
             return false;
         }
         if self
-            .property_picker
+            .cell_picker
             .as_ref()
-            .is_some_and(|picker| picker.save_failed)
+            .is_some_and(crate::property_controls::CellPicker::save_failed)
         {
             return false;
         }
@@ -1037,7 +1024,7 @@ pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
     let computed_changed = crate::computed_refresh::poll(s);
     let window_changed = crate::table_window::poll(s, tx);
     let summaries_changed = crate::table_summaries::poll(s, tx);
-    if s.property_picker.is_none() && s.editing_cell.is_some() && !s.cell.focused {
+    if s.property_picker().is_none() && s.editing_cell.is_some() && !s.cell.focused {
         s.finish_cell(false);
         tx.instant();
         return true;

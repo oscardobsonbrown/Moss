@@ -19,6 +19,14 @@ impl State {
             .or_else(|| self.tab().and_then(|t| t.database.as_ref()))
     }
 
+    pub fn open_related_record_in_new_tab(&mut self, database_id: &str, record_id: &str) {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() {
+            return;
+        }
+        self.open_database_record(database_id, record_id, "full");
+    }
+
     pub fn open_database_record(&mut self, database_id: &str, record_id: &str, open_mode: &str) {
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
             let db = self
@@ -140,8 +148,8 @@ mod tests {
             .find(|p| p.kind == moss_core::PropertyKind::Status)
             .unwrap();
         s.open_property_picker(&record.id, &property.id);
-        assert!(s.property_picker.is_some());
-        s.dismiss_property_picker();
+        assert!(s.property_picker().is_some());
+        s.dismiss_cell_picker();
         s.close_peek();
         let wrong = s.tab().unwrap().database.as_ref().unwrap().id.clone();
         s.open_database_record(&wrong, &record.id, "side");

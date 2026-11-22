@@ -26,16 +26,16 @@ fn picker_saves_choices_and_protects_dates() {
         .clone();
     let id = s.tab().unwrap().records[0].id.clone();
     s.open_property_picker(&id, &status);
-    s.property_picker_input.replace_text("progress");
+    s.property_picker_mut().unwrap().input.replace_text("progress");
     s.submit_property_picker();
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&status],
         "In progress"
     );
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("bad date");
+    s.property_picker_mut().unwrap().input.replace_text("bad date");
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().error.is_some());
+    assert!(s.property_picker().unwrap().error.is_some());
     assert!(
         !s.store
             .get_record(&id)
@@ -44,7 +44,7 @@ fn picker_saves_choices_and_protects_dates() {
             .values
             .contains_key(&date)
     );
-    s.property_picker_input.replace_text("2026-11-12");
+    s.property_picker_mut().unwrap().input.replace_text("2026-11-12");
     s.submit_property_picker();
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
@@ -58,15 +58,14 @@ fn picker_saves_choices_and_protects_dates() {
     s.store.save_record(&record).unwrap();
     s.open_property_picker(&id, &date);
     assert!(
-        s.property_picker
-            .as_ref()
+        s.property_picker()
             .unwrap()
             .date
             .as_ref()
             .unwrap()
             .has_end
     );
-    s.dismiss_property_picker();
+    s.dismiss_cell_picker();
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date]["end"],
         "2026-11-14"
@@ -94,7 +93,7 @@ fn picker_escape_discards_draft_and_keeps_peek_open() {
         .clone();
     let id = s.record_peek.as_ref().unwrap().record.id.clone();
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("2026-11-12");
+    s.property_picker_mut().unwrap().input.replace_text("2026-11-12");
     let mut rt = rune::Runtime::new(
         s,
         crate::ui::view,
@@ -112,7 +111,7 @@ fn picker_escape_discards_draft_and_keeps_peek_open() {
         mods: Default::default(),
     });
     rt.frame(1. / 120.);
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     assert!(rt.state.record_peek.is_some());
     assert!(
         !rt.state
@@ -149,7 +148,7 @@ fn status_keyboard_choice_selects_next_table_row() {
         .id
         .clone();
     s.open_property_picker(&first, &status);
-    s.property_picker.as_mut().unwrap().selected = Some(1);
+    s.property_picker_mut().unwrap().selected = Some(1);
     s.submit_property_picker();
     assert_eq!(
         s.store.get_record(&first).unwrap().unwrap().values[&status],
@@ -181,11 +180,11 @@ fn failed_picker_save_keeps_draft_until_retry_or_discard() {
     let id = s.tab().unwrap().records[0].id.clone();
     s.open_property_picker(&id, &date);
     assert!(!s.choose_property_value("invalid"));
-    s.dismiss_property_picker();
+    s.dismiss_cell_picker();
     assert_eq!(s.cell.text, "invalid");
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     s.open_search();
-    assert!(s.property_picker.is_some());
+    assert!(s.property_picker().is_some());
     assert!(!matches!(s.modal, Some(crate::state::Modal::Search)));
     assert!(!s.flush_current());
     assert!(s.choose_property_value("2026-11-12"));
@@ -196,7 +195,7 @@ fn failed_picker_save_keeps_draft_until_retry_or_discard() {
     s.open_property_picker(&id, &date);
     assert!(!s.choose_property_value("invalid"));
     s.discard_failed_property_change();
-    assert!(s.property_picker.is_none());
+    assert!(s.property_picker().is_none());
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
         "2026-11-12"
@@ -204,7 +203,7 @@ fn failed_picker_save_keeps_draft_until_retry_or_discard() {
     s.open_property_picker(&id, &date);
     s.editing_cell = None;
     assert!(!s.choose_property_value("2026-11-13"));
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
         "2026-11-12"
@@ -234,7 +233,7 @@ fn search_shortcut_dismisses_uncommitted_picker() {
         .clone();
     let id = s.tab().unwrap().records[0].id.clone();
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("12/11/2026");
+    s.property_picker_mut().unwrap().input.replace_text("12/11/2026");
     let mut rt = rune::Runtime::new(
         s,
         crate::ui::view,
@@ -251,7 +250,7 @@ fn search_shortcut_dismisses_uncommitted_picker() {
         mods: Default::default(),
     });
     rt.frame(1. / 120.);
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     assert!(matches!(rt.state.modal, Some(crate::state::Modal::Search)));
     assert!(rt.state.search_new_tab && rt.state.search.focused);
     assert!(
@@ -287,7 +286,7 @@ fn november_calendar_shows_six_even_weeks() {
         .clone();
     let id = s.tab().unwrap().records[0].id.clone();
     s.open_property_picker(&id, &date);
-    s.property_picker.as_mut().unwrap().month =
+    s.property_picker_mut().unwrap().month =
         chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
     let mut rt = rune::Runtime::new(
         s,
@@ -371,7 +370,7 @@ fn long_status_options_fit_and_keyboard_reaches_scrolled_choice() {
         rt.frame(1. / 120.);
     }
     assert_eq!(
-        rt.state.property_picker.as_ref().unwrap().selected,
+        rt.state.property_picker().unwrap().selected,
         Some(14)
     );
     let elements = rt.elements();
@@ -413,7 +412,7 @@ fn date_picker_fits_minimum_window_and_scrolls_all_six_weeks() {
         .clone();
     let id = s.tab().unwrap().records[0].id.clone();
     s.open_property_picker(&id, &date);
-    s.property_picker.as_mut().unwrap().month =
+    s.property_picker_mut().unwrap().month =
         chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
     let mut rt = rune::Runtime::new(
         s,
@@ -486,7 +485,7 @@ fn today_and_a_different_selected_day_are_distinct() {
         today - chrono::Duration::days(1)
     };
     s.cell.replace_text(&other.to_string());
-    s.property_picker.as_mut().unwrap().month = today.with_day(1).unwrap();
+    s.property_picker_mut().unwrap().month = today.with_day(1).unwrap();
     let mut rt = rune::Runtime::new(
         s,
         crate::ui::view,
@@ -536,12 +535,12 @@ fn date_range_time_validation_preserves_metadata_and_offsets() {
     s.open_property_picker(&id, &date);
     s.toggle_date_end();
     s.toggle_date_time();
-    s.property_picker_input.replace_text("12/11/2026");
-    s.date_end_input.replace_text("11/11/2026");
-    s.date_start_time_input.replace_text("09:30");
-    s.date_end_time_input.replace_text("10:30");
+    s.property_picker_mut().unwrap().input.replace_text("12/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("11/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().start_time_input.replace_text("09:30");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_time_input.replace_text("10:30");
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().error.is_some());
+    assert!(s.property_picker().unwrap().error.is_some());
     assert!(
         !s.store
             .get_record(&id)
@@ -550,10 +549,10 @@ fn date_range_time_validation_preserves_metadata_and_offsets() {
             .values
             .contains_key(&date)
     );
-    s.date_end_input.replace_text("12/11/2026");
-    s.date_end_time_input.replace_text("08:30");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("12/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_time_input.replace_text("08:30");
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().error.is_some());
+    assert!(s.property_picker().unwrap().error.is_some());
     assert!(
         !s.store
             .get_record(&id)
@@ -562,8 +561,8 @@ fn date_range_time_validation_preserves_metadata_and_offsets() {
             .values
             .contains_key(&date)
     );
-    s.date_end_input.replace_text("13/11/2026");
-    s.date_end_time_input.replace_text("10:30");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("13/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_time_input.replace_text("10:30");
     s.submit_property_picker();
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
@@ -574,24 +573,24 @@ fn date_range_time_validation_preserves_metadata_and_offsets() {
     s.store.save_record(&record).unwrap();
     s.sync_record(&record);
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("14/11/2026");
-    s.date_end_input.replace_text("15/11/2026");
-    s.date_start_time_input.replace_text("11:25");
+    s.property_picker_mut().unwrap().input.replace_text("14/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("15/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().start_time_input.replace_text("11:25");
     s.submit_property_picker();
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
         json!({"start":"2026-11-14T11:25:15+08:00", "end":"2026-11-15T10:30:45+08:00", "time_zone":"Australia/Perth", "extra":{"keep":true}})
     );
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("16/11/2026");
-    s.date_end_input.replace_text("17/11/2026");
+    s.property_picker_mut().unwrap().input.replace_text("16/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("17/11/2026");
     let mut changed = s.store.get_record(&id).unwrap().unwrap();
     changed.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&changed).unwrap();
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
-    s.dismiss_property_picker();
-    assert!(s.property_picker.is_some());
+    assert!(s.property_picker().unwrap().save_failed);
+    s.dismiss_cell_picker();
+    assert!(s.property_picker().is_some());
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
         "2026-11-20"
@@ -659,7 +658,7 @@ fn date_range_and_time_controls_save_from_the_picker() {
         rt.state.store.get_record(&id).unwrap().unwrap().values[&date],
         json!({"start":"2026-11-12T09:30", "end":"2026-11-13T10:45"})
     );
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }
@@ -743,15 +742,15 @@ fn failed_extended_date_keeps_retry_visible_in_minimum_window() {
     s.open_property_picker(&id, &date);
     s.toggle_date_end();
     s.toggle_date_time();
-    s.property_picker_input.replace_text("12/11/2026");
-    s.date_end_input.replace_text("13/11/2026");
-    s.date_start_time_input.replace_text("09:30");
-    s.date_end_time_input.replace_text("10:30");
+    s.property_picker_mut().unwrap().input.replace_text("12/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_input.replace_text("13/11/2026");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().start_time_input.replace_text("09:30");
+    s.property_picker_mut().unwrap().date.as_mut().unwrap().end_time_input.replace_text("10:30");
     let mut record = s.store.get_record(&id).unwrap().unwrap();
     record.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&record).unwrap();
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     let mut rt = rune::Runtime::new(
         s,
         crate::ui::view,
@@ -800,14 +799,14 @@ fn date_retry_uses_current_fields_and_clear_stays_explicit() {
     record.values.insert(date.clone(), json!("2026-11-01"));
     s.store.save_record(&record).unwrap();
     s.open_property_picker(&id, &date);
-    s.property_picker_input.replace_text("02/11/2026");
+    s.property_picker_mut().unwrap().input.replace_text("02/11/2026");
     record.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&record).unwrap();
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     record.values.insert(date.clone(), json!("2026-11-01"));
     s.store.save_record(&record).unwrap();
-    s.property_picker_input.replace_text("03/11/2026");
+    s.property_picker_mut().unwrap().input.replace_text("03/11/2026");
     s.date_draft_changed();
     s.retry_property_change();
     assert_eq!(
@@ -819,7 +818,7 @@ fn date_retry_uses_current_fields_and_clear_stays_explicit() {
     record.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&record).unwrap();
     s.clear_date_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     record.values.insert(date.clone(), json!("2026-11-03"));
     s.store.save_record(&record).unwrap();
     s.retry_property_change();
@@ -828,10 +827,10 @@ fn date_retry_uses_current_fields_and_clear_stays_explicit() {
     record.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&record).unwrap();
     s.clear_date_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     record.values.insert(date.clone(), Value::Null);
     s.store.save_record(&record).unwrap();
-    s.property_picker_input.replace_text("04/11/2026");
+    s.property_picker_mut().unwrap().input.replace_text("04/11/2026");
     s.date_draft_changed();
     s.retry_property_change();
     assert_eq!(
@@ -869,20 +868,19 @@ fn date_range_checks_seconds_and_rejects_different_offsets() {
     s.store.save_record(&record).unwrap();
     s.open_property_picker(&id, &date);
     s.submit_property_picker();
-    assert!(s.property_picker.as_ref().unwrap().error.is_some());
+    assert!(s.property_picker().unwrap().error.is_some());
     assert_eq!(
         s.store.get_record(&id).unwrap().unwrap().values[&date],
         bad_seconds
     );
-    s.dismiss_property_picker();
+    s.dismiss_cell_picker();
     let offsets = json!({"start":"2026-11-12T09:30:00+08:00", "end":"2026-11-13T10:30:00+09:00"});
     record.values.insert(date.clone(), offsets.clone());
     s.store.save_record(&record).unwrap();
     s.open_property_picker(&id, &date);
     s.submit_property_picker();
     assert!(
-        s.property_picker
-            .as_ref()
+        s.property_picker()
             .unwrap()
             .error
             .as_deref()
@@ -922,7 +920,7 @@ fn editing_after_failed_clear_makes_retry_save_the_visible_date() {
     record.values.insert(date.clone(), json!("2026-11-20"));
     s.store.save_record(&record).unwrap();
     s.clear_date_picker();
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     record.values.insert(date.clone(), Value::Null);
     s.store.save_record(&record).unwrap();
     let mut rt = rune::Runtime::new(

@@ -71,51 +71,6 @@ fn selection_comment_can_be_created_replied_resolved_and_reopened() {
 }
 
 #[test]
-fn database_cell_comment_uses_clicked_record_and_property() {
-    let (mut s, path) = fixture();
-    s.new_page(true, None);
-    let db = s.tab().unwrap().database.clone().unwrap();
-    let property = db
-        .properties
-        .iter()
-        .find(|p| p.kind == PropertyKind::Status)
-        .unwrap()
-        .id
-        .clone();
-    let record = s
-        .store
-        .create_record(&db.id, "Task", &Default::default())
-        .unwrap();
-    assert!(s.query_records());
-    s.sidebar_keyboard_controls = true;
-    let page = db.page_id.clone();
-    let mut rt = Runtime::with_text(
-        s,
-        ui::view,
-        (1440., 900.),
-        Env::default(),
-        rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
-    );
-    rt.frame(0.);
-    rt.frame(0.02);
-    click(&mut rt, &format!("cell-comment-0-{property}"));
-    assert_eq!(
-        rt.state.comments.anchor,
-        Some(CommentAnchor::Cell {
-            record_id: record.id,
-            property_id: property.clone()
-        })
-    );
-    click(&mut rt, "comment-input");
-    press(&mut rt, Key::Text("Check this status".into()));
-    click(&mut rt, "comment-submit");
-    assert_eq!(rt.state.comments.threads[&page].len(), 1);
-    assert!(rt.state.comments.threads[&page][0].anchor_available);
-    drop(rt);
-    std::fs::remove_dir_all(path).unwrap();
-}
-
-#[test]
 fn comment_marker_follows_wrapped_text() {
     let (mut s, path) = fixture();
     s.new_page(false, None);
@@ -302,7 +257,7 @@ fn comments_on_same_line_share_one_accessible_marker() {
 }
 
 #[test]
-fn title_cell_actions_do_not_cover_open_page() {
+fn table_cells_do_not_show_history_or_comment_buttons() {
     let (mut s, path) = fixture();
     s.new_page(true, None);
     let db = s.tab().unwrap().database.clone().unwrap();
@@ -313,8 +268,14 @@ fn title_cell_actions_do_not_cover_open_page() {
         .unwrap()
         .id
         .clone();
-    let record = s
-        .store
+    let status = db
+        .properties
+        .iter()
+        .find(|p| p.kind == PropertyKind::Status)
+        .unwrap()
+        .id
+        .clone();
+    s.store
         .create_record(&db.id, "Task", &Default::default())
         .unwrap();
     assert!(s.query_records());
@@ -328,32 +289,15 @@ fn title_cell_actions_do_not_cover_open_page() {
     );
     rt.frame(0.);
     rt.frame(0.02);
-    let open = rt.presented("table-open-0").unwrap().0;
+    assert!(rt.presented("table-open-0").is_some());
     for key in [
         format!("cell-comment-0-{title}"),
         format!("cell-history-0-{title}"),
+        format!("cell-comment-0-{status}"),
+        format!("cell-history-0-{status}"),
     ] {
-        let action = rt.presented(&key).unwrap().0;
-        assert!(action[0] + action[2] <= open[0], "{key} overlaps open page");
+        assert!(rt.find(&key).is_none(), "{key} should not render in table cells");
     }
-    click(&mut rt, &format!("cell-comment-0-{title}"));
-    assert_eq!(
-        rt.state.comments.anchor,
-        Some(CommentAnchor::Cell {
-            record_id: record.id.clone(),
-            property_id: title.clone(),
-        })
-    );
-    click(&mut rt, "comment-cancel");
-    click(&mut rt, &format!("cell-history-0-{title}"));
-    assert_eq!(
-        rt.state.history.entity_id.as_deref(),
-        Some(record.id.as_str())
-    );
-    assert_eq!(
-        rt.state.history.property_id.as_deref(),
-        Some(title.as_str())
-    );
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }

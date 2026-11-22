@@ -18,23 +18,11 @@ fn cell(
     t: Theme,
 ) -> El {
     let editing = active(s, record, property.as_deref());
-    let comment_target = s.tab().and_then(|tab| {
-        let database = tab.database.as_ref()?;
-        let property_id = property.as_ref().cloned().or_else(|| {
-            database.properties.iter().find(|p| p.kind == PropertyKind::Title).map(|p| p.id.clone())
-        })?;
-        let existing = s.comments.threads.get(&tab.page.id).and_then(|threads| threads.iter().find(|thread| {
-            !thread.resolved && thread.anchor_available && matches!(&thread.anchor,
-                moss_core::comments::CommentAnchor::Cell { record_id, property_id: id }
-                    if record_id == &record.id && id == &property_id)
-        })).map(|thread| thread.id.clone());
-        Some((tab.page.id.clone(), property_id, existing))
-    });
     let selected = s
         .selected_cell
         .as_ref()
         .is_some_and(|(id, prop)| id == &record.id && prop.as_deref() == property.as_deref());
-    let picker_open = s.property_picker.as_ref().is_some_and(|picker| {
+    let picker_open = s.property_picker().is_some_and(|picker| {
         picker.record_id == record.id && Some(picker.property_id.as_str()) == property.as_deref()
     });
     let title = property.is_none();
@@ -128,16 +116,6 @@ fn cell(
         let checked = checkbox_value
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
-        let picker_kind = prop.is_some_and(|p| {
-            matches!(
-                p.kind,
-                PropertyKind::Date | PropertyKind::Status | PropertyKind::Select
-            )
-        });
-        let relation = prop.is_some_and(|p| p.kind == PropertyKind::Relation);
-        let place = prop.is_some_and(|p| p.kind == PropertyKind::Place);
-        let computed =
-            prop.is_some_and(|p| matches!(p.kind, PropertyKind::Formula | PropertyKind::Rollup));
         let key = format!(
             "cell-text-{index}-{}",
             property.as_deref().unwrap_or("title")
@@ -167,7 +145,15 @@ fn cell(
                 .grow(1.);
             if wrap { label.wrap() } else { label.truncate() }
         } else if wrap
-            && prop.is_none_or(|p| !matches!(p.kind, PropertyKind::Status | PropertyKind::Select))
+            && prop.is_none_or(|p| {
+                !matches!(
+                    p.kind,
+                    PropertyKind::Status
+                        | PropertyKind::Select
+                        | PropertyKind::MultiSelect
+                        | PropertyKind::Relation
+                )
+            })
         {
             super::property_value::scalar_label(&text, t)
                 .key(key)
@@ -230,37 +216,26 @@ fn cell(
             }))
             .on_press_tx(move |s: &mut State, tx| {
                 s.selected_cell = None;
-                if checkbox {
-                    if let Some(id) = property.as_deref() {
-                        s.toggle_table_checkbox(&record_id, id);
+                if let Some(id) = property.as_deref() {
+                    if let Some(kind) = s.open_property_editor(&record_id, id) {
+                        if !crate::property_controls::is_popup_picker_kind(kind)
+                            && !matches!(
+                                kind,
+                                PropertyKind::Relation | PropertyKind::Formula | PropertyKind::Rollup
+                            )
+                        {
+                            tx.instant();
+                        }
                     }
-                } else if place {
-                    if let Some(id) = property.as_deref() {
-                        s.open_place_picker(&record_id, id);
-                    }
-                    tx.instant();
-                    return;
-                } else if relation {
-                    if let Some(id) = property.as_deref() {
-                        s.open_relation_picker(&record_id, id);
-                    }
-                    return;
-                } else if computed {
-                    return;
-                } else if picker_kind {
-                    if let Some(id) = property.as_deref() {
-                        s.open_property_picker(&record_id, id);
-                    }
-                    return;
                 } else {
-                    s.dismiss_property_picker();
+                    s.dismiss_cell_picker();
                     if let Some(i) = s.tab().and_then(|tab| {
                         tab.records.iter().position(|record| record.id == record_id)
                     }) {
-                        s.edit_record(i, property.clone());
+                        s.edit_record(i, None);
                     }
+                    tx.instant();
                 }
-                tx.instant();
             });
         if checkbox && valid_checkbox {
             contents = contents
@@ -272,40 +247,6 @@ fn cell(
             contents = contents.border(2., t.blue);
         }
         wrapper = contents;
-    }
-    if let Some((page, property_id, existing)) = comment_target.filter(|_| !editing) {
-        let record_id = record.id.clone();
-        let history_page = page.clone();
-        let history_record = record_id.clone();
-        let history_property = property_id.clone();
-        let visible = existing.is_some() || s.sidebar_keyboard_controls;
-        // The title cell reserves its trailing 70 points for the Open page control.
-        let action_inset = if title { 74. } else { 0. };
-        wrapper = wrapper.child(
-            row().key(format!("cell-history-{index}-{property_id}"))
-                .pin(None, Some(0.), Some(action_inset + 20.), None).size(20., 20.).center().radius(4.)
-                .fill(t.bg).hover(t.hover).role("button").label("Show cell changes")
-                .focusable(true).group_opacity(if s.sidebar_keyboard_controls { 1. } else { 0. }, 1.)
-                .child(rune::icon(&super::phosphor::CLOCK_COUNTER_CLOCKWISE, 14.).color(t.muted))
-                .on_press(move |s: &mut State| s.open_item_history(&history_page, &history_record, Some(&history_property))),
-        );
-        wrapper = wrapper.child(
-            row().key(format!("cell-comment-{index}-{property_id}"))
-                .pin(None, Some(0.), Some(action_inset), None).size(20., 20.).center().radius(4.)
-                .fill(t.bg).hover(t.hover).role("button")
-                .label(if existing.is_some() { "Open cell comments" } else { "Add cell comment" })
-                .focusable(true).group_opacity(if visible { 1. } else { 0. }, 1.)
-                .child(rune::icon(super::view_icons::catalog_icon("chat-circle").unwrap(), 14.)
-                    .color(if existing.is_some() { rune::color::oklch(0.68, 0.14, 80.) } else { t.muted }))
-                .on_press_tx(move |s: &mut State, tx| {
-                    let anchor = existing.is_none().then(|| moss_core::comments::CommentAnchor::Cell {
-                        record_id: record_id.clone(), property_id: property_id.clone(),
-                    });
-                    s.open_comments(&page, anchor);
-                    if let Some(id) = &existing { tx.scroll_into_view(format!("comment-thread-{id}")); }
-                    tx.instant();
-                }),
-        );
     }
     wrapper
 }
@@ -402,7 +343,16 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> Vec<El> {
     {
         entries.push(VirtualRow::Summary);
     }
-    entries.push(VirtualRow::Footer);
+    let footer_count = window
+        .map(crate::table_window::TableWindow::displayed_total)
+        .unwrap_or_else(|| Some(tab.records.len() as u64));
+    let footer_width = rune::memo::window_layout_with("db-body", |r| r[2])
+        .filter(|vw| *vw > 0.)
+        .map_or(width, |vw| vw.min(width));
+    entries.push(VirtualRow::Footer {
+        count: footer_count,
+        width_px: footer_width.round() as u32,
+    });
     let tail_offset = trailing as f32 * 38.;
     let entries = std::rc::Rc::new(entries);
     let keys = entries.clone();
@@ -418,11 +368,13 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> Vec<El> {
     let layout_version = layout_hash.finish();
     let column_ids: Vec<String> = columns.iter().map(|property| property.id.clone()).collect();
     let fixed_height = window.is_some();
+    if start > 0 {
+        children.push(el().h(start as f32 * 38.));
+    }
     children.push(
         col()
             .key("table-virtual-rows")
             .w(width)
-            .pt(start as f32 * 38.)
             .pb(trailing as f32 * 38.)
             .growth(GrowthSpec::default())
             .virtual_rows::<State>(
@@ -438,7 +390,7 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> Vec<El> {
                         format!("table-record-{id}").into()
                     }
                     VirtualRow::Summary => "table-summary".into(),
-                    VirtualRow::Footer => format!("table-footer-{}", keys.len()).into(),
+                    VirtualRow::Footer { .. } => format!("table-footer-{}", keys.len()).into(),
                 },
                 move |s, index| {
                     let Some(tab) = s.tab() else { return el() };
@@ -475,9 +427,9 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> Vec<El> {
                                         || s.selected_cell
                                             .as_ref()
                                             .is_some_and(|(id, _)| id == &record.id)
-                                        || s.property_picker
+                                        || s.cell_picker
                                             .as_ref()
-                                            .is_some_and(|picker| picker.record_id == record.id);
+                                            .is_some_and(|picker| picker.record_id() == record.id);
                                     let render = || {
                                         table_record(
                                             s,
@@ -523,8 +475,8 @@ pub(super) fn view(s: &State, tab: &Tab, db: &Database, t: Theme) -> Vec<El> {
                             .child(table_summary(s, tab, db, t, frozen, &columns))
                             .offset(0., tail_offset)
                             .offset_motion(Anim::INSTANT),
-                        VirtualRow::Footer => row()
-                            .child(table_footer(t))
+                        VirtualRow::Footer { count, width_px } => row()
+                            .child(table_footer(*count, *width_px as f32, t))
                             .offset(0., tail_offset)
                             .offset_motion(Anim::INSTANT),
                     }
@@ -671,9 +623,9 @@ fn table_record(
         || s.selected_cell
             .as_ref()
             .is_some_and(|(id, _)| id == &record.id)
-        || s.property_picker
+        || s.cell_picker
             .as_ref()
-            .is_some_and(|picker| picker.record_id == record.id);
+            .is_some_and(|picker| picker.record_id() == record.id);
     let mut line = row();
     for (column, prop) in columns.iter().enumerate() {
         let title = prop.kind == PropertyKind::Title;
@@ -730,10 +682,13 @@ fn table_record(
     line
 }
 
-fn table_footer(t: Theme) -> El {
-    row()
+fn table_footer(count: Option<u64>, width: f32, t: Theme) -> El {
+    let count_label = count.map_or_else(
+        || "Preparing row count".to_owned(),
+        |total| format!("{total} records"),
+    );
+    let new_button = row()
         .key("table-new")
-        .self_start()
         .h(30.)
         .px(9.)
         .gap(5.)
@@ -749,7 +704,19 @@ fn table_footer(t: Theme) -> El {
         .on_press_tx(|s: &mut State, tx| {
             s.create_inline(BTreeMap::new(), false);
             tx.instant();
-        })
+        });
+    row()
+        .w(width)
+        .h(30.)
+        .center_y()
+        .sticky_left(0.)
+        .child(new_button)
+        .child(el().grow(1.))
+        .child(
+            t.label(count_label, t.muted)
+                .key("database-page-count")
+                .pr(10.),
+        )
 }
 
 #[derive(Clone, Hash)]
@@ -771,7 +738,10 @@ enum VirtualRow {
         id: String,
     },
     Summary,
-    Footer,
+    Footer {
+        count: Option<u64>,
+        width_px: u32,
+    },
 }
 
 fn table_group(index: usize, value: &str, t: Theme) -> El {

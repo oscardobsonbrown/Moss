@@ -1,10 +1,11 @@
+use crate::property_controls::CellPicker;
 use crate::state::State;
 use moss_core::{Database, Property, PropertyKind, Record};
 use rune::TextEdit;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub struct AdvancedProperty {
+pub struct AdvancedDraft {
     pub expression: TextEdit,
     pub database_search: TextEdit,
     pub target_database_id: Option<String>,
@@ -15,8 +16,6 @@ pub struct AdvancedProperty {
     pub databases: Vec<Database>,
     pub target_properties: Vec<Property>,
     pub error: Option<String>,
-    pub relation_picker: Option<RelationPicker>,
-    pub relation_search: TextEdit,
 }
 
 pub struct RelationPicker {
@@ -28,11 +27,12 @@ pub struct RelationPicker {
     pub selected_names: BTreeMap<String, String>,
     pub expected: Value,
     pub candidates: Vec<Record>,
+    pub search: TextEdit,
     pub error: Option<String>,
     pub save_failed: bool,
 }
 
-impl Default for AdvancedProperty {
+impl Default for AdvancedDraft {
     fn default() -> Self {
         Self {
             expression: TextEdit::new(""),
@@ -45,22 +45,22 @@ impl Default for AdvancedProperty {
             databases: Vec::new(),
             target_properties: Vec::new(),
             error: None,
-            relation_picker: None,
-            relation_search: TextEdit::new(""),
         }
     }
 }
 
 impl State {
     pub fn reset_advanced_property(&mut self) {
-        let config = self
-            .database_property_editor
+        let Some(editor) = self.database_property_editor.as_mut() else {
+            return;
+        };
+        let config = editor
+            .property
             .as_ref()
-            .and_then(|e| e.property.as_ref())
             .map(|p| p.config.clone())
             .unwrap_or(Value::Null);
         let value = |key: &str| config.get(key).and_then(Value::as_str).map(str::to_owned);
-        self.advanced_property = AdvancedProperty {
+        editor.advanced = AdvancedDraft {
             expression: TextEdit::new(value("expression").as_deref().unwrap_or("")),
             target_database_id: value("target_database_id"),
             relation_property_id: value("relation_property_id"),
@@ -68,56 +68,63 @@ impl State {
             operation: value("operation").unwrap_or_else(|| "count".into()),
             ..Default::default()
         };
-        let kind = self
-            .database_property_editor
-            .as_ref()
-            .map(|editor| editor.kind);
-        if kind == Some(PropertyKind::Relation) {
+        let kind = editor.kind;
+        let target_db = editor.advanced.target_database_id.clone();
+        if kind == PropertyKind::Relation {
             self.search_advanced_databases();
-            if let Some(id) = &self.advanced_property.target_database_id {
-                match self.store.get_database(id) {
-                    Ok(Some(db)) => self.advanced_property.target_database_name = Some(db.name),
-                    Ok(None) => {
-                        self.advanced_property.error =
-                            Some("Related database is not available.".into())
-                    }
-                    Err(error) => {
-                        self.advanced_property.error =
-                            Some(format!("Related database is not loaded: {error}"))
+            if let Some(id) = target_db {
+                let result = self.store.get_database(&id);
+                if let Some(editor) = self.database_property_editor.as_mut() {
+                    match result {
+                        Ok(Some(db)) => editor.advanced.target_database_name = Some(db.name),
+                        Ok(None) => {
+                            editor.advanced.error =
+                                Some("Related database is not available.".into())
+                        }
+                        Err(error) => {
+                            editor.advanced.error =
+                                Some(format!("Related database is not loaded: {error}"))
+                        }
                     }
                 }
             }
         }
-        if kind == Some(PropertyKind::Rollup) {
+        if kind == PropertyKind::Rollup {
             self.refresh_advanced_target_properties();
         }
     }
 
     pub fn search_advanced_databases(&mut self) {
-        match self.store.search_relation_databases(
-            &self.workspace.id,
-            &self.advanced_property.database_search.text,
-            50,
-        ) {
+        let query = self
+            .database_property_editor
+            .as_ref()
+            .map(|e| e.advanced.database_search.text.clone())
+            .unwrap_or_default();
+        let result = self
+            .store
+            .search_relation_databases(&self.workspace.id, &query, 50);
+        let Some(editor) = self.database_property_editor.as_mut() else {
+            return;
+        };
+        match result {
             Ok(databases) => {
-                self.advanced_property.databases = databases;
-                self.advanced_property.error = None;
+                editor.advanced.databases = databases;
+                editor.advanced.error = None;
             }
             Err(error) => {
-                self.advanced_property.error = Some(format!("Databases are not loaded: {error}"))
+                editor.advanced.error = Some(format!("Databases are not loaded: {error}"))
             }
         }
     }
 
     pub fn refresh_advanced_target_properties(&mut self) {
         let target = self
-            .advanced_property
-            .relation_property_id
-            .as_deref()
-            .and_then(|id| {
-                self.tab()?
-                    .database
-                    .as_ref()?
+            .database_property_editor
+            .as_ref()
+            .and_then(|editor| {
+                let id = editor.advanced.relation_property_id.as_deref()?;
+                self.metadata_database(&editor.database_id)
+                    .or_else(|| self.tab().and_then(|tab| tab.database.as_ref()))?
                     .properties
                     .iter()
                     .find(|p| p.id == id)
@@ -125,16 +132,21 @@ impl State {
             .and_then(|p| p.config.get("target_database_id"))
             .and_then(Value::as_str)
             .map(str::to_owned);
-        self.advanced_property.target_properties.clear();
+        if let Some(editor) = self.database_property_editor.as_mut() {
+            editor.advanced.target_properties.clear();
+        }
         if let Some(id) = target {
-            match self.store.get_database(&id) {
-                Ok(Some(db)) => self.advanced_property.target_properties = db.properties,
-                Ok(None) => {
-                    self.advanced_property.error = Some("Related database is not available.".into())
-                }
-                Err(error) => {
-                    self.advanced_property.error =
-                        Some(format!("Properties are not loaded: {error}"))
+            let result = self.store.get_database(&id);
+            if let Some(editor) = self.database_property_editor.as_mut() {
+                match result {
+                    Ok(Some(db)) => editor.advanced.target_properties = db.properties,
+                    Ok(None) => {
+                        editor.advanced.error = Some("Related database is not available.".into())
+                    }
+                    Err(error) => {
+                        editor.advanced.error =
+                            Some(format!("Properties are not loaded: {error}"))
+                    }
                 }
             }
         }
@@ -144,13 +156,13 @@ impl State {
         let Some(editor) = self.database_property_editor.as_ref() else {
             return false;
         };
-        let name = self.database_property_input.text.trim();
+        let name = editor.name_input.text.trim();
         if name.is_empty() {
             self.database_property_editor.as_mut().unwrap().error =
                 Some("Enter a property name.".into());
             return false;
         }
-        let draft = &self.advanced_property;
+        let draft = &editor.advanced;
         let config = match editor.kind {
             PropertyKind::Formula => json!({"expression": draft.expression.text}),
             PropertyKind::Relation => json!({"target_database_id": draft.target_database_id}),
@@ -186,15 +198,8 @@ impl State {
 
 impl State {
     pub fn open_relation_picker(&mut self, record_id: &str, property_id: &str) {
-        self.close_relation_picker();
-        if self.advanced_property.relation_picker.is_some() {
-            return;
-        }
-        if !self.finish_cell(false) {
-            return;
-        }
-        self.dismiss_property_picker();
-        if self.property_picker.is_some() {
+        self.dismiss_cell_picker();
+        if self.cell_picker.is_some() || !self.finish_cell(false) {
             return;
         }
         let Some(property) = self
@@ -258,9 +263,9 @@ impl State {
                 return;
             }
         };
-        self.advanced_property.relation_search = TextEdit::new("");
-        self.advanced_property.relation_search.focused = true;
-        self.advanced_property.relation_picker = Some(RelationPicker {
+        let mut search = TextEdit::new("");
+        search.focused = true;
+        self.cell_picker = Some(CellPicker::Relation(RelationPicker {
             record_id: record_id.into(),
             property_id: property_id.into(),
             expected_property: property,
@@ -269,22 +274,21 @@ impl State {
             selected_names,
             expected,
             candidates: Vec::new(),
+            search,
             error: None,
             save_failed: false,
-        });
+        }));
         self.search_relation_candidates();
     }
 
     pub fn search_relation_candidates(&mut self) {
-        let Some(picker) = &self.advanced_property.relation_picker else {
+        let Some(picker) = self.relation_picker() else {
             return;
         };
-        let result = self.store.search_relation_records(
-            &picker.target_database_id,
-            &self.advanced_property.relation_search.text,
-            50,
-        );
-        let picker = self.advanced_property.relation_picker.as_mut().unwrap();
+        let result = self
+            .store
+            .search_relation_records(&picker.target_database_id, &picker.search.text, 50);
+        let picker = self.relation_picker_mut().unwrap();
         match result {
             Ok(records) => {
                 for record in &records {
@@ -304,7 +308,7 @@ impl State {
     }
 
     pub fn toggle_relation_candidate(&mut self, id: &str) {
-        let Some(picker) = &mut self.advanced_property.relation_picker else {
+        let Some(picker) = self.relation_picker_mut() else {
             return;
         };
         if let Some(index) = picker.selected.iter().position(|selected| selected == id) {
@@ -318,7 +322,7 @@ impl State {
     }
 
     pub fn save_relation_picker(&mut self) -> bool {
-        let Some(picker) = &self.advanced_property.relation_picker else {
+        let Some(CellPicker::Relation(picker)) = &self.cell_picker else {
             return false;
         };
         let result = self.store.set_relation_value_if_unchanged(
@@ -330,31 +334,21 @@ impl State {
         match result {
             Ok(record) => {
                 self.sync_record(&record);
-                self.advanced_property.relation_picker = None;
-                self.advanced_property.relation_search.focused = false;
+                self.cell_picker = None;
                 true
             }
             Err(error) => {
-                let picker = self.advanced_property.relation_picker.as_mut().unwrap();
+                let picker = self.relation_picker_mut().unwrap();
                 picker.error = Some(format!("Relation is not saved: {error}"));
                 picker.save_failed = true;
                 false
             }
         }
     }
+
     pub fn discard_relation_picker(&mut self) {
-        self.advanced_property.relation_picker = None;
-        self.advanced_property.relation_search.focused = false;
-    }
-    pub fn close_relation_picker(&mut self) {
-        if self
-            .advanced_property
-            .relation_picker
-            .as_ref()
-            .is_some_and(|p| p.save_failed)
-        {
-            return;
+        if self.cell_picker.as_ref().is_some_and(CellPicker::is_relation) {
+            self.cell_picker = None;
         }
-        self.discard_relation_picker();
     }
 }

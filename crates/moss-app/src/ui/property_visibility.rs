@@ -34,16 +34,11 @@ pub fn visible(db: &Database, view_index: usize, property_id: &str) -> bool {
 }
 
 pub fn open(s: &mut State) {
-    s.property_visibility_open = true;
-    s.property_visibility_from_view_settings = false;
-    s.property_visibility_search = TextEdit::new("");
-    s.property_visibility_search.focused = true;
+    s.property_visibility = Some(crate::database_properties::PropertyVisibility::new(false));
 }
 
 pub fn overlay(s: &State, t: Theme) -> Option<El> {
-    if !s.property_visibility_open {
-        return None;
-    }
+    let visibility = s.property_visibility.as_ref()?;
     let tab = s.tab()?;
     let db = tab.database.as_ref()?;
     let view = db.views.get(tab.view)?;
@@ -59,15 +54,15 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
         return None;
     }
     let hidden = hidden_ids(&view.config);
-    let query = s.property_visibility_search.text.to_lowercase();
+    let query = visibility.search.text.to_lowercase();
     let search = super::inputs::field(
-        &s.property_visibility_search,
+        &visibility.search,
         "list-properties-search",
         "Search for a property…",
         t,
     )
     .label("Search properties")
-    .on_edit(|s: &mut State| &mut s.property_visibility_search)
+    .on_edit(|s: &mut State| &mut s.property_visibility.as_mut().unwrap().search)
     .on_input_change(|_: &mut State, tx| tx.instant());
     let header = row()
         .w_full()
@@ -86,7 +81,7 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
                 .label("Close")
                 .focusable(true)
                 .child(rune::icon(&menu::CLOSE, 16.).color(t.muted))
-                .on_press(|s: &mut State| s.property_visibility_open = false),
+                .on_press(|s: &mut State| s.property_visibility = None),
         );
     let mut body = col().w_full().child(header.mb(4.)).child(search.mb(4.));
     if hidden.is_none() {
@@ -199,7 +194,7 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
             .shadow(4., 16., Color::BLACK.alpha(0.15))
             .role("dialog")
             .label("Property visibility")
-            .modal(true, |s: &mut State| s.property_visibility_open = false)
+            .modal(true, |s: &mut State| s.property_visibility = None)
             .child(
                 body.min_h(0.)
                     .shrink()
@@ -209,7 +204,7 @@ pub fn overlay(s: &State, t: Theme) -> Option<El> {
                     .instant_changes(),
             )
             .anchored_fit(
-                if s.property_visibility_from_view_settings {
+                if visibility.from_view_settings {
                     "db-view-settings"
                 } else {
                     "list-properties-button"
@@ -262,7 +257,7 @@ pub(crate) fn set_visibility(s: &mut State, property: Option<&str>, hide: bool) 
     match result {
         Ok(db) => {
             sync_database(s, &db);
-            if s.editing_cell.is_none() && s.property_picker.is_none() {
+            if s.editing_cell.is_none() && s.cell_picker.is_none() {
                 let selected_hidden = s
                     .selected_cell
                     .as_ref()

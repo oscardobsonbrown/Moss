@@ -39,7 +39,7 @@ fn list_visibility_persists_without_changing_other_views_or_unknown_ids() {
     click(&mut rt, "list-properties-button");
     assert!(rt.find("list-properties-search").is_some());
     click(&mut rt, &format!("list-property-{status}"));
-    assert!(rt.state.property_visibility_open);
+    assert!(rt.state.property_visibility.is_some());
     assert!(
         rt.elements()
             .iter()
@@ -79,7 +79,7 @@ fn list_visibility_persists_without_changing_other_views_or_unknown_ids() {
     );
     click(&mut rt, &format!("list-property-{status}"));
     click(&mut rt, "list-properties-close");
-    assert!(!rt.state.property_visibility_open);
+    assert!(rt.state.property_visibility.is_none());
     drop(rt);
     let reopened = State::open(path.clone(), None).unwrap();
     let saved = reopened.store.get_database(&db.id).unwrap().unwrap();
@@ -107,7 +107,7 @@ fn failed_visibility_save_keeps_panel_and_previous_state() {
     click(&mut rt, "list-properties-button");
     rt.state.store.delete_page(&db.page_id).unwrap();
     click(&mut rt, &format!("list-property-{status}"));
-    assert!(rt.state.property_visibility_open);
+    assert!(rt.state.property_visibility.is_some());
     assert!(rt.state.error.as_deref().unwrap().contains("not saved"));
     assert_eq!(
         rt.state.tab().unwrap().database.as_ref().unwrap().views[5].config,
@@ -140,8 +140,7 @@ fn visibility_search_filters_rows_and_shortcut_closes_panel() {
     assert!(rt.find(&format!("list-property-{status}")).is_some());
     assert!(rt.find(&format!("list-property-{date}")).is_none());
     press(&mut rt, Key::Command('k'));
-    assert!(!rt.state.property_visibility_open);
-    assert!(!rt.state.property_visibility_search.focused);
+    assert!(rt.state.property_visibility.is_none());
     assert!(matches!(rt.state.modal, Some(state::Modal::Search)));
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
@@ -391,7 +390,7 @@ fn view_settings_properties_action_saves_and_reopens_for_each_layout() {
         assert!(rt.find("list-property-visibility").is_some());
         click(&mut rt, &format!("list-property-{status}"));
         assert!(rt.state.error.is_none());
-        assert!(rt.state.property_visibility_open);
+        assert!(rt.state.property_visibility.is_some());
         click(&mut rt, "list-properties-close");
     }
     drop(rt);
