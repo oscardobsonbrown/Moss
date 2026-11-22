@@ -1,149 +1,39 @@
 use crate::state::State;
+use moss_updater::{
+    DEFAULT_MANIFEST_URL, HELPER_NAME,
+    bundle::{bundle_public_key, can_install_to, extract_archive, installed_version, verify_bundle},
+    cache::{
+        CachedManifest, InstallOutcome, StagedMarker, StagedUpdate, default_cache_dir,
+        ensure_private_dir, find_best_staged, load_cached_manifest, load_verified_staged,
+        prune_staged, receipt_path, save_cached_manifest, staged_archive_path, staged_part_path,
+        staged_version_dir, take_receipt, write_staged_marker,
+    },
+    crypto::sha256_file,
+    current_platform_key,
+    http::{HttpError, ManifestFetch, download_file, fetch_manifest},
+    install::{InstallRequest, spawn_detached_installer},
+    manifest::{Manifest, ManifestError, VerifiedRelease},
+    version::{current_macos_version, default_release_url, format_version, parse_version},
+};
 use rune::{Tx, Waker};
-use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, DirBuilder, File},
-    os::unix::fs::DirBuilderExt,
+    collections::BTreeMap,
+    fs,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-const REPOSITORY: &str = "oscardobsonbrown/Moss";
-const BUNDLE_ID: &str = "app.moss.desktop";
-#[cfg(feature = "hot")]
-const INSTALLER: &str = "";
-#[cfg(not(feature = "hot"))]
-const INSTALLER: &str = include_str!("../../../scripts/install-macos.sh");
+pub use moss_updater::version::Version;
+
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
-pub type Version = [u64; 3];
-static SAVE_FAILED: AtomicBool = AtomicBool::new(false);
-
-pub fn defer_install() {
-    SAVE_FAILED.store(true, Ordering::Relaxed);
-}
-
-fn version(input: &str) -> Option<Version> {
-    let mut parts = input.split('.');
-    let mut version = [0; 3];
-    for number in &mut version {
-        let part = parts.next()?;
-        if part.is_empty()
-            || !part.bytes().all(|byte| byte.is_ascii_digit())
-            || (part.len() > 1 && part.starts_with('0'))
-        {
-            return None;
-        }
-        *number = part.parse().ok()?;
-    }
-    parts.next().is_none().then_some(version)
-}
-
-#[derive(Deserialize)]
-struct Release {
-    tag_name: String,
-    draft: bool,
-    prerelease: bool,
-    assets: Vec<Asset>,
-}
-
-#[derive(Deserialize)]
-struct Asset {
-    name: String,
-    state: String,
-    digest: Option<String>,
-    #[serde(default)]
-    size: u64,
-}
-
-fn output(command: &mut Command) -> Result<Output, String> {
-    let result = command.output().map_err(|error| error.to_string())?;
-    if !result.status.success() {
-        return Err(format!(
-            "{} exited with {}",
-            command.get_program().to_string_lossy(),
-            result.status
-        ));
-    }
-    Ok(result)
-}
-
-fn plist(bundle: &Path, key: &str) -> Option<String> {
-    let result = output(
-        Command::new("/usr/libexec/PlistBuddy")
-            .arg("-c")
-            .arg(format!("Print :{key}"))
-            .arg(bundle.join("Contents/Info.plist")),
-    )
-    .ok()?;
-    Some(String::from_utf8(result.stdout).ok()?.trim().into())
-}
-
-fn installed_version(bundle: &Path) -> Option<Version> {
-    if plist(bundle, "CFBundleIdentifier")?.as_str() != BUNDLE_ID {
-        return None;
-    }
-    version(&plist(bundle, "CFBundleShortVersionString")?)
-}
-
-fn download(curl: &Path, timeout: &str) -> Command {
-    let mut command = Command::new(curl);
-    command.args([
-        "--disable",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--location",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        timeout,
-        "--user-agent",
-        "Moss-Updater",
-    ]);
-    command
-}
-
-fn verify_archive(archive: &Path, expected_digest: &str) -> Result<(), String> {
-    let checksum = output(
-        Command::new("/usr/bin/shasum")
-            .args(["-a", "256"])
-            .arg(archive),
-    )?;
-    let matches = std::str::from_utf8(&checksum.stdout)
-        .ok()
-        .and_then(|checksum| checksum.split_whitespace().next())
-        .is_some_and(|checksum| checksum.eq_ignore_ascii_case(expected_digest));
-    if !matches {
-        return Err("Moss update archive does not match GitHub's checksum".into());
-    }
-    Ok(())
-}
-
-fn verify_bundle(bundle: &Path, next: Version) -> Result<(), String> {
-    if bundle.is_symlink()
-        || installed_version(bundle) != Some(next)
-        || plist(bundle, "CFBundleExecutable").as_deref() != Some("Moss")
-    {
-        return Err("Moss update bundle has the wrong identity or version".into());
-    }
-    output(
-        Command::new("/usr/bin/codesign")
-            .args(["--verify", "--deep", "--strict"])
-            .arg(bundle),
-    )?;
-    Ok(())
-}
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Status {
@@ -160,54 +50,79 @@ pub enum Status {
     Unverified,
     SaveFailed(Version),
     InstallLocation,
+    InstallFailed(Version),
 }
 
-pub fn version_label([major, minor, patch]: Version) -> String {
-    format!("{major}.{minor}.{patch}")
+pub fn version_label(version: Version) -> String {
+    format_version(version)
 }
 
 pub fn release_url(version: Version) -> String {
-    format!(
-        "https://github.com/{REPOSITORY}/releases/tag/v{}",
-        version_label(version)
-    )
+    default_release_url(version)
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub status: Status,
     pub updated: Option<Version>,
+    pub release_url: Option<String>,
+}
+
+#[derive(Clone)]
+struct RuntimeConfig {
+    bundle: Option<PathBuf>,
+    helper: Option<PathBuf>,
+    cache_dir: PathBuf,
+    receipt: PathBuf,
+    explicit_data_dir: Option<PathBuf>,
+    manifest_url: String,
+    public_key: String,
+    allow_local_urls: bool,
+    curl: PathBuf,
+    relaunch_on_install: bool,
+}
+
+enum WorkerCommand {
+    Check { download: bool },
+    DownloadKnown,
 }
 
 struct Shared {
     snapshot: Mutex<Snapshot>,
-    wakers: Mutex<Vec<Waker>>,
+    known_release: Mutex<Option<VerifiedRelease>>,
+    staged: Mutex<Option<StagedUpdate>>,
+    wakers: Mutex<BTreeMap<u64, Waker>>,
     revision: AtomicU64,
     automatic: AtomicBool,
-    restart: AtomicBool,
     stopped: AtomicBool,
+    config: RuntimeConfig,
 }
 
 #[derive(Clone)]
 pub struct Client {
     shared: Arc<Shared>,
-    requests: Sender<bool>,
+    requests: Sender<WorkerCommand>,
     pub version: Version,
 }
 
 impl Client {
-    fn new(version: Version, automatic: bool, updated: Option<Version>) -> (Self, Receiver<bool>) {
+    fn new(
+        version: Version,
+        automatic: bool,
+        initial: Snapshot,
+        staged: Option<StagedUpdate>,
+        config: RuntimeConfig,
+    ) -> (Self, Receiver<WorkerCommand>) {
         let (requests, inbox) = mpsc::channel();
         let shared = Arc::new(Shared {
-            snapshot: Mutex::new(Snapshot {
-                status: Status::Idle,
-                updated,
-            }),
-            wakers: Mutex::new(Vec::new()),
+            snapshot: Mutex::new(initial),
+            known_release: Mutex::new(None),
+            staged: Mutex::new(staged),
+            wakers: Mutex::new(BTreeMap::new()),
             revision: AtomicU64::new(1),
             automatic: AtomicBool::new(automatic),
-            restart: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            config,
         });
         (
             Self {
@@ -220,12 +135,37 @@ impl Client {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        *self.shared.snapshot.lock().unwrap()
+        self.shared.snapshot.lock().unwrap().clone()
+    }
+
+    pub fn release_url_for(&self, version: Version) -> String {
+        if let Some(url) = self.shared.snapshot.lock().unwrap().release_url.clone() {
+            return url;
+        }
+        if let Some(staged) = self.shared.staged.lock().unwrap().as_ref() {
+            if staged.version == version && !staged.release_url.is_empty() {
+                return staged.release_url.clone();
+            }
+        }
+        if let Some(known) = self.shared.known_release.lock().unwrap().as_ref() {
+            if known.version == version && !known.release_url.is_empty() {
+                return known.release_url.clone();
+            }
+        }
+        default_release_url(version)
     }
 
     fn wake(&self) {
         self.shared.revision.fetch_add(1, Ordering::Release);
-        for wake in self.shared.wakers.lock().unwrap().iter() {
+        let wakers: Vec<Waker> = self
+            .shared
+            .wakers
+            .lock()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect();
+        for wake in wakers {
             wake();
         }
     }
@@ -240,13 +180,33 @@ impl Client {
         self.wake();
     }
 
+    fn show_with_url(&self, status: Status, url: Option<String>) {
+        let mut view = self.shared.snapshot.lock().unwrap();
+        if view.status == status && view.release_url == url {
+            return;
+        }
+        view.status = status;
+        if url.is_some() {
+            view.release_url = url;
+        }
+        drop(view);
+        self.wake();
+    }
+
     pub fn dismiss(&self) {
         let mut view = self.shared.snapshot.lock().unwrap();
         match view.status {
-            Status::DownloadFailed | Status::Unverified | Status::InstallLocation => {
+            Status::DownloadFailed
+            | Status::Unverified
+            | Status::InstallLocation
+            | Status::InstallFailed(_) => {
                 view.status = Status::Idle;
+                view.release_url = None;
             }
-            _ => view.updated = None,
+            _ => {
+                view.updated = None;
+                view.release_url = None;
+            }
         }
         drop(view);
         self.wake();
@@ -266,19 +226,45 @@ impl Client {
         self.shared.automatic.store(enabled, Ordering::Relaxed);
         self.wake();
         if enabled {
-            self.check(false);
+            if matches!(self.snapshot().status, Status::Available(_)) {
+                self.download_available();
+            } else {
+                self.check(false);
+            }
         }
     }
 
-    fn begin_check(&self) -> bool {
+    pub fn download_available(&self) {
+        let has_known = self.shared.known_release.lock().unwrap().is_some();
+        if has_known {
+            let can_start = {
+                let mut view = self.shared.snapshot.lock().unwrap();
+                if matches!(
+                    view.status,
+                    Status::Available(_) | Status::DownloadFailed | Status::InstallFailed(_)
+                ) {
+                    view.status = Status::Downloading(0);
+                    true
+                } else {
+                    false
+                }
+            };
+            if can_start {
+                self.wake();
+                if self.requests.send(WorkerCommand::DownloadKnown).is_err() {
+                    self.show(Status::DownloadFailed);
+                }
+                return;
+            }
+        }
+        self.check(true);
+    }
+
+    fn begin_manual_check(&self) -> bool {
         let mut view = self.shared.snapshot.lock().unwrap();
         if matches!(
             view.status,
-            Status::Checking
-                | Status::Downloading(_)
-                | Status::Ready(_)
-                | Status::Restarting(_)
-                | Status::SaveFailed(_)
+            Status::Checking | Status::Downloading(_) | Status::Restarting(_) | Status::SaveFailed(_)
         ) {
             return false;
         }
@@ -289,30 +275,81 @@ impl Client {
     }
 
     pub fn check(&self, download: bool) {
-        if self.begin_check() && self.requests.send(download).is_err() {
+        if download && matches!(self.snapshot().status, Status::Available(_)) {
+            self.download_available();
+            return;
+        }
+        if self.begin_manual_check()
+            && self
+                .requests
+                .send(WorkerCommand::Check { download })
+                .is_err()
+        {
             self.show(Status::CheckFailed);
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fixture(version: Version, status: Status) -> Self {
-        let (client, _) = Self::new(version, true, None);
-        client.show(status);
+        let config = RuntimeConfig {
+            bundle: None,
+            helper: None,
+            cache_dir: std::env::temp_dir().join("moss-updater-fixture"),
+            receipt: std::env::temp_dir().join("moss-updater-fixture/receipt.json"),
+            explicit_data_dir: None,
+            manifest_url: DEFAULT_MANIFEST_URL.into(),
+            public_key: String::new(),
+            allow_local_urls: true,
+            curl: PathBuf::from("/usr/bin/curl"),
+            relaunch_on_install: false,
+        };
+        let (client, _) = Self::new(
+            version,
+            true,
+            Snapshot {
+                status,
+                updated: None,
+                release_url: None,
+            },
+            None,
+            config,
+        );
         client
     }
 }
 
-#[derive(Default)]
 pub struct Window {
     pub client: Option<Client>,
+    id: u64,
     seen: u64,
     toast: Snapshot,
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self {
+            client: None,
+            id: NEXT_WINDOW_ID.fetch_add(1, Ordering::Relaxed),
+            seen: 0,
+            toast: Snapshot::default(),
+        }
+    }
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        if let Some(client) = &self.client {
+            if let Ok(mut wakers) = client.shared.wakers.lock() {
+                wakers.remove(&self.id);
+            }
+        }
+    }
 }
 
 impl Window {
     pub fn register(&self, wake: Waker) {
         if let Some(client) = &self.client {
-            client.shared.wakers.lock().unwrap().push(wake);
+            client.shared.wakers.lock().unwrap().insert(self.id, wake);
         }
     }
 
@@ -358,39 +395,72 @@ pub fn restart(s: &mut State, tx: &mut Tx) {
     let (Status::Ready(next) | Status::SaveFailed(next)) = client.snapshot().status else {
         return;
     };
+
+    let Some(bundle) = client.shared.config.bundle.clone() else {
+        client.show(Status::InstallLocation);
+        return;
+    };
+    if !can_install_to(&bundle) {
+        client.show(Status::InstallLocation);
+        return;
+    }
+
     client.show(Status::Restarting(next));
     if !s.flush_current() {
         client.show(Status::SaveFailed(next));
         return;
     }
+
     let mut handles = s.handles.lock().unwrap().clone();
     let requester = handles.remove(&s.workspace.id);
-    let Some(requester) = requester.filter(|_| !handles.is_empty()) else {
+    if handles.is_empty() {
+        finish_restart(s, tx, &client, next);
+        return;
+    }
+    let Some(requester) = requester else {
         finish_restart(s, tx, &client, next);
         return;
     };
-    let remaining = Arc::new(AtomicUsize::new(handles.len()));
-    let failed = Arc::new(AtomicBool::new(false));
+
+    let expected = handles.len();
+    let (done_tx, done_rx) = mpsc::channel();
     for window in handles.into_values() {
-        let (client, remaining, failed, requester) = (
-            client.clone(),
-            remaining.clone(),
-            failed.clone(),
-            requester.clone(),
-        );
-        window.update(move |s, _| {
-            if !s.flush_current() {
-                failed.store(true, Ordering::Release);
-            }
-            if remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
-                if failed.load(Ordering::Acquire) {
-                    client.show(Status::SaveFailed(next));
-                } else {
-                    requester.update(move |s, tx| finish_restart(s, tx, &client, next));
-                }
-            }
+        let done_tx = done_tx.clone();
+        window.update(move |state, _| {
+            let ok = state.flush_current();
+            let _ = done_tx.send(ok);
         });
     }
+    drop(done_tx);
+
+    thread::spawn(move || {
+        let deadline = Instant::now() + FLUSH_TIMEOUT;
+        let mut received = 0usize;
+        let mut all_ok = true;
+        while received < expected {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                all_ok = false;
+                break;
+            }
+            match done_rx.recv_timeout(remaining) {
+                Ok(true) => received += 1,
+                Ok(false) => {
+                    all_ok = false;
+                    break;
+                }
+                Err(_) => {
+                    all_ok = false;
+                    break;
+                }
+            }
+        }
+        if all_ok {
+            requester.update(move |state, tx| finish_restart(state, tx, &client, next));
+        } else {
+            client.show(Status::SaveFailed(next));
+        }
+    });
 }
 
 fn finish_restart(s: &mut State, tx: &mut Tx, client: &Client, next: Version) {
@@ -399,386 +469,532 @@ fn finish_restart(s: &mut State, tx: &mut Tx, client: &Client, next: Version) {
         return;
     }
     s.save_preferences();
-    SAVE_FAILED.store(false, Ordering::Relaxed);
-    client.shared.restart.store(true, Ordering::Release);
+
+    let Some(staged) = client
+        .shared
+        .staged
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|staged| staged.version == next)
+        .or_else(|| load_verified_staged(&client.shared.config.cache_dir, next))
+    else {
+        client.show(Status::Unverified);
+        return;
+    };
+
+    if verify_bundle(&staged.app_path, next).is_err() {
+        client.show(Status::Unverified);
+        return;
+    }
+
+    let Some(bundle) = client.shared.config.bundle.clone() else {
+        client.show(Status::InstallLocation);
+        return;
+    };
+    let Some(helper) = client.shared.config.helper.clone().filter(|path| path.is_file()) else {
+        client.show_with_url(
+            Status::InstallFailed(next),
+            Some(client.release_url_for(next)),
+        );
+        return;
+    };
+
+    // Stop the local MCP server cleanly before handing off to the detached installer.
+    drop(s.local_service.lock().unwrap().take());
+
+    let request = InstallRequest {
+        parent_pid: std::process::id(),
+        staged_app: staged.app_path,
+        target_app: bundle,
+        expected_current: client.version,
+        next_version: next,
+        release_url: client.release_url_for(next),
+        receipt_path: client.shared.config.receipt.clone(),
+        cache_dir: client.shared.config.cache_dir.clone(),
+        data_dir: client.shared.config.explicit_data_dir.clone(),
+        relaunch: client.shared.config.relaunch_on_install,
+    };
+
+    if let Err(error) = spawn_detached_installer(&helper, &request) {
+        eprintln!("Moss update helper failed to start: {error}");
+        client.show_with_url(
+            Status::InstallFailed(next),
+            Some(client.release_url_for(next)),
+        );
+        return;
+    }
+
+    client.shared.stopped.store(true, Ordering::Release);
     tx.quit();
 }
 
-fn latest(curl: &Path) -> Result<Release, String> {
-    let metadata = output(download(curl, "30").args([
-        "--header",
-        "Accept: application/vnd.github+json",
-        "--max-filesize",
-        "4194304",
-        &format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"),
-    ]))?;
-    serde_json::from_slice(&metadata.stdout).map_err(|error| error.to_string())
-}
-
-struct Package<'a> {
-    next: Version,
-    name: &'a str,
-    digest: &'a str,
-    size: u64,
-}
-
-impl Release {
-    fn package(&self, current: Version) -> Result<Option<Package<'_>>, Status> {
-        let Some(next) = self.tag_name.strip_prefix('v').and_then(version) else {
-            return Err(Status::Unverified);
-        };
-        if self.draft || self.prerelease || next <= current {
-            return Ok(None);
-        }
-        let expected = format!("Moss-{}-macos-arm64.zip", self.tag_name);
-        let archive = self
-            .assets
-            .iter()
-            .find(|asset| asset.name == expected && asset.state == "uploaded")
-            .ok_or(Status::Unverified)?;
-        let digest = archive
-            .digest
-            .as_deref()
-            .and_then(|digest| digest.strip_prefix("sha256:"))
-            .filter(|digest| {
-                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
-            .ok_or(Status::Unverified)?;
-        let signed_asset = format!("{expected}.sig");
-        if archive.size == 0
-            || archive.size > 536_870_912
-            || !self.assets.iter().any(|asset| {
-                asset.name == signed_asset && asset.state == "uploaded" && asset.size == 64
-            })
-        {
-            return Err(Status::Unverified);
-        }
-        Ok(Some(Package {
-            next,
-            name: &archive.name,
-            digest,
-            size: archive.size,
-        }))
-    }
-}
-
-fn fetch_file(
-    curl: &Path,
-    url: &str,
-    destination: &Path,
-    size: u64,
-    client: &Client,
-    progress: bool,
-) -> Result<(), String> {
-    let _ = fs::remove_file(destination);
-    let mut process = download(curl, "600")
-        .args(["--max-filesize", &size.to_string(), "--output"])
-        .arg(destination)
-        .arg(url)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    loop {
-        match process.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(status)) => return Err(format!("Download exited with {status}")),
-            Ok(None) => {}
-            Err(error) => {
-                let _ = process.kill();
-                let _ = process.wait();
-                return Err(error.to_string());
-            }
-        }
-        if client.shared.stopped.load(Ordering::Acquire) {
-            let _ = process.kill();
-            let _ = process.wait();
-            return Err("Moss is quitting".into());
-        }
-        if progress && let Ok(file) = destination.metadata() {
-            client.show(Status::Downloading(
-                (file.len().saturating_mul(100) / size).min(99) as u8,
-            ));
-        }
-        thread::sleep(Duration::from_millis(120));
-    }
-    if destination
-        .metadata()
-        .map_err(|error| error.to_string())?
-        .len()
-        != size
-    {
-        return Err("Download has the wrong file size".into());
-    }
-    Ok(())
-}
-
-fn stage(
-    curl: &Path,
-    helper: &Path,
-    key: &str,
-    dir: &Path,
-    release: &Package,
-    client: &Client,
-) -> Result<(), Status> {
-    let archive = dir.join("update.zip");
-    let signature = dir.join("update.sig");
-    let url = format!(
-        "https://github.com/{REPOSITORY}/releases/download/v{}/{}",
-        version_label(release.next),
-        release.name
-    );
-    fetch_file(curl, &format!("{url}.sig"), &signature, 64, client, false)
-        .map_err(|_| Status::DownloadFailed)?;
-    fetch_file(curl, &url, &archive, release.size, client, true)
-        .map_err(|_| Status::DownloadFailed)?;
-    client.show(Status::Downloading(100));
-    verify_archive(&archive, release.digest).map_err(|_| Status::Unverified)?;
-    output(
-        Command::new(helper)
-            .args(["verify", key])
-            .arg(&signature)
-            .arg(&archive),
-    )
-    .map_err(|_| Status::Unverified)?;
-    if client.shared.stopped.load(Ordering::Acquire) {
-        return Err(Status::DownloadFailed);
-    }
-    let bundle = dir.join("Moss.app");
-    let _ = fs::remove_dir_all(&bundle);
-    output(
-        Command::new("/usr/bin/ditto")
-            .args(["-x", "-k"])
-            .arg(&archive)
-            .arg(dir),
-    )
-    .map_err(|_| Status::Unverified)?;
-    verify_bundle(&bundle, release.next).map_err(|_| Status::Unverified)?;
-    Ok(())
-}
-
-#[derive(Deserialize, Serialize)]
-struct Installed {
-    bundle: PathBuf,
-    version: Version,
-}
-
-fn take_installed(path: &Path, bundle: &Path, current: Version) -> Option<Version> {
-    let report = serde_json::from_slice::<Installed>(&fs::read(path).ok()?).ok()?;
-    if report.bundle != bundle || report.version != current {
-        return None;
-    }
-    fs::remove_file(path).ok()?;
-    Some(report.version)
-}
-
 pub struct Updater {
-    bundle: PathBuf,
-    current: Version,
-    helper: PathBuf,
-    work: PathBuf,
-    result: PathBuf,
-    data: PathBuf,
     pub client: Client,
 }
 
-impl Updater {
-    pub fn start(data: &Path, automatic: bool) -> Option<Self> {
-        if option_env!("MOSS_RELEASE_BUILD") != Some("1")
-            || std::env::args_os().len() != 1
-            || std::env::var_os("MOSS_DISABLE_UPDATES").is_some()
-        {
-            return None;
-        }
-        let key = option_env!("MOSS_UPDATE_PUBLIC_KEY").filter(|key| !key.is_empty())?;
-        let exe = std::env::current_exe().ok()?;
-        let bundle = exe.ancestors().nth(3)?.to_owned();
-        if bundle.extension()? != "app" || exe != bundle.join("Contents/MacOS/Moss") {
-            return None;
-        }
-        let current = version(option_env!("MOSS_VERSION")?)?;
-        let helper = bundle.join("Contents/MacOS/moss-update-helper");
-        if !helper.is_file() {
-            return None;
-        }
-        let result = data.join("update-result.json");
-        let updated = take_installed(&result, &bundle, current);
-        let work = std::env::temp_dir().join(format!("moss-update-{}", uuid::Uuid::new_v4()));
-        DirBuilder::new().mode(0o700).create(&work).ok()?;
-        let (client, inbox) = Client::new(current, automatic, updated);
-        let (worker, staging, verifier, target) =
-            (client.clone(), work.clone(), helper.clone(), bundle.clone());
-        thread::spawn(move || {
-            let mut scheduled = true;
-            loop {
-                let manual = if scheduled {
-                    None
-                } else {
-                    match inbox.recv_timeout(CHECK_INTERVAL) {
-                        Ok(force) => Some(force),
-                        Err(mpsc::RecvTimeoutError::Timeout) => None,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                };
-                scheduled = false;
-                if worker.shared.stopped.load(Ordering::Acquire) {
-                    break;
-                }
-                if manual.is_none() && (!worker.automatic() || !worker.begin_check()) {
-                    continue;
-                }
-                let status = check_update(&worker, manual, &target, &staging, &verifier, key);
-                worker.show(status);
-            }
-        });
-        Some(Self {
-            bundle,
-            current,
-            helper,
-            work,
-            result,
-            data: data.into(),
-            client,
-        })
-    }
+fn is_disabled_by_env() -> bool {
+    std::env::var("MOSS_DISABLE_UPDATES").is_ok_and(|value| {
+        let lower = value.trim().to_ascii_lowercase();
+        !lower.is_empty() && lower != "0" && lower != "false"
+    })
+}
 
-    fn install(&self, next: Version) -> Result<(), String> {
-        let lock = File::open(self.bundle.join("Contents/MacOS/Moss"))
-            .map_err(|error| error.to_string())?;
-        lock.try_lock().map_err(|error| error.to_string())?;
-        if installed_version(&self.bundle) != Some(self.current) {
-            return Err("The installed version changed".into());
-        }
-        let source = self.work.join("Moss.app");
-        verify_bundle(&source, next)?;
-        output(
-            Command::new("/bin/sh")
-                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-                .args(["-c", INSTALLER, "moss-update"])
-                .arg(source)
-                .arg(&self.bundle),
-        )?;
-        let result = serde_json::to_vec(&Installed {
-            bundle: self.bundle.clone(),
-            version: next,
-        })
-        .unwrap();
-        let temp = self
-            .result
-            .with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-        if let Err(error) = fs::write(&temp, result).and_then(|_| fs::rename(&temp, &self.result)) {
-            let _ = fs::remove_file(temp);
-            eprintln!("Could not save the Moss update result: {error}");
-        }
-        Ok(())
-    }
-
-    fn relaunch(&self) {
-        if let Err(error) = output(
-            Command::new("/usr/bin/open")
-                .args(["-n", "-a"])
-                .arg(&self.bundle)
-                .arg("--env")
-                .arg(format!("MOSS_DATA_DIR={}", self.data.display())),
-        ) {
-            eprintln!("Could not reopen Moss: {error}");
-        }
-    }
-
-    pub fn install_on_quit(self) {
-        self.client.shared.stopped.store(true, Ordering::Release);
-        let restart = self.client.shared.restart.load(Ordering::Acquire);
-        if SAVE_FAILED.load(Ordering::Relaxed) {
-            if restart {
-                self.relaunch();
-            }
-            return;
-        }
-        let next = match self.client.snapshot().status {
-            Status::Ready(next) => next,
-            Status::Restarting(next) if restart => next,
-            _ => return,
-        };
-        let recovery = self.work.join("moss-update-recovery");
-        let helper = if fs::copy(&self.helper, &recovery).is_ok() {
-            &recovery
-        } else {
-            &self.helper
-        };
-        match self.install(next) {
-            Ok(()) if restart => self.relaunch(),
-            Ok(()) => {}
-            Err(error) => {
-                eprintln!("Moss update install: {error}");
-                if installed_version(&self.bundle).is_some_and(|version| version > self.current) {
-                    if restart {
-                        self.relaunch();
-                    }
-                    return;
-                }
-                if output(Command::new(helper).arg("recover").arg(release_url(next))).is_ok() {
-                    self.relaunch();
-                }
-            }
-        }
+fn detect_app_bundle() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = exe.ancestors().nth(3)?.to_owned();
+    if bundle.extension().and_then(|ext| ext.to_str()) == Some("app")
+        && exe == bundle.join("Contents/MacOS/Moss")
+    {
+        Some(bundle)
+    } else {
+        None
     }
 }
 
-fn check_update(
-    worker: &Client,
-    manual: Option<bool>,
-    target: &Path,
-    staging: &Path,
-    verifier: &Path,
-    key: &str,
-) -> Status {
-    let curl = Path::new("/usr/bin/curl");
-    let release = match latest(curl) {
-        Ok(release) => release,
-        Err(error) => {
-            eprintln!("Moss update check: {error}");
-            return if manual.is_some() {
-                Status::CheckFailed
-            } else {
-                Status::Idle
-            };
-        }
-    };
-    let package = match release.package(worker.version) {
-        Ok(Some(package)) => package,
-        Ok(None) => {
-            return if manual.is_some() {
-                Status::Current
-            } else {
-                Status::Idle
-            };
-        }
-        Err(error) if manual.is_some() => return error,
-        // A release can appear on GitHub before its signature is uploaded.
-        Err(_) => return Status::Idle,
-    };
-    if !worker.automatic() && manual != Some(true) {
-        return Status::Available(package.next);
-    }
-    let probe = target.with_file_name(format!(".moss-update-{}", uuid::Uuid::new_v4()));
-    if fs::create_dir(&probe)
-        .and_then(|_| fs::remove_dir(&probe))
-        .is_err()
+fn detect_helper(bundle: Option<&Path>, is_release: bool) -> Option<PathBuf> {
+    if !is_release
+        && let Some(override_path) = std::env::var_os("MOSS_UPDATE_HELPER").map(PathBuf::from)
+        && override_path.is_file()
     {
-        return Status::InstallLocation;
+        return Some(override_path);
     }
-    worker.show(Status::Downloading(0));
-    match stage(curl, verifier, key, staging, &package, worker) {
-        Ok(()) => Status::Ready(package.next),
-        Err(error) => error,
+    if let Some(bundle) = bundle {
+        let bundled = bundle.join("Contents/MacOS").join(HELPER_NAME);
+        if bundled.is_file() {
+            return Some(bundled);
+        }
+    }
+    if !is_release
+        && let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let sibling = dir.join(HELPER_NAME);
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    None
+}
+
+impl Updater {
+    pub fn start(data_dir: &Path, automatic: bool) -> Option<Self> {
+        if is_disabled_by_env() {
+            return None;
+        }
+        let is_release = option_env!("MOSS_RELEASE_BUILD") == Some("1");
+        let bundle = if !is_release {
+            std::env::var_os("MOSS_UPDATE_TARGET_APP")
+                .map(PathBuf::from)
+                .or_else(detect_app_bundle)
+        } else {
+            detect_app_bundle()
+        };
+
+        let manifest_override = if !is_release {
+            std::env::var("MOSS_UPDATE_MANIFEST_URL")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
+
+        // Outside release builds and app bundles, only activate when explicitly testing with a manifest URL.
+        if is_release && bundle.is_none() {
+            return None;
+        }
+        if !is_release && bundle.is_none() && manifest_override.is_none() {
+            return None;
+        }
+
+        let public_key = option_env!("MOSS_UPDATE_PUBLIC_KEY")
+            .filter(|key| !key.trim().is_empty())
+            .map(str::to_owned)
+            .or_else(|| bundle.as_deref().and_then(bundle_public_key))
+            .or_else(|| {
+                (!is_release)
+                    .then(|| std::env::var("MOSS_UPDATE_PUBLIC_KEY").ok())
+                    .flatten()
+                    .filter(|key| !key.trim().is_empty())
+            })?;
+
+        let helper = detect_helper(bundle.as_deref(), is_release);
+        if is_release && helper.is_none() {
+            return None;
+        }
+
+        let current = (!is_release)
+            .then(|| {
+                std::env::var("MOSS_UPDATE_CURRENT_VERSION")
+                    .ok()
+                    .and_then(|value| parse_version(&value))
+            })
+            .flatten()
+            .or_else(|| bundle.as_deref().and_then(installed_version))
+            .or_else(|| option_env!("MOSS_VERSION").and_then(parse_version))
+            .or_else(|| parse_version(env!("CARGO_PKG_VERSION")))?;
+
+        let explicit_data_dir = std::env::var_os("MOSS_DATA_DIR").map(PathBuf::from);
+        let cache_dir = (!is_release)
+            .then(|| std::env::var_os("MOSS_UPDATE_CACHE_DIR").map(PathBuf::from))
+            .flatten()
+            .unwrap_or_else(|| default_cache_dir(data_dir, explicit_data_dir.is_some()));
+
+        if ensure_private_dir(&cache_dir).is_err() {
+            return None;
+        }
+
+        let allow_local_urls = manifest_override.is_some();
+        let manifest_url = manifest_override.unwrap_or_else(|| DEFAULT_MANIFEST_URL.to_owned());
+        let receipt = receipt_path(&cache_dir);
+
+        let config = RuntimeConfig {
+            bundle,
+            helper,
+            cache_dir,
+            receipt,
+            explicit_data_dir,
+            manifest_url,
+            public_key,
+            allow_local_urls,
+            curl: PathBuf::from("/usr/bin/curl"),
+            relaunch_on_install: true,
+        };
+
+        Some(Self::start_with_config(current, automatic, config))
+    }
+
+    fn start_with_config(current: Version, automatic: bool, config: RuntimeConfig) -> Self {
+        let mut initial = Snapshot::default();
+        if let Some(bundle) = &config.bundle {
+            if let Some(receipt) = take_receipt(&config.receipt, bundle) {
+                match receipt.outcome {
+                    InstallOutcome::Succeeded if receipt.version == current => {
+                        initial.updated = Some(current);
+                        prune_staged(&config.cache_dir, &[]);
+                    }
+                    InstallOutcome::Succeeded => {}
+                    InstallOutcome::Failed {
+                        reason,
+                        release_url,
+                    } => {
+                        eprintln!("Moss previous update failed: {reason}");
+                        initial.status = Status::InstallFailed(receipt.version);
+                        initial.release_url = Some(release_url);
+                    }
+                }
+            }
+        }
+
+        let staged = find_best_staged(&config.cache_dir, current);
+        if let Some(staged_update) = &staged {
+            prune_staged(&config.cache_dir, &[staged_update.version]);
+            if initial.status == Status::Idle {
+                initial.status = Status::Ready(staged_update.version);
+                initial.release_url = Some(staged_update.release_url.clone());
+            }
+        } else {
+            prune_staged(&config.cache_dir, &[]);
+        }
+
+        let (client, inbox) = Client::new(current, automatic, initial, staged, config);
+        let worker = client.clone();
+
+        thread::spawn(move || {
+            let mut initial_check = true;
+            loop {
+                let command = if initial_check {
+                    initial_check = false;
+                    if worker.automatic() {
+                        Some((false, WorkerCommand::Check { download: true }))
+                    } else {
+                        None
+                    }
+                } else {
+                    match inbox.recv_timeout(CHECK_INTERVAL) {
+                        Ok(command) => Some((true, command)),
+                        Err(mpsc::RecvTimeoutError::Timeout) => worker
+                            .automatic()
+                            .then_some((false, WorkerCommand::Check { download: true })),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                };
+
+                if worker.shared.stopped.load(Ordering::Acquire) {
+                    break;
+                }
+
+                let Some((manual, command)) = command else {
+                    continue;
+                };
+
+                match command {
+                    WorkerCommand::Check { download } => {
+                        run_check(&worker, manual, download);
+                    }
+                    WorkerCommand::DownloadKnown => {
+                        let known = worker.shared.known_release.lock().unwrap().clone();
+                        if let Some(release) = known {
+                            let status = download_and_stage(&worker, &release);
+                            worker.show_with_url(status, Some(release.release_url));
+                        } else {
+                            run_check(&worker, true, true);
+                        }
+                    }
+                }
+            }
+        });
+
+        Self { client }
     }
 }
 
 impl Drop for Updater {
     fn drop(&mut self) {
         self.client.shared.stopped.store(true, Ordering::Release);
-        let _ = fs::remove_dir_all(&self.work);
     }
+}
+
+fn fetch_and_verify_manifest(client: &Client) -> Result<VerifiedRelease, Status> {
+    let config = &client.shared.config;
+    let cached = load_cached_manifest(&config.cache_dir);
+    let cached_etag = cached.as_ref().and_then(|entry| entry.etag.as_deref());
+
+    let fetched = fetch_manifest(
+        &config.curl,
+        &config.manifest_url,
+        cached_etag,
+        config.allow_local_urls,
+        &client.shared.stopped,
+    )
+    .map_err(|error| {
+        if !matches!(error, HttpError::Cancelled) {
+            eprintln!("Moss update check: {error}");
+        }
+        Status::CheckFailed
+    })?;
+
+    let (raw_bytes, new_etag, from_network) = match fetched {
+        ManifestFetch::NotModified => {
+            let Some(cached) = cached else {
+                return Err(Status::CheckFailed);
+            };
+            (cached.manifest_json.into_bytes(), cached.etag, false)
+        }
+        ManifestFetch::Modified { body, etag } => (body, etag, true),
+    };
+
+    let manifest = Manifest::from_json(&raw_bytes).map_err(|error| {
+        eprintln!("Moss update manifest parse: {error}");
+        Status::Unverified
+    })?;
+
+    let verified = manifest
+        .verify(
+            &config.public_key,
+            current_platform_key(),
+            current_macos_version(),
+            config.allow_local_urls,
+        )
+        .map_err(|error| {
+            eprintln!("Moss update manifest verify: {error}");
+            match error {
+                ManifestError::UnsupportedOs(_) => Status::Current,
+                _ => Status::Unverified,
+            }
+        })?;
+
+    if from_network {
+        if let Ok(manifest_json) = String::from_utf8(raw_bytes) {
+            let _ = save_cached_manifest(
+                &config.cache_dir,
+                &CachedManifest {
+                    etag: new_etag,
+                    manifest_json,
+                },
+            );
+        }
+    }
+
+    Ok(verified)
+}
+
+fn download_and_stage(client: &Client, release: &VerifiedRelease) -> Status {
+    let config = &client.shared.config;
+
+    // Reuse an already verified staged bundle if it matches this exact release and digest.
+    if let Some(existing) = load_verified_staged(&config.cache_dir, release.version) {
+        if existing.sha256.eq_ignore_ascii_case(&release.artifact.sha256) {
+            *client.shared.staged.lock().unwrap() = Some(existing);
+            return Status::Ready(release.version);
+        }
+    }
+
+    if let Some(bundle) = &config.bundle {
+        if !can_install_to(bundle) {
+            return Status::InstallLocation;
+        }
+    }
+
+    let version_dir = staged_version_dir(&config.cache_dir, release.version);
+    if ensure_private_dir(&version_dir).is_err() {
+        return Status::DownloadFailed;
+    }
+
+    let archive_path = staged_archive_path(&config.cache_dir, release.version);
+    let part_path = staged_part_path(&config.cache_dir, release.version);
+
+    let archive_already_valid = archive_path.is_file()
+        && sha256_file(&archive_path).ok().is_some_and(|(sha, size)| {
+            size == release.artifact.size && sha.eq_ignore_ascii_case(&release.artifact.sha256)
+        });
+
+    if !archive_already_valid {
+        let _ = fs::remove_file(&archive_path);
+        client.show(Status::Downloading(0));
+        let download_result = download_file(
+            &config.curl,
+            &release.artifact.url,
+            &part_path,
+            &archive_path,
+            release.artifact.size,
+            config.allow_local_urls,
+            &client.shared.stopped,
+            |percent| client.show(Status::Downloading(percent)),
+        );
+        if let Err(error) = download_result {
+            if !matches!(error, HttpError::Cancelled) {
+                eprintln!("Moss update download: {error}");
+            }
+            return Status::DownloadFailed;
+        }
+    }
+
+    client.show(Status::Downloading(100));
+
+    match sha256_file(&archive_path) {
+        Ok((sha, size))
+            if size == release.artifact.size
+                && sha.eq_ignore_ascii_case(&release.artifact.sha256) => {}
+        Ok(_) => {
+            eprintln!("Moss update archive failed SHA-256 verification");
+            let _ = fs::remove_file(&archive_path);
+            return Status::Unverified;
+        }
+        Err(error) => {
+            eprintln!("Moss update archive read error: {error}");
+            let _ = fs::remove_file(&archive_path);
+            return Status::Unverified;
+        }
+    }
+
+    if client.shared.stopped.load(Ordering::Acquire) {
+        return Status::DownloadFailed;
+    }
+
+    let app_path = match extract_archive(&archive_path, &version_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Moss update extraction failed: {error}");
+            let _ = fs::remove_dir_all(&version_dir);
+            return Status::Unverified;
+        }
+    };
+
+    if let Err(error) = verify_bundle(&app_path, release.version) {
+        eprintln!("Moss update bundle verification failed: {error}");
+        let _ = fs::remove_dir_all(&version_dir);
+        return Status::Unverified;
+    }
+
+    let marker = StagedMarker {
+        version: release.version,
+        sha256: release.artifact.sha256.clone(),
+        release_url: release.release_url.clone(),
+    };
+    if let Err(error) = write_staged_marker(&config.cache_dir, &marker) {
+        eprintln!("Moss update marker write failed: {error}");
+        return Status::DownloadFailed;
+    }
+
+    let staged = StagedUpdate {
+        version: release.version,
+        app_path,
+        release_url: release.release_url.clone(),
+        sha256: release.artifact.sha256.clone(),
+    };
+    *client.shared.staged.lock().unwrap() = Some(staged);
+    prune_staged(&config.cache_dir, &[release.version]);
+    Status::Ready(release.version)
+}
+
+fn run_check(client: &Client, manual: bool, download: bool) {
+    let existing_staged = client.shared.staged.lock().unwrap().clone();
+
+    let verified = match fetch_and_verify_manifest(client) {
+        Ok(release) => release,
+        Err(Status::Current) => {
+            if let Some(staged) = existing_staged {
+                client.show_with_url(Status::Ready(staged.version), Some(staged.release_url));
+            } else if manual {
+                client.show(Status::Current);
+            } else {
+                client.show(Status::Idle);
+            }
+            return;
+        }
+        Err(error_status) => {
+            if let Some(staged) = existing_staged.filter(|_| !manual) {
+                client.show_with_url(Status::Ready(staged.version), Some(staged.release_url));
+            } else if manual {
+                client.show(error_status);
+            } else {
+                client.show(Status::Idle);
+            }
+            return;
+        }
+    };
+
+    if verified.version <= client.version {
+        *client.shared.known_release.lock().unwrap() = None;
+        *client.shared.staged.lock().unwrap() = None;
+        prune_staged(&client.shared.config.cache_dir, &[]);
+        client.show(if manual { Status::Current } else { Status::Idle });
+        return;
+    }
+
+    *client.shared.known_release.lock().unwrap() = Some(verified.clone());
+
+    // If this exact release is already staged and verified, keep or restore Ready immediately.
+    if let Some(staged) = existing_staged
+        .as_ref()
+        .filter(|staged| {
+            staged.version == verified.version
+                && staged.sha256.eq_ignore_ascii_case(&verified.artifact.sha256)
+        })
+    {
+        if verify_bundle(&staged.app_path, staged.version).is_ok() {
+            client.show_with_url(Status::Ready(staged.version), Some(staged.release_url.clone()));
+            return;
+        }
+    }
+
+    if !client.automatic() && !download {
+        client.show_with_url(
+            Status::Available(verified.version),
+            Some(verified.release_url),
+        );
+        return;
+    }
+
+    let status = download_and_stage(client, &verified);
+    if !manual && matches!(status, Status::DownloadFailed) {
+        if let Some(staged) = existing_staged {
+            client.show_with_url(Status::Ready(staged.version), Some(staged.release_url));
+            return;
+        }
+    }
+    client.show_with_url(status, Some(verified.release_url));
 }
 
 #[cfg(test)]

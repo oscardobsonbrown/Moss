@@ -8,19 +8,15 @@ if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|
     exit 1
 fi
 if [ "$profile" = debug ]; then
-    cargo build -p moss -p moss-mcp --jobs 2
+    cargo build -p moss -p moss-mcp -p moss-updater --jobs 2
 else
-    cargo build --profile "$profile" -p moss -p moss-mcp --jobs 2
+    cargo build --profile "$profile" -p moss -p moss-mcp -p moss-updater --jobs 2
 fi
 app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "target/$profile/moss" "$app/Contents/MacOS/Moss"
 cp "target/$profile/moss-mcp" "$app/Contents/MacOS/moss-mcp"
-if [ "${MOSS_RELEASE_BUILD:-}" = 1 ] && [ -n "${MOSS_UPDATE_PUBLIC_KEY:-}" ]; then
-    xcrun swiftc -O scripts/moss-update-helper.swift -o "$app/Contents/MacOS/moss-update-helper"
-else
-    rm -f "$app/Contents/MacOS/moss-update-helper"
-fi
+cp "target/$profile/moss-update-helper" "$app/Contents/MacOS/moss-update-helper"
 cp crates/moss-app/assets/Moss.icns "$app/Contents/Resources/Moss.icns"
 cp crates/moss-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
 cp crates/moss-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"
@@ -44,8 +40,20 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
-codesign --force --sign - "$app"
-printf '%s\n' "Built $app (local, ad hoc signature)."
+if [ -n "${MOSS_UPDATE_PUBLIC_KEY:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Add :MossUpdatePublicKey string $MOSS_UPDATE_PUBLIC_KEY" "$app/Contents/Info.plist"
+fi
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-mcp"
+    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-update-helper"
+    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/Moss"
+    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+    codesign --verify --deep --strict --verbose=2 "$app"
+    printf '%s\n' "Built $app (Developer ID signed)."
+else
+    codesign --force --deep --sign - "$app"
+    printf '%s\n' "Built $app (local, ad hoc signature)."
+fi
 if [ "${CI:-}" != true ] && [ "${GITHUB_ACTIONS:-}" != true ]; then
     scripts/install-macos.sh "$app" /Applications/Moss.app
 fi

@@ -234,9 +234,6 @@ fn spec() -> AppSpec<State> {
 fn save_before_close(s: &mut State, _: &mut Tx) {
     if s.flush_current() {
         s.discard_all_drafts();
-    } else {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        updater::defer_install();
     }
     s.save_preferences();
 }
@@ -335,9 +332,7 @@ fn main() {
     app.run();
     drop(local_service.lock().unwrap().take());
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    if let Some(updater) = updater {
-        updater.install_on_quit();
-    }
+    drop(updater);
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ moss-core.workspace = true
 moss-engine.workspace = true
 moss-maplibre = { path = "../moss-maplibre" }
 moss-mcp = { path = "../moss-mcp" }
+moss-updater.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
