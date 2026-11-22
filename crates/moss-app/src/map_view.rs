@@ -7,14 +7,15 @@ use std::{collections::BTreeMap, path::PathBuf, sync::mpsc, time::Duration};
 mod fit;
 #[path = "map_view/network.rs"]
 mod network;
-#[path = "map_view/theme.rs"]
-mod theme;
+#[path = "map_view/surface.rs"]
+pub(crate) mod surface;
 #[path = "map_view/tile_loader.rs"]
 mod tile_loader;
 #[path = "map_view/viewport.rs"]
 mod viewport;
 pub(crate) use network::attribution;
 use network::photon;
+pub use surface::MapSurface;
 pub use tile_loader::MapTileLoader;
 use viewport::MAX_LAT;
 pub use viewport::{MapTile, MapViewport, TilePosition};
@@ -58,6 +59,7 @@ pub struct MapState {
     pub error: Option<String>,
     pub tiles: Vec<MapTile>,
     pub tile_error: Option<String>,
+    pub surface: Option<MapSurface>,
     pub place_query: TextEdit,
     pub place_name: TextEdit,
     pub latitude: TextEdit,
@@ -103,6 +105,7 @@ impl Default for MapState {
             error: None,
             tiles: vec![],
             tile_error: None,
+            surface: None,
             place_query: TextEdit::new(""),
             place_name: TextEdit::new(""),
             latitude: TextEdit::new(""),
@@ -141,7 +144,9 @@ impl MapState {
         }
     }
     pub fn set_waker(&mut self, wake: Waker) {
-        self.tile_loader = Some(MapTileLoader::new(wake.clone()));
+        if !surface::use_maplibre() {
+            self.tile_loader = Some(MapTileLoader::new(wake.clone()));
+        }
         self.wake = Some(wake);
     }
     pub fn invalidate(&mut self) {
@@ -347,6 +352,9 @@ fn fit_context(
 }
 impl crate::state::State {
     pub fn retry_map_tiles(&mut self) {
+        if let Some(surface) = &self.database_views.map.surface {
+            surface.retry();
+        }
         if let Some(loader) = &mut self.database_views.map.tile_loader {
             loader.retry();
         }
@@ -560,6 +568,7 @@ pub fn poll(s: &mut crate::state::State, _time: f64, tx: &mut Tx) -> bool {
             if let Some(loader) = &mut m.tile_loader {
                 loader.pause();
             }
+            m.surface = None;
             m.tile_viewport = None;
             m.query_pending = None;
             if s.place_picker.is_none() {
@@ -577,6 +586,7 @@ pub fn poll(s: &mut crate::state::State, _time: f64, tx: &mut Tx) -> bool {
     let fit_identity = fit_context(&db_id, &view_id, &query, &title, fit_place, generation);
     let key = format!("{db_id}/{view_id}");
     let moving = s.database_views.map_interaction.is_moving();
+    let dark_hint = s.prefs.dark.unwrap_or(false);
     let m = &mut s.database_views.map;
     let mut changed = false;
     if m.view_key != key {
@@ -660,7 +670,29 @@ pub fn poll(s: &mut crate::state::State, _time: f64, tx: &mut Tx) -> bool {
             }
         }
     }
-    if let Some(loader) = &mut m.tile_loader {
+    if surface::use_maplibre() && m.tile_loader.is_none() {
+        if m.surface.is_none() {
+            if let Some(wake) = m.wake.clone() {
+                m.surface = MapSurface::start(m.viewport, path.clone(), dark_hint, 2.0, wake);
+                if m.surface.is_some() {
+                    m.tile_viewport = Some(m.viewport);
+                    changed = true;
+                }
+            }
+        }
+        if let Some(surface) = &m.surface {
+            if m.tile_viewport != Some(m.viewport) {
+                surface.set_viewport(m.viewport);
+                m.tile_viewport = Some(m.viewport);
+                changed = true;
+            }
+            let next_err = surface.error();
+            if m.tile_error != next_err {
+                m.tile_error = next_err;
+                changed = true;
+            }
+        }
+    } else if let Some(loader) = &mut m.tile_loader {
         if m.tile_viewport != Some(m.viewport) {
             loader.request(m.viewport, path.clone());
             m.tile_viewport = Some(m.viewport);

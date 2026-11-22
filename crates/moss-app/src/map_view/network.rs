@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+const DEFAULT_PROVIDER: &str = "moss-maplibre://openfreemap";
+
 fn valid_endpoint(value: &str) -> bool {
     value.starts_with("https://") && !value.chars().any(char::is_control)
 }
@@ -16,10 +18,10 @@ pub(super) fn tile_template() -> String {
         .filter(|s| {
             valid_endpoint(s) && s.contains("{z}") && s.contains("{x}") && s.contains("{y}")
         })
-        .unwrap_or_else(|| super::theme::PROVIDER.into())
+        .unwrap_or_else(|| DEFAULT_PROVIDER.into())
 }
 pub(crate) fn attribution() -> &'static str {
-    if tile_template() == super::theme::PROVIDER {
+    if tile_template() == DEFAULT_PROVIDER {
         "© OpenStreetMap contributors · © OpenMapTiles"
     } else {
         "© OpenStreetMap contributors"
@@ -62,8 +64,12 @@ pub(super) fn load_tile(
     template: &str,
     tile: &TilePosition,
 ) -> Result<Vec<u8>, String> {
-    if template == super::theme::PROVIDER {
-        return super::theme::load(dir, tile);
+    if template == DEFAULT_PROVIDER {
+        return Err(if cfg!(test) || std::env::var("MOSS_MAP_NETWORK").as_deref() == Ok("off") {
+            "Map tiles are disabled in tests or offline.".into()
+        } else {
+            "Map rendering requires macOS Metal or MOSS_MAP_TILE_URL.".into()
+        });
     }
     let path = tile_path(dir, template, tile);
     let cached = read_tile(&path).ok();

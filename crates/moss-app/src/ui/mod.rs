@@ -64,6 +64,7 @@ pub(crate) const COLLAPSED_SIDEBAR_WIDTH: f32 = 44.;
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let dark = s.prefs.dark.unwrap_or(cx.system_dark());
     let mut t = theme::Theme::new(dark);
+    t.scale = cx.env().scale;
     t.caret_visible = s.caret.visible;
     let window_width = cx.layout_with("root", |r| r[2]).unwrap_or(850.);
     let has_side_peek = s

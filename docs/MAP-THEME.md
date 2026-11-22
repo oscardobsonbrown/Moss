@@ -1,27 +1,23 @@
 # Native map theme
 
-Moss uses an OSM-based interpretation of the requested [Apple Map Style](https://snazzymaps.com/style/241528/apple-map-style). That reference is a Google Maps feature-style array. It cannot be applied to the old pre-rendered OSM PNG tiles.
+Moss uses an OSM-based interpretation of the requested [Apple Map Style](https://snazzymaps.com/style/241528/apple-map-style) in both light and dark themes.
 
-The default source is now [OpenFreeMap](https://openfreemap.org/). Its OpenMapTiles vector features are decoded on the existing map tile worker. Moss colors the features and writes a small SVG tile. Rune rasterizes that SVG on its image worker. Camera movement, pin placement and the retained image cache are unchanged.
+On macOS arm64, the default renderer is **MapLibre Native (Metal)** via `crates/moss-maplibre`, streaming vector tiles from [OpenFreeMap](https://openfreemap.org/) (`https://tiles.openfreemap.org/planet`). A custom `DirectIOSurfaceResource` renders the visible viewport directly into a 4-slot `IOSurface`-backed `CVPixelBuffer` ring (`MTLPixelFormatBGRA8Unorm`) with non-blocking async Metal commits, and hands completed buffers straight to `rune::NativeSurface` with zero CPU pixel readback and zero intermediate blit passes. Camera movement, pin placement, clustering, and side-peek opening stay unchanged; maps remain pin-less unless the database configures a Place property with location records.
 
 | Before | After | Why |
 | --- | --- | --- |
-| Fixed OSM raster cartography | Feature colors based on the requested reference | Style land, water and roads separately |
-| Dense road and POI labels | City and town labels remain; road and POI labels are omitted | Keep the map clear around database pins |
-| External map-style APIs would need a key | OpenFreeMap vector tiles and native rendering | Keep the map usable without an account, paid service or WebView |
+| CPU MVT → SVG → `resvg` tile pipeline | Direct-to-IOSurface MapLibre Native Metal renderer | Smooth 120 Hz-capable vector rendering with zero CPU readback |
+| Single light-only tile palette | Embedded 22-layer Light and Dark Moss Apple styles | Follow Moss light/dark/system theme with live style switching |
+| External map-style APIs would need a key | OpenFreeMap vector tiles + native Metal rendering | Keep the map usable without an account, paid service, or WebView |
 
-The main colors are warm land `#f7f1df`, natural areas `#d0e3b4`, parks `#bde6ab`, water `#a2daf2`, medical areas `#fbd3da`, airports `#cfb2db`, yellow highways `#ffe15f` with `#efd151` edges, and white arterial roads. Local roads use a softer dark neutral. Building shapes, label placement and geometry follow OpenMapTiles rather than Google. This is not an exact Apple or Google map reproduction.
-
-City/town names use the bundled Geist font, converted to glyph paths on the worker. Names prefer English, then the Latin-name field, then the source name. Unsupported glyphs cause that label to be omitted. Road and label widths use screen pixels. Zoom levels above the source's level 14 crop the source vector tile into the requested level, through level 18, rather than enlarging its labels.
+The light palette uses warm land `#f7f1df`, natural areas `#d0e3b4`, parks `#bde6ab`, water `#a2daf2`, medical areas `#fbd3da`, airports `#cfb2db`, yellow highways `#ffe15f` with `#efd151` edges, white arterials, and flat 2D buildings at zoom 14+. The dark palette adapts the same 22-layer structure to `#1f2124` land, `#213426` parks, `#162b3d` water, `#282b30` buildings, `#444952` arterials, and `#b89434` highways. Road labels exclude `rail`, `transit`, `path`, `track`, and `service` classes to avoid station platform clutter.
 
 ## Bounds and cache
 
-- Encoded/decompressed tile input and generated SVG output are limited to 2 MiB each.
-- The MVT reader limits layers, features, tag counts, geometry words, integer length and coordinates. SVG output contains numeric paths, escaped titles and local colors; no external fonts or images are referenced.
-- At most 24 city/town labels are drawn per tile, with bounded label lengths and overlap checks.
-- The themed disk cache is versioned separately from the old raster cache. Source PBFs, rendered SVGs and metadata share one budget of 512 entries and 48,000,000 bytes (48 MB). Source metadata is cached for one day; rendered tiles and vector source tiles are refreshed after seven days. Cached rendered tiles remain usable offline.
-- The existing loader retains at most 128 decoded images, with at most four fetch/decode jobs and its two-entry request queue. Themed images rasterize at 512 × 512; retained pixel mip chains can use about 171 MiB per loader. It fetches the visible viewport only. Theme fetch and disk-budget work is serialized across loaders, so several Dashboard maps cannot exceed the provider's parallel request bound. The new theme adds no region download or offscreen prefetch.
-- `MOSS_MAP_TILE_URL` keeps the previous custom HTTPS PNG-provider behavior and cache paths.
+- MapLibre Native stores its local SQLite ambient cache at `<workspace>/map-tile-cache/maplibre-cache.db` with a 48 MB (`48 * 1024 * 1024` bytes) ceiling, staying below OpenFreeMap's 50 MB offline cache bound. Cached vector tiles and font glyphs remain usable offline.
+- MapLibre Native runs on a dedicated worker thread per active map surface (main Map view or Dashboard map widget) and is dropped when the user leaves the view, so background fetches and GPU encoding never block the UI thread.
+- `crates/moss-maplibre/build.rs` links the SHA-256-verified precompiled `libmaplibre-native-core-amalgam-macos-arm64-metal.a` archive (`core-a33d3f00fb9dbf9117ce18edd799aa0ca5bcce5b`) with no CMake or Homebrew dylib dependencies.
+- `MOSS_MAP_TILE_URL` keeps the previous custom HTTPS PNG-provider behavior and cache paths. `MOSS_MAP_NETWORK=off` disables network map access. Non-macOS targets continue to fall back to `MapTileLoader`.
 
 The public service permits use in apps without an API key, including commercial use. Its [current terms](https://openfreemap.org/tos/) limit an offline-area download to 3,000 tiles or 50 MB, at most four parallel requests, and an app-specific User-Agent. Moss uses one worker per loader, sends an app-specific User-Agent, and keeps its theme cache below that size. The map shows OpenStreetMap and OpenMapTiles attribution, as required by the [OpenFreeMap attribution guide](https://openfreemap.org/#attribution) and [OpenMapTiles schema](https://openmaptiles.org/docs/schema/).
 
