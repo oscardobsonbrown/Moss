@@ -1264,6 +1264,7 @@ mod ui_tests {
 
     #[test]
     fn record_peek_drag_creates_persistent_columns_and_split_stays_in_column() {
+        let _families = rune::text::with_families(crate::fonts::FAMILIES.0, crate::fonts::FAMILIES.1);
         let path = std::env::temp_dir().join(format!("moss-peek-drag-{}", moss_core::new_id()));
         let mut s = State::open(path.clone(), None).unwrap();
         s.new_page(true, None);

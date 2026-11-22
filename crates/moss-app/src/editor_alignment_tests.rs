@@ -301,6 +301,7 @@ fn page_customization_controls_align_and_show_hover_and_focus() {
 
 #[test]
 fn record_page_customization_controls_align_with_title() {
+    let _families = rune::text::with_families("Inter", "IBM Plex Mono");
     let (mut rt, path) = database_runtime(0);
     rt.state.create_inline(Default::default(), false);
     assert!(rt.state.finish_cell(false));
