@@ -44,10 +44,17 @@ if [ -n "${MOSS_UPDATE_PUBLIC_KEY:-}" ]; then
     /usr/libexec/PlistBuddy -c "Add :MossUpdatePublicKey string $MOSS_UPDATE_PUBLIC_KEY" "$app/Contents/Info.plist"
 fi
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
-    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-mcp"
-    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-update-helper"
-    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/Moss"
-    codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+    if [ -n "${APPLE_SIGNING_KEYCHAIN:-}" ]; then
+        codesign --force --options runtime --timestamp --keychain "$APPLE_SIGNING_KEYCHAIN" --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-mcp"
+        codesign --force --options runtime --timestamp --keychain "$APPLE_SIGNING_KEYCHAIN" --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-update-helper"
+        codesign --force --options runtime --timestamp --keychain "$APPLE_SIGNING_KEYCHAIN" --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/Moss"
+        codesign --force --options runtime --timestamp --keychain "$APPLE_SIGNING_KEYCHAIN" --sign "$APPLE_SIGNING_IDENTITY" "$app"
+    else
+        codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-mcp"
+        codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/moss-update-helper"
+        codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app/Contents/MacOS/Moss"
+        codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$app"
+    fi
     codesign --verify --deep --strict --verbose=2 "$app"
     printf '%s\n' "Built $app (Developer ID signed)."
 else
