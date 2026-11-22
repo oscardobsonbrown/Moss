@@ -4,10 +4,11 @@ use crate::state::State;
 use moss_core::{FilterOp, Property, PropertyKind};
 use rune::*;
 
-const TYPES: [(PropertyKind, &str, &str); 12] = [
+const TYPES: [(PropertyKind, &str, &str); 13] = [
     (PropertyKind::Text, "text", "Text"),
     (PropertyKind::Number, "number", "Number"),
     (PropertyKind::Select, "select", "Select"),
+    (PropertyKind::MultiSelect, "multi-select", "Multi-select"),
     (PropertyKind::Status, "status", "Status"),
     (PropertyKind::Date, "date", "Date"),
     (PropertyKind::Checkbox, "checkbox", "Checkbox"),
@@ -20,10 +21,56 @@ const TYPES: [(PropertyKind, &str, &str); 12] = [
 ];
 
 use super::phosphor::{
-    ARROW_LINE_LEFT as INSERT_LEFT, ARROW_LINE_RIGHT as INSERT_RIGHT, FUNNEL_SIMPLE as FILTER,
-    PUSH_PIN as FREEZE, SIGMA as CALCULATE, SORT_ASCENDING as SORT, SQUARES_FOUR as GROUP,
-    TEXT_ALIGN_LEFT as WRAP,
+    ARROW_LINE_LEFT as INSERT_LEFT, ARROW_LINE_RIGHT as INSERT_RIGHT, CARET_LEFT as BACK,
+    CARET_RIGHT as CHEVRON, FUNNEL_SIMPLE as FILTER, PUSH_PIN as FREEZE, SIGMA as CALCULATE,
+    SORT_ASCENDING as SORT, SQUARES_FOUR as GROUP, TEXT_ALIGN_LEFT as WRAP,
 };
+
+fn type_list(active: PropertyKind, max_h: Option<f32>, t: Theme) -> El {
+    let mut list = col().w_full().min_h(0.).shrink();
+    if let Some(h) = max_h {
+        list = list.max_h(h).scroll(ScrollSpec {
+            stick_bottom: false,
+        });
+    }
+    list.children(TYPES.into_iter().map(|(kind, key, name)| {
+        let selected = active == kind;
+        row()
+            .key(format!("property-type-{key}"))
+            .w_full()
+            .h(32.)
+            .px(10.)
+            .gap(8.)
+            .center_y()
+            .radius(4.)
+            .fill(if selected { t.selected } else { t.menu })
+            .hover(t.hover)
+            .role("menuitemradio")
+            .label(name)
+            .checked(selected)
+            .focusable(true)
+            .child(
+                el().size(20., 20.)
+                    .center()
+                    .child(super::property_icons::view(kind, t.muted)),
+            )
+            .child(
+                text(name)
+                    .font(TextStyle::new(14., 400.).lh(20.))
+                    .color(t.text)
+                    .grow(1.),
+            )
+            .children(selected.then(|| {
+                el().size(20., 20.)
+                    .center()
+                    .child(super::icons::glyph("✓", 14., t.text))
+            }))
+            .on_press_tx(move |s: &mut State, tx| {
+                s.choose_property_type(kind);
+                tx.instant();
+            })
+    }))
+}
 
 fn action(key: &str, name: &str, icon: &'static Icon, t: Theme) -> El {
     row()
@@ -136,6 +183,134 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     .hover(t.error.alpha(0.85)).role("button").label("Delete property").focusable(true)
                     .child(text("Delete property").font(TextStyle::new(14., 500.)).color(Color::WHITE))
                     .on_press_tx(|s: &mut State, tx| { s.delete_database_property(); tx.instant(); })));
+    } else if editor.pane == PropertyPane::ConfirmType {
+        let name = property.map_or("property", |p| p.name.as_str());
+        let from_kind = property.map_or(editor.kind, |p| p.kind);
+        let target_kind = editor.pending_kind.unwrap_or(editor.kind);
+        let target_label = type_name(target_kind);
+        body = body
+            .child(
+                text(format!("Change {name} to {target_label}?"))
+                    .font(TextStyle::new(14., 600.))
+                    .color(t.text)
+                    .wrap(),
+            )
+            .child(label(type_change_warning(from_kind, target_kind), t.muted).wrap())
+            .child(
+                row()
+                    .w_full()
+                    .gap(6.)
+                    .child(
+                        button("property-type-cancel", "Cancel", t)
+                            .grow(1.)
+                            .center()
+                            .on_press_tx(|s: &mut State, tx| {
+                                s.cancel_change_property_type();
+                                tx.instant();
+                            }),
+                    )
+                    .child(
+                        row()
+                            .key("property-type-confirm")
+                            .grow(1.)
+                            .h(30.)
+                            .center()
+                            .radius(4.)
+                            .fill(t.blue)
+                            .hover(t.blue.alpha(0.85))
+                            .role("button")
+                            .label("Change type")
+                            .focusable(true)
+                            .child(
+                                text("Change type")
+                                    .font(TextStyle::new(14., 500.))
+                                    .color(Color::WHITE),
+                            )
+                            .on_press_tx(|s: &mut State, tx| {
+                                s.confirm_change_property_type();
+                                tx.instant();
+                            }),
+                    ),
+            );
+    } else if editor.pane == PropertyPane::Type {
+        body = body
+            .child(
+                action("property-type-back", "Type", &BACK, t)
+                    .h(28.)
+                    .w_full()
+                    .on_press_tx(|s: &mut State, tx| {
+                        if let Some(e) = &mut s.database_property_editor {
+                            e.pane = PropertyPane::Main;
+                            e.error = None;
+                        }
+                        tx.instant();
+                    }),
+            )
+            .child(el().h(1.).w_full().fill(t.line))
+            .child(type_list(editor.kind, Some(340.), t));
+    } else if editor.pane == PropertyPane::OptionColor {
+        let opt_name = editor.color_option.clone().unwrap_or_default();
+        let active_color = property
+            .map(|p| moss_core::resolved_option_color(p, &opt_name))
+            .unwrap_or("gray");
+        let opt = opt_name.clone();
+        let colors = super::property_value::option_color_choices(
+            "editor-color",
+            active_color,
+            t,
+            move |s, color| {
+                s.set_editor_option_color(&opt, color);
+            },
+        );
+        body = body
+            .child(
+                action(
+                    "editor-option-color-back",
+                    &format!("Color: {opt_name}"),
+                    &BACK,
+                    t,
+                )
+                .h(28.)
+                .w_full()
+                .on_press_tx(|s: &mut State, tx| {
+                    if let Some(e) = &mut s.database_property_editor {
+                        e.pane = PropertyPane::Main;
+                        e.color_option = None;
+                        e.error = None;
+                    }
+                    tx.instant();
+                }),
+            )
+            .child(el().h(1.).w_full().fill(t.line))
+            .child(colors);
+    } else if editor.pane == PropertyPane::DateFormat {
+        let active_format = property
+            .and_then(|p| p.config.get("date_format"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("full");
+        let formats = super::property_value::date_format_choices(
+            "editor-date-format",
+            active_format,
+            t,
+            |s, format| {
+                s.set_editor_date_format(format);
+            },
+        );
+        body = body
+            .child(
+                action("editor-date-format-back", "Date format", &BACK, t)
+                    .h(28.)
+                    .w_full()
+                    .on_press_tx(|s: &mut State, tx| {
+                        if let Some(e) = &mut s.database_property_editor {
+                            e.pane = PropertyPane::Main;
+                            e.error = None;
+                        }
+                        tx.instant();
+                    }),
+            )
+            .child(el().h(1.).w_full().fill(t.line))
+            .child(formats);
     } else if editor.pane == PropertyPane::Filter {
         let text_kind = property.is_some_and(|p| {
             matches!(
@@ -202,12 +377,14 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                     (!matches!(editor.filter_op, FilterOp::IsEmpty | FilterOp::IsNotEmpty)).then(
                         || {
                             super::inputs::field(
-                                &s.table_filter_input,
+                                &editor.filter_input,
                                 "table-filter-value",
                                 "Value",
                                 t,
                             )
-                            .on_edit(|s: &mut State| &mut s.table_filter_input)
+                            .on_edit(|s: &mut State| {
+                                &mut s.database_property_editor.as_mut().unwrap().filter_input
+                            })
                             .on_submit(|s: &mut State, tx| {
                                 s.set_table_filter();
                                 tx.instant();
@@ -317,7 +494,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
         let name_input = if is_new {
             super::inputs::invalid(
                 super::inputs::field(
-                    &s.database_property_input,
+                    &editor.name_input,
                     "property-name-input",
                     "Property name",
                     t,
@@ -327,7 +504,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             )
         } else {
             super::inputs::line(
-                &s.database_property_input,
+                &editor.name_input,
                 TextStyle::new(14., 400.).lh(20.),
                 t,
             )
@@ -337,7 +514,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             .placeholder("Property name", t.input_hint)
         }
         .label("Property name")
-        .on_edit(|s: &mut State| &mut s.database_property_input)
+        .on_edit(|s: &mut State| &mut s.database_property_editor.as_mut().unwrap().name_input)
         .on_submit(|s: &mut State, tx| {
             s.save_database_property();
             tx.instant();
@@ -380,88 +557,182 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
         };
         body = body.child(name);
         if is_new {
-            body = body.child(label("Property type", t.muted).px(10.));
-            let types = col()
-                .w_full()
-                .min_h(0.)
-                .max_h(
-                    if matches!(
-                        editor.kind,
-                        PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
-                    ) {
-                        112.
-                    } else {
-                        248.
-                    },
-                )
-                .shrink()
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .children(TYPES.into_iter().map(|(kind, key, name)| {
-                    let selected = editor.kind == kind;
-                    row()
-                        .key(format!("property-type-{key}"))
-                        .w_full()
-                        .h(32.)
-                        .px(10.)
-                        .gap(8.)
-                        .center_y()
-                        .radius(4.)
-                        .fill(if selected { t.selected } else { t.menu })
-                        .hover(t.hover)
-                        .role("menuitemradio")
-                        .label(name)
-                        .checked(selected)
-                        .focusable(true)
-                        .child(
-                            el().size(20., 20.)
-                                .center()
-                                .child(super::property_icons::view(kind, t.muted)),
-                        )
-                        .child(
-                            text(name)
-                                .font(TextStyle::new(14., 400.).lh(20.))
-                                .color(t.text)
-                                .grow(1.),
-                        )
-                        .children(selected.then(|| {
-                            el().size(20., 20.)
-                                .center()
-                                .child(super::icons::glyph("✓", 14., t.text))
-                        }))
-                        .on_press_tx(move |s: &mut State, tx| {
-                            if let Some(editor) = &mut s.database_property_editor {
-                                editor.kind = kind;
-                                editor.error = None;
-                            }
-                            if matches!(
-                                kind,
-                                PropertyKind::Formula
-                                    | PropertyKind::Relation
-                                    | PropertyKind::Rollup
-                            ) {
-                                s.reset_advanced_property();
-                            }
-                            tx.instant();
-                        })
-                }));
-            body = body.child(types);
-            if editor.kind == PropertyKind::Select {
+            body = body.child(label("Property type", t.muted).px(10.)).child(
+                type_list(
+                    editor.kind,
+                    Some(
+                        if matches!(
+                            editor.kind,
+                            PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+                        ) {
+                            112.
+                        } else {
+                            248.
+                        },
+                    ),
+                    t,
+                ),
+            );
+            if matches!(editor.kind, PropertyKind::Select | PropertyKind::MultiSelect) {
                 body = body.child(
                     super::inputs::field(
-                        &s.database_property_options_input,
+                        &editor.options_input,
                         "property-options-input",
                         "Options, separated by commas",
                         t,
                     )
                     .label("Select options")
-                    .on_edit(|s: &mut State| &mut s.database_property_options_input)
+                    .on_edit(|s: &mut State| {
+                        &mut s.database_property_editor.as_mut().unwrap().options_input
+                    })
                     .on_submit(|s: &mut State, tx| {
                         s.save_database_property();
                         tx.instant();
                     }),
                 );
+            }
+        }
+        if !is_new
+            && !editor.rename_only
+            && property.is_some_and(|p| moss_core::property_type_convertible(p.kind))
+        {
+            let current_type = type_name(editor.kind);
+            body = body.child(
+                row()
+                    .key("property-type-trigger")
+                    .w_full()
+                    .h(28.)
+                    .px(8.)
+                    .gap(6.)
+                    .center_y()
+                    .radius(4.)
+                    .hover(t.hover)
+                    .press(t.selected)
+                    .role("button")
+                    .label(format!("Type: {current_type}"))
+                    .focusable(true)
+                    .child(
+                        el().size(20., 20.)
+                            .center()
+                            .child(super::property_icons::view(editor.kind, t.muted)),
+                    )
+                    .child(label("Type", t.text).grow(1.).truncate())
+                    .child(label(current_type, t.muted).shrink())
+                    .child(
+                        el().size(16., 20.)
+                            .center()
+                            .child(rune::icon(&CHEVRON, 14.).color(t.muted)),
+                    )
+                    .on_press_tx(|s: &mut State, tx| {
+                        if let Some(e) = &mut s.database_property_editor {
+                            e.pane = PropertyPane::Type;
+                            e.error = None;
+                        }
+                        tx.instant();
+                    }),
+            );
+        }
+        if !is_new && !editor.rename_only {
+            if let Some(prop) = property.filter(|p| {
+                p.kind == PropertyKind::Date && editor.kind == PropertyKind::Date
+            }) {
+                let current_format = prop
+                    .config
+                    .get("date_format")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("full");
+                let format_label = super::property_value::date_format_label(current_format);
+                body = body.child(
+                    row()
+                        .key("property-date-format-trigger")
+                        .w_full()
+                        .h(28.)
+                        .px(8.)
+                        .gap(6.)
+                        .center_y()
+                        .radius(4.)
+                        .hover(t.hover)
+                        .press(t.selected)
+                        .role("button")
+                        .label(format!("Date format: {format_label}"))
+                        .focusable(true)
+                        .child(
+                            el().size(20., 20.)
+                                .center()
+                                .child(rune::icon(&super::phosphor::CALENDAR_BLANK, 16.).color(t.muted)),
+                        )
+                        .child(label("Date format", t.text).grow(1.).truncate())
+                        .child(label(format_label, t.muted).shrink())
+                        .child(
+                            el().size(16., 20.)
+                                .center()
+                                .child(rune::icon(&CHEVRON, 14.).color(t.muted)),
+                        )
+                        .on_press_tx(|s: &mut State, tx| {
+                            if let Some(e) = &mut s.database_property_editor {
+                                e.pane = PropertyPane::DateFormat;
+                                e.error = None;
+                            }
+                            tx.instant();
+                        }),
+                );
+            }
+            if let Some(prop) = property.filter(|p| {
+                matches!(
+                    p.kind,
+                    PropertyKind::Select | PropertyKind::MultiSelect | PropertyKind::Status
+                ) && editor.kind == p.kind
+            }) {
+                let options = moss_core::property_options(prop);
+                if !options.is_empty() {
+                    let list = col()
+                        .w_full()
+                        .gap(2.)
+                        .children(options.into_iter().enumerate().map(|(i, opt)| {
+                            let bg = super::property_value::option_tag_fill(&opt.color, t.dark);
+                            let opt_click = opt.name.clone();
+                            row()
+                                .key(format!("editor-option-color-{i}"))
+                                .w_full()
+                                .h(28.)
+                                .px(8.)
+                                .gap(6.)
+                                .center_y()
+                                .radius(4.)
+                                .hover(t.hover)
+                                .role("button")
+                                .label(format!("Change color for {}", opt.name))
+                                .focusable(true)
+                                .child(
+                                    row()
+                                        .h(20.)
+                                        .max_w(190.)
+                                        .min_w(0.)
+                                        .px(6.)
+                                        .center_y()
+                                        .radius(4.)
+                                        .fill(bg)
+                                        .child(t.label(&opt.name, t.text).min_w(0.).truncate()),
+                                )
+                                .child(el().grow(1.))
+                                .child(
+                                    el().size(16., 20.)
+                                        .center()
+                                        .child(rune::icon(&CHEVRON, 14.).color(t.muted)),
+                                )
+                                .on_press_tx(move |s: &mut State, tx| {
+                                    if let Some(e) = &mut s.database_property_editor {
+                                        e.color_option = Some(opt_click.clone());
+                                        e.pane = PropertyPane::OptionColor;
+                                        e.error = None;
+                                    }
+                                    tx.instant();
+                                })
+                        }));
+                    body = body
+                        .child(label("Options", t.muted).px(8.))
+                        .child(list);
+                }
             }
         }
         if !editor.rename_only {
@@ -581,7 +852,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                                 ) {
                                     e.filter_op = FilterOp::IsEmpty;
                                 }
-                                s.table_filter_input.focused = true;
+                                e.filter_input.focused = true;
                             }
                         }),
                 )
@@ -702,6 +973,58 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             .child(body)
             .anchored_fit(anchor, Side::Bottom, Align::Start, 4.),
     )
+}
+
+fn type_change_warning(from: PropertyKind, to: PropertyKind) -> &'static str {
+    if matches!(from, PropertyKind::Formula | PropertyKind::Rollup) {
+        return match to {
+            PropertyKind::Formula | PropertyKind::Rollup | PropertyKind::Relation => {
+                "This replaces the current calculation and clears existing values for this property."
+            }
+            PropertyKind::Date => {
+                "This removes the calculation. Current values that match a date format are kept; other values are cleared."
+            }
+            PropertyKind::Number => {
+                "This removes the calculation. Current numeric values are kept; other values are cleared."
+            }
+            PropertyKind::Checkbox => {
+                "This removes the calculation. Values matching true or false are kept; other values are cleared."
+            }
+            _ => "This removes the calculation and keeps the current values as static data.",
+        };
+    }
+    if from == PropertyKind::Relation {
+        return match to {
+            PropertyKind::Formula | PropertyKind::Rollup | PropertyKind::Relation => {
+                "This removes the existing relation links and clears values for this property."
+            }
+            PropertyKind::Date | PropertyKind::Number | PropertyKind::Checkbox => {
+                "This removes the existing relation links and clears incompatible values."
+            }
+            _ => "This removes the existing relation links and keeps the related item names as text.",
+        };
+    }
+    match to {
+        PropertyKind::Date => {
+            "Existing values that match a date format will convert to dates. Values that do not match will be cleared."
+        }
+        PropertyKind::Number => {
+            "Existing numeric values will convert to numbers. Non-numeric values will be cleared."
+        }
+        PropertyKind::Checkbox => {
+            "Values matching true or false will convert to checkboxes. Other values will be cleared."
+        }
+        PropertyKind::Formula => {
+            "This clears existing stored values for this property and calculates values from the formula."
+        }
+        PropertyKind::Rollup => {
+            "This clears existing stored values for this property and calculates values from the rollup."
+        }
+        PropertyKind::Relation => {
+            "This clears existing stored values for this property so records can link to the related database."
+        }
+        _ => "Existing values will be converted to the new property type.",
+    }
 }
 
 fn type_name(kind: PropertyKind) -> &'static str {

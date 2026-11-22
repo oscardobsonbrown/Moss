@@ -73,12 +73,13 @@ pub fn metadata_name(
     let context_key = key.clone();
     let marker = s
         .metadata_drag
+        .dragging
         .as_ref()
         .filter(|dragged| *dragged != &id)
         .and_then(|dragged| {
-            if s.metadata_drop_before.as_deref() == Some(id.as_str()) {
+            if s.metadata_drag.drop_before.as_deref() == Some(id.as_str()) {
                 Some(0.)
-            } else if s.metadata_drop_before.is_none()
+            } else if s.metadata_drag.drop_before.is_none()
                 && zones
                     .iter()
                     .rev()
@@ -105,8 +106,8 @@ pub fn metadata_name(
         .label(format!("{} property options", prop.name))
         .focusable(true)
         .on_press(move |s: &mut crate::state::State| {
-            if s.metadata_suppress_press {
-                s.metadata_suppress_press = false;
+            if s.metadata_drag.suppress_press {
+                s.metadata_drag.suppress_press = false;
                 return;
             }
             s.open_metadata_menu(&click_db, &click_id, &click_key);
@@ -116,26 +117,26 @@ pub fn metadata_name(
         })
         .on_drag(move |s: &mut crate::state::State, drag, tx| {
             if drag.phase == Phase::Down {
-                s.metadata_suppress_press = false;
+                s.metadata_drag.suppress_press = false;
                 return;
             }
             if drag.dy.abs() >= 4. && !drag.cancelled() {
-                s.metadata_drag = Some(id.clone());
-                s.metadata_suppress_press = true;
+                s.metadata_drag.dragging = Some(id.clone());
+                s.metadata_drag.suppress_press = true;
                 let y = drag.window_point()[1];
                 let before = zones
                     .iter()
                     .filter(|(other, _)| other != &id)
                     .find(|(_, center)| y < *center)
                     .map(|(other, _)| other.clone());
-                s.metadata_drop_before = before.clone();
+                s.metadata_drag.drop_before = before.clone();
                 if drag.phase == Phase::Up {
                     s.move_metadata_property(&database, &id, before.as_deref());
                 }
             }
             if drag.phase == Phase::Up || drag.cancelled() {
-                s.metadata_drag = None;
-                s.metadata_drop_before = None;
+                s.metadata_drag.dragging = None;
+                s.metadata_drag.drop_before = None;
             }
             tx.instant();
         })

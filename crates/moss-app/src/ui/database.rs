@@ -202,7 +202,8 @@ pub fn view(s: &State, t: Theme) -> El {
             (!matches!(
                 kind,
                 Some(
-                    ViewKind::Board
+                    ViewKind::Table
+                        | ViewKind::Board
                         | ViewKind::Calendar
                         | ViewKind::Chart
                         | ViewKind::Map

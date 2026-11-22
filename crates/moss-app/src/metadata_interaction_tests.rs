@@ -35,7 +35,12 @@ fn metadata_menu_edits_visibility_and_keeps_the_record_open() {
     click(&mut rt, "metadata-rename");
     assert!(rt.state.record_peek.is_some());
     assert!(rt.find("property-name-input").is_some());
-    rt.state.database_property_input.replace_text("Progress");
+    rt.state
+        .database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
+        .replace_text("Progress");
     click(&mut rt, "property-save");
     assert!(rt.state.record_peek.is_some());
     assert_eq!(
@@ -453,7 +458,10 @@ fn metadata_rename_preserves_formula_configuration() {
     click(&mut rt, "metadata-rename");
     assert!(rt.find("formula-expression-input").is_none());
     rt.state
-        .database_property_input
+        .database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
         .replace_text("Renamed total");
     click(&mut rt, "property-save");
     let saved = rt.state.store.get_database(&db.id).unwrap().unwrap();
@@ -464,6 +472,103 @@ fn metadata_rename_preserves_formula_configuration() {
         .unwrap();
     assert_eq!(renamed.name, "Renamed total");
     assert_eq!(renamed.config, formula.config);
+    drop(rt);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn full_page_record_adds_edits_typed_properties_and_changes_property_type() {
+    let (mut rt, path) = database_runtime(0);
+    rt.state.create_inline(Default::default(), false);
+    rt.state.cell.replace_text("Austria");
+    assert!(rt.state.finish_cell(false));
+    let db_id = rt.state.tab().unwrap().database.as_ref().unwrap().id.clone();
+    let db = rt
+        .state
+        .store
+        .add_property(&db_id, "Done", PropertyKind::Checkbox)
+        .unwrap();
+    let checkbox = db.properties.last().unwrap().id.clone();
+    let db = rt
+        .state
+        .store
+        .add_property(&db_id, "Days", PropertyKind::Number)
+        .unwrap();
+    let days = db.properties.last().unwrap().id.clone();
+    let record_id = rt.state.tab().unwrap().records[0].id.clone();
+    rt.state.tabs[rt.state.active].database = Some(db);
+    rt.state.open_database_record(&db_id, &record_id, "full_page");
+    rt.invalidate();
+    rt.frame(0.3);
+    assert!(rt.state.tab().unwrap().database.is_none());
+    assert!(rt.state.tab().unwrap().record_context.is_some());
+
+    // Checkbox toggles on a full-page record.
+    click(&mut rt, &format!("page-property-{checkbox}"));
+    assert_eq!(
+        rt.state
+            .store
+            .get_record(&record_id)
+            .unwrap()
+            .unwrap()
+            .values[&checkbox],
+        json!(true)
+    );
+
+    // Number input saves a typed JSON number on a full-page record.
+    click(&mut rt, &format!("page-property-{days}"));
+    rt.state.cell.replace_text("14");
+    assert!(rt.state.finish_cell(false));
+    assert_eq!(
+        rt.state
+            .store
+            .get_record(&record_id)
+            .unwrap()
+            .unwrap()
+            .values[&days],
+        json!(14.0)
+    );
+
+    // Add a new property directly from the full-page record view.
+    click(&mut rt, "page-add-property");
+    rt.frame(0.3);
+    assert!(rt.find("database-property-menu").is_some());
+    rt.state
+        .database_property_editor
+        .as_mut()
+        .unwrap()
+        .name_input
+        .replace_text("Departure");
+    click(&mut rt, "property-save");
+    rt.frame(0.3);
+    let updated_db = rt.state.store.get_database(&db_id).unwrap().unwrap();
+    let departure = updated_db
+        .properties
+        .iter()
+        .find(|p| p.name == "Departure")
+        .unwrap()
+        .id
+        .clone();
+    assert!(rt.find(&format!("page-property-name-{departure}")).is_some());
+
+    // Change the new property's type from Text to Date directly from the full-page record.
+    click(&mut rt, &format!("page-property-name-{departure}"));
+    rt.frame(0.3);
+    click(&mut rt, "metadata-edit");
+    rt.frame(0.3);
+    click(&mut rt, "property-type-trigger");
+    click(&mut rt, "property-type-date");
+    rt.frame(0.3);
+    let updated_db = rt.state.store.get_database(&db_id).unwrap().unwrap();
+    assert_eq!(
+        updated_db
+            .properties
+            .iter()
+            .find(|p| p.id == departure)
+            .unwrap()
+            .kind,
+        PropertyKind::Date
+    );
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
 }

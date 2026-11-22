@@ -45,7 +45,7 @@ pub fn center(s: &State, t: Theme) -> Option<El> {
             .fill(Color::BLACK.alpha(0.28))
             .center()
             .on_press(|s: &mut State| {
-                s.dismiss_property_picker();
+                s.dismiss_cell_picker();
                 s.close_peek();
             })
             .child(
@@ -61,7 +61,7 @@ pub fn center(s: &State, t: Theme) -> Option<El> {
                     .role("dialog")
                     .label("Record page")
                     .modal(true, |s: &mut State| {
-                        s.dismiss_property_picker();
+                        s.dismiss_cell_picker();
                         s.close_peek();
                     }),
             ),
@@ -123,6 +123,14 @@ fn panel(s: &State, t: Theme) -> El {
                             let key = anchor.clone();
                             let control = if peek.page.icon.is_empty() {
                                 super::page_cover::header_action(key, "Add icon", t)
+                                    .group_opacity(
+                                        super::page_cover::header_action_visibility(
+                                            s,
+                                            &peek.page.id,
+                                            peek.title.focused,
+                                        ),
+                                        1.,
+                                    )
                             } else {
                                 el().key(key)
                                     .radius(5.)
@@ -473,7 +481,7 @@ fn panel(s: &State, t: Theme) -> El {
                         .offset_motion(Anim::INSTANT),
                 )
                 .on_press_tx(|s: &mut State, tx| {
-                    s.dismiss_property_picker();
+                    s.dismiss_cell_picker();
                     s.expand_peek();
                     tx.instant();
                 }),
@@ -482,7 +490,7 @@ fn panel(s: &State, t: Theme) -> El {
         .child(el().w(1.).h(16.).fill(t.line))
         .child(
             icon_button("peek-close", "Close", "×", t).on_press(|s: &mut State| {
-                s.dismiss_property_picker();
+                s.dismiss_cell_picker();
                 s.close_peek();
             }),
         )

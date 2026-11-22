@@ -26,7 +26,7 @@ fn place_can_be_edited_in_table_peek_gallery_and_list() {
     rt.state.open_record(0);
     rt.invalidate(); rt.frame(0.3);
     click(&mut rt, &format!("peek-property-{property}"));
-    assert!(rt.find("place-search-input").is_some(), "picker open={}, error={:?}, peek={}", rt.state.place_picker.is_some(), rt.state.error, rt.state.record_peek.is_some());
+    assert!(rt.find("place-search-input").is_some(), "picker open={}, error={:?}, peek={}", rt.state.place_picker().is_some(), rt.state.error, rt.state.record_peek.is_some());
     rt.state.database_views.map.place_query.replace_text("123 Example Street");
     rt.invalidate(); rt.frame(1. / 120.);
     click(&mut rt, "place-save-text");
@@ -40,7 +40,7 @@ fn place_can_be_edited_in_table_peek_gallery_and_list() {
         assert!(rt.find("place-search-input").is_some());
         assert!(rt.state.record_peek.is_none());
         press(&mut rt, Key::Escape);
-        assert!(rt.state.place_picker.is_none());
+        assert!(rt.state.place_picker().is_none());
     }
     rt.state.open_database_record(&db_id, &id, "full");
     rt.invalidate(); rt.frame(0.3);
@@ -50,9 +50,9 @@ fn place_can_be_edited_in_table_peek_gallery_and_list() {
     rt.state.store.set_record_place_text_if_unchanged(&id, &property, &expected, "A newer address").unwrap();
     rt.state.database_views.map.place_query.replace_text("An older edit");
     rt.state.save_place_choice(None, true);
-    assert!(rt.state.place_picker.as_ref().unwrap().error.is_some());
+    assert!(rt.state.place_picker().unwrap().error.is_some());
     assert_eq!(rt.state.store.get_record(&id).unwrap().unwrap().values[&property], "A newer address");
-    rt.state.dismiss_place_picker();
+    rt.state.dismiss_cell_picker();
     rt.state.open_place_picker(&id, &property);
     rt.state.save_place_choice(None, false);
     assert!(rt.state.store.get_record(&id).unwrap().unwrap().values[&property].is_null());
@@ -83,7 +83,7 @@ fn place_search_finishes_outside_map_and_offline_text_is_saved() {
         rt.frame(1. / 120.);
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert!(rt.state.place_picker.is_some());
+    assert!(rt.state.place_picker().is_some());
     rt.invalidate(); rt.frame(1. / 120.);
     click(&mut rt, "place-save-text");
     assert_eq!(rt.state.store.get_record(&id).unwrap().unwrap().values[&property], "123 Test Street");

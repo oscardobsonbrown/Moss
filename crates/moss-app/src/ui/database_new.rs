@@ -54,12 +54,12 @@ pub fn button(s: &State, t: Theme) -> El {
                 .focusable(true)
                 .child(rune::icon(&super::view_icons::TOOLBAR_CARET, 16.).color(Color::WHITE))
                 .on_press(|s: &mut State| {
-                    s.dismiss_property_picker();
-                    if s.property_picker.is_some() {
+                    s.dismiss_cell_picker();
+                    if s.cell_picker.is_some() {
                         return;
                     }
                     s.gallery_settings_open = false;
-                    s.property_visibility_open = false;
+                    s.property_visibility = None;
                     s.undated_open = false;
                     s.modal = None;
                     s.database_new_open = !s.database_new_open;

@@ -198,8 +198,9 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                                 return;
                             }
                             s.view_management = None;
-                            super::property_visibility::open(s);
-                            s.property_visibility_from_view_settings = true;
+                            s.property_visibility = Some(
+                                crate::database_properties::PropertyVisibility::new(true),
+                            );
                         }),
                 );
             }

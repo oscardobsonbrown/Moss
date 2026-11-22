@@ -17,6 +17,9 @@ use std::{
 
 const REPOSITORY: &str = "oscardobsonbrown/Moss";
 const BUNDLE_ID: &str = "app.moss.desktop";
+#[cfg(feature = "hot")]
+const INSTALLER: &str = "";
+#[cfg(not(feature = "hot"))]
 const INSTALLER: &str = include_str!("../../../scripts/install-macos.sh");
 const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 pub type Version = [u64; 3];

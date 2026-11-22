@@ -571,7 +571,11 @@ pub fn poll(s: &mut crate::state::State, _time: f64, tx: &mut Tx) -> bool {
             m.surface = None;
             m.tile_viewport = None;
             m.query_pending = None;
-            if s.place_picker.is_none() {
+            if !s
+                .cell_picker
+                .as_ref()
+                .is_some_and(crate::property_controls::CellPicker::is_place)
+            {
                 m.search_changed();
             }
         }

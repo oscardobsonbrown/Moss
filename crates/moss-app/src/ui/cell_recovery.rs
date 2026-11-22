@@ -3,7 +3,8 @@ use crate::state::State;
 use rune::*;
 
 pub fn view(s: &State, t: Theme) -> Option<El> {
-    if s.property_picker.is_some() || !s.editing_cell.as_ref().is_some_and(|cell| cell.save_failed)
+    if s.property_picker().is_some()
+        || !s.editing_cell.as_ref().is_some_and(|cell| cell.save_failed)
     {
         return None;
     }

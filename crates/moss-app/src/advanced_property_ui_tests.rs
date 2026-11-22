@@ -108,7 +108,16 @@ fn formula_validation_and_edit_refresh_visible_result() {
             .error
             .is_some()
     );
-    assert_eq!(rt.state.advanced_property.expression.text, "prop(");
+    assert_eq!(
+        rt.state
+            .database_property_editor
+            .as_ref()
+            .unwrap()
+            .advanced
+            .expression
+            .text,
+        "prop("
+    );
     click(&mut rt, "formula-expression");
     keypress(&mut rt, Key::Command('a'));
     keypress(&mut rt, Key::Text("prop(\"Amount\") * 2".into()));
@@ -143,7 +152,13 @@ fn formula_validation_and_edit_refresh_visible_result() {
         rt.state.error
     );
     assert_eq!(
-        rt.state.advanced_property.expression.text,
+        rt.state
+            .database_property_editor
+            .as_ref()
+            .unwrap()
+            .advanced
+            .expression
+            .text,
         "prop(\"Amount\") * 2"
     );
     click(&mut rt, "formula-expression");
@@ -236,14 +251,7 @@ fn relation_and_rollup_update_across_databases() {
         )
         .unwrap();
     click(&mut rt, "relation-apply");
-    assert!(
-        rt.state
-            .advanced_property
-            .relation_picker
-            .as_ref()
-            .unwrap()
-            .save_failed
-    );
+    assert!(rt.state.relation_picker().unwrap().save_failed);
     rt.update(|s, tx| {
         s.open_page(&target_page, false);
         tx.instant();
@@ -284,7 +292,7 @@ fn relation_and_rollup_update_across_databases() {
     rt.wheel_xy(x + w / 2., y + h / 2., -250., 0.);
     rt.frame(1. / 120.);
     assert!(rt.elements().iter().any(|e| e.key.as_deref()
-        == Some(&format!("cell-text-0-{relation}"))
+        == Some(&format!("relation-link-text-{relation}-0"))
         && e.text.as_deref() == Some("Target row")
         && e.visible[2] > 0.
         && e.visible[2] + 1. >= e.rect[2]
@@ -297,7 +305,7 @@ fn relation_and_rollup_update_across_databases() {
     });
     rt.frame(1. / 120.);
     assert!(rt.elements().iter().any(|e| e.key.as_deref()
-        == Some(&format!("cell-text-0-{relation}"))
+        == Some(&format!("relation-link-text-{relation}-0"))
         && e.text.as_deref() == Some("Renamed target")
         && e.visible[2] > 0.
         && e.visible[2] + 1. >= e.rect[2]
@@ -305,7 +313,15 @@ fn relation_and_rollup_update_across_databases() {
 
     add_editor(&mut rt, "Total", "rollup");
     click(&mut rt, &format!("rollup-relation-{relation}"));
-    let first_property = rt.state.advanced_property.target_properties[0].id.clone();
+    let first_property = rt
+        .state
+        .database_property_editor
+        .as_ref()
+        .unwrap()
+        .advanced
+        .target_properties[0]
+        .id
+        .clone();
     let (x, y) = rt
         .find(&format!("rollup-property-{first_property}"))
         .unwrap();
@@ -313,14 +329,28 @@ fn relation_and_rollup_update_across_databases() {
     rt.frame(1. / 120.);
     click(&mut rt, &format!("rollup-property-{amount}"));
     assert_eq!(
-        rt.state.advanced_property.target_property_id.as_deref(),
+        rt.state
+            .database_property_editor
+            .as_ref()
+            .unwrap()
+            .advanced
+            .target_property_id
+            .as_deref(),
         Some(amount.as_str())
     );
     let (x, y) = rt.find("rollup-operation-original").unwrap();
     rt.wheel(x, y, -160.);
     rt.frame(1. / 120.);
     click(&mut rt, "rollup-operation-sum");
-    assert_eq!(rt.state.advanced_property.operation, "sum");
+    assert_eq!(
+        rt.state
+            .database_property_editor
+            .as_ref()
+            .unwrap()
+            .advanced
+            .operation,
+        "sum"
+    );
     click(&mut rt, "property-save");
     settle(&mut rt);
     assert!(
@@ -375,7 +405,7 @@ fn relation_and_rollup_update_across_databases() {
             .contains_key(&target_record)
     );
     assert!(rt.elements().iter().any(|e| e.key.as_deref()
-        == Some(&format!("cell-text-0-{relation}"))
+        == Some(&format!("relation-link-text-{relation}-0"))
         && e.text.as_deref() == Some("1 linked page")));
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();

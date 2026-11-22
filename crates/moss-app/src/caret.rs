@@ -75,40 +75,9 @@ fn focused(s: &State) -> Option<(u64, bool)> {
             &s.page_icon_search,
         ),
         (
-            s.database_property_editor.is_some(),
-            "property-name",
-            &s.database_property_input,
-        ),
-        (
-            s.database_property_editor.is_some(),
-            "property-options",
-            &s.database_property_options_input,
-        ),
-        (
             s.sidebar_page_menu.is_some(),
             "sidebar-name",
             &s.sidebar_page_name,
-        ),
-        (
-            s.property_picker.is_some(),
-            "picker",
-            &s.property_picker_input,
-        ),
-        (s.property_picker.is_some(), "date-end", &s.date_end_input),
-        (
-            s.property_picker.is_some(),
-            "date-start-time",
-            &s.date_start_time_input,
-        ),
-        (
-            s.property_picker.is_some(),
-            "date-end-time",
-            &s.date_end_time_input,
-        ),
-        (
-            s.property_visibility_open,
-            "visibility",
-            &s.property_visibility_search,
         ),
         (s.undated_open, "undated", &s.undated_search),
         (
@@ -127,7 +96,7 @@ fn focused(s: &State) -> Option<(u64, bool)> {
             &s.filter,
         ),
         (
-            s.modal.is_none() && s.editing_cell.is_some() && s.property_picker.is_none(),
+            s.modal.is_none() && s.editing_cell.is_some() && s.property_picker().is_none(),
             "cell",
             &s.cell,
         ),
@@ -137,6 +106,71 @@ fn focused(s: &State) -> Option<(u64, bool)> {
         id.hash(&mut h);
         edit.hash(&mut h);
         (h.finish(), edit.preedit.is_some())
+    }
+    if let Some(editor) = &s.database_property_editor {
+        for (id, edit) in [
+            ("property-name", &editor.name_input),
+            ("property-options", &editor.options_input),
+            ("table-filter", &editor.filter_input),
+            ("formula-expression", &editor.advanced.expression),
+            ("relation-database-search", &editor.advanced.database_search),
+        ] {
+            if edit.focused {
+                return Some(fingerprint(id, edit));
+            }
+        }
+    }
+    if let Some(visibility) = &s.property_visibility {
+        if visibility.search.focused {
+            return Some(fingerprint("visibility", &visibility.search));
+        }
+    }
+    if let Some(picker) = &s.cell_picker {
+        match picker {
+            crate::property_controls::CellPicker::Property(picker) => {
+                if let Some(editor) = &picker.option_editor {
+                    if editor.name_input.focused {
+                        return Some(fingerprint("picker-option-name", &editor.name_input));
+                    }
+                }
+                if picker.input.focused {
+                    return Some(fingerprint("picker", &picker.input));
+                }
+                if let Some(date) = &picker.date {
+                    for (id, edit) in [
+                        ("date-end", &date.end_input),
+                        ("date-start-time", &date.start_time_input),
+                        ("date-end-time", &date.end_time_input),
+                    ] {
+                        if edit.focused {
+                            return Some(fingerprint(id, edit));
+                        }
+                    }
+                }
+            }
+            crate::property_controls::CellPicker::Relation(picker) => {
+                if picker.search.focused {
+                    return Some(fingerprint("relation-search", &picker.search));
+                }
+            }
+            crate::property_controls::CellPicker::Place(_) => {
+                if s.database_views.map.place_query.focused {
+                    return Some(fingerprint("place-search", &s.database_views.map.place_query));
+                }
+            }
+        }
+    }
+    if let Some(cover) = &s.page_cover.editor {
+        if cover.gradient_picker {
+            for (id, edit) in [
+                ("cover-gradient-start", &cover.gradient_start),
+                ("cover-gradient-end", &cover.gradient_end),
+            ] {
+                if edit.focused {
+                    return Some(fingerprint(id, edit));
+                }
+            }
+        }
     }
     if let Some((_, id, edit)) = fields
         .into_iter()
@@ -230,11 +264,16 @@ mod tests {
                 .clone();
             state.open_database_property(Some(&id));
             if selected {
-                state
-                    .database_property_input
-                    .set_selection(0, state.database_property_input.text.len());
+                let edit = &mut state.database_property_editor.as_mut().unwrap().name_input;
+                let len = edit.text.len();
+                edit.set_selection(0, len);
             } else {
-                state.database_property_input.set_caret(0);
+                state
+                    .database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .name_input
+                    .set_caret(0);
             }
             let mut rt = Runtime::new(
                 state,
@@ -256,16 +295,32 @@ mod tests {
             assert!(painted(&rt));
             rt.frame(0.5);
             assert!(!painted(&rt));
-            rt.update(|s, _| s.database_property_input.set_caret(1));
+            rt.update(|s, _| {
+                s.database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .name_input
+                    .set_caret(1)
+            });
             rt.frame(0.);
             assert!(painted(&rt));
             rt.update(|s, _| {
-                s.database_property_input.preedit = Some(("composition".into(), None))
+                s.database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .name_input
+                    .preedit = Some(("composition".into(), None))
             });
             rt.frame(0.);
             rt.frame(1.5);
             assert!(painted(&rt));
-            rt.update(|s, _| s.database_property_input.preedit = None);
+            rt.update(|s, _| {
+                s.database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .name_input
+                    .preedit = None
+            });
             rt.frame(0.);
             rt.update(|s, _| s.caret.set_window_focused(false));
             rt.frame(0.);

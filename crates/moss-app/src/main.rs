@@ -86,8 +86,8 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
         tx.instant();
         return true;
     }
-    if event.key == Key::Escape && s.place_picker.is_some() {
-        s.dismiss_place_picker();
+    if event.key == Key::Escape && s.place_picker().is_some() {
+        s.dismiss_cell_picker();
         tx.instant();
         return true;
     }
@@ -177,8 +177,8 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if event.key == Key::Escape && s.modal.is_none() {
         tx.instant();
-        if s.property_picker.is_some() {
-            s.dismiss_property_picker();
+        if s.cell_picker.is_some() {
+            s.dismiss_cell_picker();
             return true;
         }
         if s.editing_cell.is_some() {

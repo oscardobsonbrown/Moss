@@ -119,7 +119,7 @@ fn panel(key: &str, label: &str, t: Theme) -> El {
         .transition(Transition::opacity())
 }
 pub fn popup(s: &State, t: Theme) -> Option<El> {
-    if s.place_picker.is_some() {
+    if s.place_picker().is_some() {
         return None;
     }
     let m = &s.database_views.map;

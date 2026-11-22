@@ -1,7 +1,8 @@
 use crate::{
-    Database, PageKind, Property, PropertyKind, Store, calculation, formula, new_id,
-    properties::with_database,
-    search,
+    Database, Property, PropertyKind, Store, formula, new_id,
+    properties::{
+        refresh_all_records, validate_relation_target, validate_rollup_operation, with_database,
+    },
     store::{decode, encode, invalid},
 };
 use rusqlite::{Result, Transaction, params};
@@ -168,23 +169,7 @@ impl Store {
             };
             let id = expected.map(|p| p.id.clone()).unwrap_or_else(new_id);
             if kind == PropertyKind::Relation {
-                let target = config
-                    .get("target_database_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| invalid("relation target missing"))?;
-                let raw: String =
-                    tx.query_row("SELECT data FROM databases WHERE id=?1", [target], |r| {
-                        r.get(0)
-                    })?;
-                let target_db: Database = decode(raw)?;
-                let target_page = search::page(tx, &target_db.page_id)?
-                    .ok_or_else(|| invalid("relation target missing"))?;
-                if target_page.deleted_at.is_some()
-                    || target_page.kind != PageKind::Database
-                    || target_page.workspace_id != owner.workspace_id
-                {
-                    return Err(invalid("invalid relation target"));
-                }
+                validate_relation_target(tx, &owner.workspace_id, &config)?;
                 if expected.is_some_and(|old| {
                     old.config.get("target_database_id") != config.get("target_database_id")
                 }) {
@@ -195,25 +180,7 @@ impl Store {
                 }
             }
             if kind == PropertyKind::Rollup {
-                let op = config
-                    .get("operation")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                if !matches!(
-                    op,
-                    "original"
-                        | "unique"
-                        | "count"
-                        | "count_values"
-                        | "count_empty"
-                        | "percent_empty"
-                        | "sum"
-                        | "average"
-                        | "min"
-                        | "max"
-                ) {
-                    return Err(invalid("unsupported rollup operation"));
-                }
+                validate_rollup_operation(&config)?;
             }
             let property = Property {
                 id,
@@ -264,20 +231,7 @@ impl Store {
                 "UPDATE databases SET data=?1 WHERE id=?2",
                 params![encode(db)?, db.id],
             )?;
-            let mut after = String::new();
-            loop {
-                let ids: Vec<String> = {
-                    let mut q = tx.prepare("SELECT id FROM records WHERE database_id=?1 AND id>?2 ORDER BY id LIMIT 256")?;
-                    let rows = q.query_map(params![db.id, after], |r| r.get(0))?;
-                    rows.collect::<Result<Vec<_>>>()?
-                };
-                if ids.is_empty() {
-                    break;
-                }
-                after = ids.last().unwrap().clone();
-                calculation::refresh(tx, &ids)?;
-            }
-            Ok(())
+            refresh_all_records(tx, &db.id)
         })
     }
 }

@@ -925,7 +925,7 @@ fn table_inline_grid_and_keyboard_selection_stay_stable() {
         rt.state.selected_cell,
         Some((record.clone(), Some(date.clone())))
     );
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     assert_eq!(
         rt.state.store.get_record(&record).unwrap().unwrap().title,
         "Task"
@@ -943,10 +943,10 @@ fn table_inline_grid_and_keyboard_selection_stay_stable() {
         rt.state.selected_cell,
         Some((record.clone(), Some(status.clone())))
     );
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     press(&mut rt, Key::Enter);
     assert_eq!(
-        rt.state.property_picker.as_ref().unwrap().property_id,
+        rt.state.property_picker().unwrap().property_id,
         status
     );
     press(&mut rt, Key::Escape);

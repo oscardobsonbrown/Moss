@@ -112,25 +112,24 @@ fn status_picker_keeps_conflicting_choice_until_discarded() {
         .set_record_value_if_unchanged(&id, &status, &json!("Not started"), json!("Done"))
         .unwrap();
     assert!(!s.choose_property_value("In progress"));
-    assert!(s.property_picker.as_ref().unwrap().save_failed);
+    assert!(s.property_picker().unwrap().save_failed);
     assert_eq!(s.cell.text, "In progress");
     assert_eq!(
         s.editing_cell.as_ref().unwrap().expected_value,
         json!("Not started")
     );
-    s.dismiss_property_picker();
-    assert!(s.property_picker.is_some());
+    s.dismiss_cell_picker();
+    assert!(s.property_picker().is_some());
     assert_eq!(
         other.get_record(&id).unwrap().unwrap().values[&status],
         "Done"
     );
     other.delete_record(&id).unwrap();
     s.discard_failed_property_change();
-    assert!(s.property_picker.is_some());
+    assert!(s.property_picker().is_some());
     assert_eq!(s.cell.text, "In progress");
     assert!(
-        s.property_picker
-            .as_ref()
+        s.property_picker()
             .unwrap()
             .error
             .as_deref()
@@ -139,7 +138,7 @@ fn status_picker_keeps_conflicting_choice_until_discarded() {
     );
     other.restore_record(&id).unwrap();
     s.discard_failed_property_change();
-    assert!(s.property_picker.is_none());
+    assert!(s.property_picker().is_none());
     assert_eq!(s.tab().unwrap().records[0].values[&status], "Done");
     drop(other);
     drop(s);

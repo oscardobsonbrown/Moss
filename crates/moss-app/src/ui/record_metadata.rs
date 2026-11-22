@@ -46,12 +46,8 @@ pub fn view(
         });
         let property_value = record.values.get(&id);
         let displayed = super::property_value::text(s, prop, property_value);
-        let picker_kind = matches!(
-            prop.kind,
-            PropertyKind::Date | PropertyKind::Status | PropertyKind::Select
-        );
+        let picker_kind = crate::property_controls::is_popup_picker_kind(prop.kind);
         let relation_kind = prop.kind == PropertyKind::Relation;
-        let place_kind = prop.kind == PropertyKind::Place;
         let computed_kind = matches!(prop.kind, PropertyKind::Formula | PropertyKind::Rollup);
         let invalid_checkbox = prop.kind == PropertyKind::Checkbox
             && property_value.is_some_and(|v| !v.is_null() && !v.is_boolean());
@@ -151,18 +147,10 @@ pub fn view(
                     super::property_value::view(s, prop, property_value, t)
                 })
                 .on_press_tx(move |s: &mut State, tx| {
-                    if picker_kind {
-                        s.open_property_picker(&record_id, &id);
-                    } else if place_kind {
-                        s.open_place_picker(&record_id, &id);
-                        tx.instant();
-                    } else if relation_kind {
-                        s.open_relation_picker(&record_id, &id);
-                        tx.instant();
-                    } else {
-                        s.dismiss_property_picker();
-                        s.edit_record_property(&record_id, Some(id.clone()));
-                        tx.instant();
+                    if let Some(kind) = s.open_property_editor(&record_id, &id) {
+                        if !crate::property_controls::is_popup_picker_kind(kind) {
+                            tx.instant();
+                        }
                     }
                 })
         };
@@ -209,5 +197,31 @@ pub fn view(
             );
         }
     }
+    let add_db_id = db.id.clone();
+    let add_anchor = format!("{prefix}-add-property");
+    content = content.child(
+        row()
+            .key(add_anchor.clone())
+            .h(30.)
+            .pr(8.)
+            .gap(8.)
+            .center_y()
+            .radius(4.)
+            .hover(t.hover)
+            .press(t.selected)
+            .role("button")
+            .label("Add a property")
+            .focusable(true)
+            .child(
+                el().size(16., 20.)
+                    .center()
+                    .child(rune::icon(&super::phosphor::PLUS, 14.).color(t.muted)),
+            )
+            .child(t.label("Add a property", t.muted))
+            .on_press_tx(move |s: &mut State, tx| {
+                s.open_metadata_add_property(&add_db_id, &add_anchor);
+                tx.instant();
+            }),
+    );
     content
 }

@@ -7,8 +7,7 @@ use std::collections::HashMap;
 pub fn poll(s: &mut State) -> bool {
     let count = s.store.local_change_count();
     let editing = s.editing_cell.is_some()
-        || s.property_picker.is_some()
-        || s.advanced_property.relation_picker.is_some()
+        || s.cell_picker.is_some()
         || s.record_peek.is_some();
     if count == s.computed_change_count && !(s.computed_refresh_deferred && !editing) {
         return false;

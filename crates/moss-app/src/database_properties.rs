@@ -4,10 +4,28 @@ use moss_core::{
 };
 use rune::TextEdit;
 
+pub struct PropertyVisibility {
+    pub from_view_settings: bool,
+    pub search: TextEdit,
+}
+
+impl PropertyVisibility {
+    pub fn new(from_view_settings: bool) -> Self {
+        let mut search = TextEdit::new("");
+        search.focused = true;
+        Self {
+            from_view_settings,
+            search,
+        }
+    }
+}
+
 pub struct PropertyEditor {
     pub database_id: String,
     pub property: Option<Property>,
     pub kind: PropertyKind,
+    pub pending_kind: Option<PropertyKind>,
+    pub color_option: Option<String>,
     pub confirm_delete: bool,
     pub error: Option<String>,
     pub pane: PropertyPane,
@@ -15,14 +33,29 @@ pub struct PropertyEditor {
     pub filter_op: FilterOp,
     pub anchor_override: Option<String>,
     pub rename_only: bool,
+    pub name_input: TextEdit,
+    pub options_input: TextEdit,
+    pub filter_input: TextEdit,
+    pub advanced: crate::advanced_properties::AdvancedDraft,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PropertyPane {
     Main,
+    Type,
+    ConfirmType,
+    OptionColor,
+    DateFormat,
     Filter,
     Sort,
     Calculate,
+}
+
+#[derive(Default)]
+pub struct MetadataDrag {
+    pub dragging: Option<String>,
+    pub drop_before: Option<String>,
+    pub suppress_press: bool,
 }
 
 pub struct MetadataMenu {
@@ -68,7 +101,7 @@ impl State {
         {
             return;
         }
-        self.metadata_suppress_press = false;
+        self.metadata_drag.suppress_press = false;
         self.metadata_menu = Some(MetadataMenu {
             database_id: database_id.into(),
             property_id: property_id.into(),
@@ -76,6 +109,17 @@ impl State {
             pane: MetadataPane::Main,
             error: None,
         });
+    }
+
+    pub fn open_metadata_add_property(&mut self, database_id: &str, anchor: &str) {
+        let Some(db) = self.metadata_database(database_id).cloned() else {
+            return;
+        };
+        self.metadata_menu = None;
+        self.open_database_property_from(db, None);
+        if let Some(editor) = &mut self.database_property_editor {
+            editor.anchor_override = Some(anchor.into());
+        }
     }
 
     pub fn edit_metadata_property(&mut self, delete: bool, rename: bool) {
@@ -231,15 +275,14 @@ impl State {
             },
             None => None,
         };
-        let mut name = TextEdit::new(property.as_ref().map_or("", |p| p.name.as_str()));
-        name.focused = true;
+        let mut name_input = TextEdit::new(property.as_ref().map_or("", |p| p.name.as_str()));
+        name_input.focused = true;
         let database_id = database.id.clone();
-        self.database_property_input = name;
-        self.database_property_options_input = TextEdit::new("");
-        self.table_filter_input = TextEdit::new("");
         self.database_property_editor = Some(PropertyEditor {
             database_id,
             kind: property.as_ref().map_or(PropertyKind::Text, |p| p.kind),
+            pending_kind: None,
+            color_option: None,
             property,
             confirm_delete: false,
             error: None,
@@ -248,6 +291,10 @@ impl State {
             filter_op: FilterOp::Eq,
             anchor_override: None,
             rename_only: false,
+            name_input,
+            options_input: TextEdit::new(""),
+            filter_input: TextEdit::new(""),
+            advanced: Default::default(),
         });
         if self.database_property_editor.as_ref().is_some_and(|e| {
             matches!(
@@ -259,10 +306,289 @@ impl State {
         }
     }
 
+    pub fn choose_property_type(&mut self, kind: PropertyKind) {
+        let Some(editor) = self.database_property_editor.as_ref() else {
+            return;
+        };
+        let Some(property) = editor.property.clone() else {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.kind = kind;
+                editor.error = None;
+            }
+            if matches!(
+                kind,
+                PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+            ) {
+                self.reset_advanced_property();
+            }
+            return;
+        };
+        if !moss_core::property_type_convertible(property.kind)
+            || !moss_core::property_type_convertible(kind)
+        {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.error = Some("This property type cannot be changed.".into());
+            }
+            return;
+        }
+        if kind == property.kind {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.kind = kind;
+                editor.pending_kind = None;
+                editor.pane = PropertyPane::Main;
+                editor.error = None;
+            }
+            if matches!(
+                kind,
+                PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+            ) {
+                self.reset_advanced_property();
+            }
+            return;
+        }
+        if matches!(
+            kind,
+            PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+        ) {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.kind = kind;
+                editor.pending_kind = None;
+                editor.pane = PropertyPane::Main;
+                editor.error = None;
+            }
+            self.reset_advanced_property();
+            return;
+        }
+        let database_id = editor.database_id.clone();
+        let needs_confirm = moss_core::is_type_change_lossy(property.kind, kind)
+            && (matches!(
+                property.kind,
+                PropertyKind::Formula | PropertyKind::Rollup | PropertyKind::Relation
+            ) || self
+                .store
+                .property_has_values(&database_id, &property.id)
+                .unwrap_or(true));
+        if needs_confirm {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.pending_kind = Some(kind);
+                editor.pane = PropertyPane::ConfirmType;
+                editor.error = None;
+            }
+        } else {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.pending_kind = Some(kind);
+                editor.error = None;
+            }
+            self.confirm_change_property_type();
+        }
+    }
+
+    pub fn cancel_change_property_type(&mut self) {
+        if let Some(editor) = &mut self.database_property_editor {
+            let pending_advanced = editor.pending_kind.is_some_and(|k| {
+                matches!(
+                    k,
+                    PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+                )
+            });
+            editor.pending_kind = None;
+            editor.pane = if pending_advanced {
+                PropertyPane::Main
+            } else {
+                PropertyPane::Type
+            };
+            editor.error = None;
+        }
+    }
+
+    pub fn confirm_change_property_type(&mut self) -> bool {
+        let Some(editor) = self.database_property_editor.as_ref() else {
+            return false;
+        };
+        let Some(property) = editor.property.clone() else {
+            return false;
+        };
+        let database_id = editor.database_id.clone();
+        let target = editor.pending_kind.unwrap_or(editor.kind);
+        let name = editor.name_input.text.trim().to_owned();
+        if name.is_empty() {
+            if let Some(editor) = &mut self.database_property_editor {
+                editor.error = Some("Enter a property name.".into());
+            }
+            return false;
+        }
+        let draft = &editor.advanced;
+        let config = match target {
+            PropertyKind::Formula => serde_json::json!({"expression": draft.expression.text}),
+            PropertyKind::Relation => {
+                serde_json::json!({"target_database_id": draft.target_database_id})
+            }
+            PropertyKind::Rollup => serde_json::json!({
+                "relation_property_id": draft.relation_property_id,
+                "target_property_id": draft.target_property_id,
+                "operation": draft.operation,
+            }),
+            _ => serde_json::json!({}),
+        };
+        match self
+            .store
+            .change_property_type(&database_id, &property, Some(&name), target, config)
+        {
+            Ok(database) => {
+                self.apply_database_property_change(database, None);
+                true
+            }
+            Err(error) => {
+                if let Some(editor) = &mut self.database_property_editor {
+                    editor.error = Some(format!("Property type is not changed: {error}"));
+                    if matches!(
+                        target,
+                        PropertyKind::Formula | PropertyKind::Relation | PropertyKind::Rollup
+                    ) {
+                        editor.pane = PropertyPane::Main;
+                        editor.pending_kind = None;
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    pub fn set_editor_date_format(&mut self, format: &str) -> bool {
+        let Some(editor) = self.database_property_editor.as_ref() else {
+            return false;
+        };
+        let Some(property) = editor.property.clone() else {
+            return false;
+        };
+        let database_id = editor.database_id.clone();
+        match self
+            .store
+            .set_date_property_format(&database_id, &property, format)
+        {
+            Ok(database) => {
+                let updated = database
+                    .properties
+                    .iter()
+                    .find(|p| p.id == property.id)
+                    .cloned();
+                self.sync_database_schema(&database);
+                if let Some(editor) = &mut self.database_property_editor {
+                    editor.property = updated;
+                    editor.pane = PropertyPane::Main;
+                    editor.error = None;
+                }
+                true
+            }
+            Err(error) => {
+                if let Some(editor) = &mut self.database_property_editor {
+                    editor.error = Some(format!("Date format is not saved: {error}"));
+                }
+                false
+            }
+        }
+    }
+
+    pub fn set_editor_option_color(&mut self, option_name: &str, color: &str) -> bool {
+        let Some(editor) = self.database_property_editor.as_ref() else {
+            return false;
+        };
+        let Some(property) = editor.property.clone() else {
+            return false;
+        };
+        let database_id = editor.database_id.clone();
+        match self
+            .store
+            .set_property_option_color(&database_id, &property, option_name, color)
+        {
+            Ok(database) => {
+                let updated = database
+                    .properties
+                    .iter()
+                    .find(|p| p.id == property.id)
+                    .cloned();
+                self.sync_database_schema(&database);
+                if let Some(editor) = &mut self.database_property_editor {
+                    editor.property = updated;
+                    editor.color_option = None;
+                    editor.pane = PropertyPane::Main;
+                    editor.error = None;
+                }
+                true
+            }
+            Err(error) => {
+                if let Some(editor) = &mut self.database_property_editor {
+                    editor.error = Some(format!("Color is not saved: {error}"));
+                }
+                false
+            }
+        }
+    }
+
     pub fn save_database_property(&mut self) -> bool {
         let Some(editor) = self.database_property_editor.as_ref() else {
             return false;
         };
+        if !editor.rename_only {
+            if let Some(property) = editor.property.as_ref() {
+                if editor.kind != property.kind {
+                    let target = editor.kind;
+                    let name = editor.name_input.text.trim();
+                    if name.is_empty() {
+                        self.database_property_editor.as_mut().unwrap().error =
+                            Some("Enter a property name.".into());
+                        return false;
+                    }
+                    let missing_config = match target {
+                        PropertyKind::Formula
+                            if editor.advanced.expression.text.trim().is_empty() =>
+                        {
+                            Some("Enter a formula expression.")
+                        }
+                        PropertyKind::Relation
+                            if editor.advanced.target_database_id.is_none() =>
+                        {
+                            Some("Choose a related database.")
+                        }
+                        PropertyKind::Rollup
+                            if editor.advanced.relation_property_id.is_none()
+                                || editor.advanced.target_property_id.is_none() =>
+                        {
+                            Some("Choose a relation and target property.")
+                        }
+                        _ => None,
+                    };
+                    if let Some(message) = missing_config {
+                        self.database_property_editor.as_mut().unwrap().error =
+                            Some(message.into());
+                        return false;
+                    }
+                    let database_id = editor.database_id.clone();
+                    let property_id = property.id.clone();
+                    let old_kind = property.kind;
+                    let needs_confirm = moss_core::is_type_change_lossy(old_kind, target)
+                        && (matches!(
+                            old_kind,
+                            PropertyKind::Formula | PropertyKind::Rollup | PropertyKind::Relation
+                        ) || self
+                            .store
+                            .property_has_values(&database_id, &property_id)
+                            .unwrap_or(true));
+                    if needs_confirm {
+                        if let Some(editor) = &mut self.database_property_editor {
+                            editor.pending_kind = Some(target);
+                            editor.pane = PropertyPane::ConfirmType;
+                            editor.error = None;
+                        }
+                        return false;
+                    }
+                    if let Some(editor) = &mut self.database_property_editor {
+                        editor.pending_kind = Some(target);
+                    }
+                    return self.confirm_change_property_type();
+                }
+            }
+        }
         if !editor.rename_only
             && matches!(
                 editor.kind,
@@ -271,7 +597,7 @@ impl State {
         {
             return self.save_advanced_property();
         }
-        let name = self.database_property_input.text.trim();
+        let name = editor.name_input.text.trim();
         if name.is_empty() {
             self.database_property_editor.as_mut().unwrap().error =
                 Some("Enter a property name.".into());
@@ -282,15 +608,17 @@ impl State {
                 .store
                 .rename_property(&editor.database_id, property, name),
             None if editor.insert_relative.is_some() => {
-                let options: Vec<String> = if editor.kind == PropertyKind::Select {
-                    self.database_property_options_input
-                        .text
-                        .split(',')
-                        .map(|s| s.trim().to_owned())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let options: Vec<String> =
+                    if matches!(editor.kind, PropertyKind::Select | PropertyKind::MultiSelect) {
+                        editor
+                            .options_input
+                            .text
+                            .split(',')
+                            .map(|s| s.trim().to_owned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                 let (anchor, after) = editor.insert_relative.as_ref().unwrap();
                 self.store.insert_property_relative(
                     &editor.database_id,
@@ -301,15 +629,15 @@ impl State {
                     *after,
                 )
             }
-            None if editor.kind == PropertyKind::Select => {
-                let options: Vec<String> = self
-                    .database_property_options_input
+            None if matches!(editor.kind, PropertyKind::Select | PropertyKind::MultiSelect) => {
+                let options: Vec<String> = editor
+                    .options_input
                     .text
                     .split(',')
                     .map(|option| option.trim().to_owned())
                     .collect();
                 self.store
-                    .add_select_property(&editor.database_id, name, &options)
+                    .add_options_property(&editor.database_id, name, editor.kind, &options)
             }
             None => self
                 .store
@@ -384,6 +712,8 @@ impl State {
                     *db = database.clone();
                     if let Some(id) = deleted {
                         record.values.remove(id);
+                    } else if let Ok(Some(fresh)) = self.store.get_record(&record.id) {
+                        *record = fresh;
                     }
                 }
             }
@@ -396,6 +726,8 @@ impl State {
             peek.database = database.clone();
             if let Some(id) = deleted {
                 peek.record.values.remove(id);
+            } else if let Ok(Some(fresh)) = self.store.get_record(&peek.record.id) {
+                peek.record = fresh;
             }
         }
         self.database_property_editor = None;
@@ -490,8 +822,9 @@ impl State {
         let Some((db, view, property)) = self.table_property_context() else {
             return;
         };
-        let op = self.database_property_editor.as_ref().unwrap().filter_op;
-        let text = self.table_filter_input.text.trim();
+        let editor = self.database_property_editor.as_ref().unwrap();
+        let op = editor.filter_op;
+        let text = editor.filter_input.text.trim();
         let value = if matches!(op, FilterOp::IsEmpty | FilterOp::IsNotEmpty) {
             serde_json::Value::Null
         } else {

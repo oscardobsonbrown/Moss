@@ -24,7 +24,7 @@ fn choice(key: String, name: &str, selected: bool, t: Theme) -> El {
 
 pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
     let editor = s.database_property_editor.as_ref()?;
-    let draft = &s.advanced_property;
+    let draft = &editor.advanced;
     let mut body = col().w_full().gap(6.);
     match editor.kind {
         PropertyKind::Formula => {
@@ -36,7 +36,14 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                 t,
             )
             .label("Formula expression")
-            .on_edit(|s: &mut State| &mut s.advanced_property.expression)
+            .on_edit(|s: &mut State| {
+                &mut s
+                    .database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .advanced
+                    .expression
+            })
             .on_input_change(|_: &mut State, tx| tx.instant());
             let preview = if draft.expression.text.trim().is_empty() {
                 "Enter a formula.".into()
@@ -89,7 +96,14 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                 t,
             )
             .label("Search databases")
-            .on_edit(|s: &mut State| &mut s.advanced_property.database_search)
+            .on_edit(|s: &mut State| {
+                &mut s
+                    .database_property_editor
+                    .as_mut()
+                    .unwrap()
+                    .advanced
+                    .database_search
+            })
             .on_input_change(|s: &mut State, tx| {
                 s.search_advanced_databases();
                 tx.instant();
@@ -112,8 +126,10 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                         t,
                     )
                     .on_press_tx(move |s: &mut State, tx| {
-                        s.advanced_property.target_database_id = Some(id.clone());
-                        s.advanced_property.target_database_name = Some(name.clone());
+                        if let Some(editor) = &mut s.database_property_editor {
+                            editor.advanced.target_database_id = Some(id.clone());
+                            editor.advanced.target_database_name = Some(name.clone());
+                        }
                         tx.instant();
                     })
                 }));
@@ -130,12 +146,14 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
         }
         PropertyKind::Rollup => {
             let relations = s
-                .tab()
-                .and_then(|tab| tab.database.as_ref())
+                .metadata_database(&editor.database_id)
                 .map(|db| {
                     db.properties
                         .iter()
-                        .filter(|p| p.kind == PropertyKind::Relation)
+                        .filter(|p| {
+                            p.kind == PropertyKind::Relation
+                                && editor.property.as_ref().is_none_or(|cur| cur.id != p.id)
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
@@ -156,8 +174,10 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                         t,
                     )
                     .on_press_tx(move |s: &mut State, tx| {
-                        s.advanced_property.relation_property_id = Some(id.clone());
-                        s.advanced_property.target_property_id = None;
+                        if let Some(editor) = &mut s.database_property_editor {
+                            editor.advanced.relation_property_id = Some(id.clone());
+                            editor.advanced.target_property_id = None;
+                        }
                         s.refresh_advanced_target_properties();
                         tx.instant();
                     })
@@ -179,7 +199,9 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                         t,
                     )
                     .on_press_tx(move |s: &mut State, tx| {
-                        s.advanced_property.target_property_id = Some(id.clone());
+                        if let Some(editor) = &mut s.database_property_editor {
+                            editor.advanced.target_property_id = Some(id.clone());
+                        }
                         tx.instant();
                     })
                 }));
@@ -211,7 +233,9 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
                         t,
                     )
                     .on_press_tx(move |s: &mut State, tx| {
-                        s.advanced_property.operation = id.into();
+                        if let Some(editor) = &mut s.database_property_editor {
+                            editor.advanced.operation = id.into();
+                        }
                         tx.instant();
                     })
                 }));
@@ -236,51 +260,21 @@ pub fn editor_fields(s: &State, t: Theme) -> Option<El> {
 }
 
 pub fn relation_picker(s: &State, t: Theme) -> Option<El> {
-    let picker = s.advanced_property.relation_picker.as_ref()?;
-    let anchor = if s
-        .record_peek
-        .as_ref()
-        .is_some_and(|peek| peek.record.id == picker.record_id)
-    {
-        format!("peek-property-{}", picker.property_id)
-    } else if s
-        .tab()
-        .and_then(|tab| tab.record_context.as_ref())
-        .is_some_and(|(_, record)| record.id == picker.record_id)
-    {
-        format!("page-property-{}", picker.property_id)
-    } else if s
-        .tab()
-        .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-        .is_some_and(|view| view.kind == moss_core::ViewKind::Calendar)
-    {
-        s.database_views.calendar.property_anchor.clone()?
-    } else if s
-        .tab()
-        .and_then(|tab| tab.database.as_ref().and_then(|db| db.views.get(tab.view)))
-        .is_some_and(|view| view.kind == moss_core::ViewKind::Board)
-    {
-        format!("board-value-{}-{}", picker.record_id, picker.property_id)
-    } else {
-        let index = s
-            .tab()?
-            .records
-            .iter()
-            .position(|record| record.id == picker.record_id)?;
-        format!("cell-{index}-{}", picker.property_id)
-    };
+    let picker = s.relation_picker()?;
+    let anchor = s.property_anchor(&picker.record_id, &picker.property_id, PropertyKind::Relation)?;
     let input = super::inputs::field(
-        &s.advanced_property.relation_search,
+        &picker.search,
         "relation-record-search",
         "Search records",
         t,
     )
     .label("Search related records")
-    .on_edit(|s: &mut State| &mut s.advanced_property.relation_search)
+    .on_edit(|s: &mut State| &mut s.relation_picker_mut().unwrap().search)
     .on_input_change(|s: &mut State, tx| {
         s.search_relation_candidates();
         tx.instant();
     });
+    let target_db = picker.target_database_id.clone();
     let selected = col()
         .w_full()
         .max_h(100.)
@@ -301,13 +295,39 @@ pub fn relation_picker(s: &State, t: Theme) -> Option<El> {
                     }
                 })
                 .unwrap_or("Unavailable record");
-            let id = id.clone();
-            choice(format!("relation-selected-{id}"), name, true, t).on_press_tx(
-                move |s: &mut State, tx| {
-                    s.toggle_relation_candidate(&id);
-                    tx.instant();
-                },
-            )
+            let toggle_id = id.clone();
+            let open_id = id.clone();
+            let open_db = target_db.clone();
+            row()
+                .w_full()
+                .center_y()
+                .gap(2.)
+                .child(
+                    choice(format!("relation-selected-{id}"), name, true, t)
+                        .grow(1.)
+                        .min_w(0.)
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.toggle_relation_candidate(&toggle_id);
+                            tx.instant();
+                        }),
+                )
+                .child(
+                    row()
+                        .key(format!("relation-open-selected-{id}"))
+                        .size(26., 28.)
+                        .center()
+                        .radius(4.)
+                        .hover(t.hover)
+                        .role("button")
+                        .label(format!("Open {name} in new tab"))
+                        .help("Open in new tab")
+                        .focusable(true)
+                        .child(rune::icon(&super::phosphor::ARROW_UP_RIGHT, 14.).color(t.muted))
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.open_related_record_in_new_tab(&open_db, &open_id);
+                            tx.instant();
+                        }),
+                )
         }));
     let candidates = col()
         .w_full()
@@ -324,16 +344,44 @@ pub fn relation_picker(s: &State, t: Theme) -> Option<El> {
             } else {
                 &record.title
             };
-            choice(
-                format!("relation-record-{id}"),
-                name,
-                picker.selected.contains(&id),
-                t,
-            )
-            .on_press_tx(move |s: &mut State, tx| {
-                s.toggle_relation_candidate(&id);
-                tx.instant();
-            })
+            let toggle_id = id.clone();
+            let open_id = id.clone();
+            let open_db = target_db.clone();
+            row()
+                .w_full()
+                .center_y()
+                .gap(2.)
+                .child(
+                    choice(
+                        format!("relation-record-{id}"),
+                        name,
+                        picker.selected.contains(&id),
+                        t,
+                    )
+                    .grow(1.)
+                    .min_w(0.)
+                    .on_press_tx(move |s: &mut State, tx| {
+                        s.toggle_relation_candidate(&toggle_id);
+                        tx.instant();
+                    }),
+                )
+                .child(
+                    row()
+                        .key(format!("relation-open-record-{id}"))
+                        .size(26., 28.)
+                        .center()
+                        .radius(4.)
+                        .hover(t.hover)
+                        .role("button")
+                        .label(format!("Open {name} in new tab"))
+                        .help("Open in new tab")
+                        .focusable(true)
+                        .child(rune::icon(&super::phosphor::ARROW_UP_RIGHT, 14.).color(t.muted))
+                        .on_press_tx(move |s: &mut State, tx| {
+                            s.open_related_record_in_new_tab(&open_db, &open_id);
+                            tx.instant();
+                        }),
+                )
         }));
     let remaining = picker.selected.len().saturating_sub(50);
     Some(
@@ -351,13 +399,15 @@ pub fn relation_picker(s: &State, t: Theme) -> Option<El> {
             .role("dialog")
             .label("Related records")
             .focus_return(anchor.clone())
-            .modal(true, |s: &mut State| s.close_relation_picker())
+            .modal(true, |s: &mut State| s.dismiss_cell_picker())
             .transition(Transition::opacity())
             .child(input)
-            .child(label("Selected", t.muted))
+            .child(label("Selected", t.muted).px(8.))
             .child(selected)
-            .children((remaining > 0).then(|| label(format!("{remaining} more selected"), t.muted)))
-            .child(label("Records", t.muted))
+            .children(
+                (remaining > 0).then(|| label(format!("{remaining} more selected"), t.muted).px(8.)),
+            )
+            .child(label("Records", t.muted).px(8.))
             .child(candidates)
             .children(picker.error.as_ref().map(|e| label(e, t.error).wrap()))
             .children(picker.save_failed.then(|| {

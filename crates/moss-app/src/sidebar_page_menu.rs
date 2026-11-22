@@ -238,8 +238,8 @@ impl State {
                 );
                 return false;
             }
-            self.dismiss_property_picker();
-            if self.property_picker.is_some() || !self.finish_cell(false) {
+            self.dismiss_cell_picker();
+            if self.cell_picker.is_some() || !self.finish_cell(false) {
                 self.sidebar_page_error("A property draft could not be saved.".into());
                 return false;
             }

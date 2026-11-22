@@ -326,7 +326,7 @@ fn pointer_selection_and_peek_close_fade_out() {
     click(&mut rt, &format!("cell-0-{status}"));
     rt.frame(1.);
     click(&mut rt, "property-option-1");
-    assert!(rt.state.property_picker.is_none());
+    assert!(rt.state.property_picker().is_none());
     let start = opacity(&rt, "property-picker");
     assert!(start > 0.);
     rt.frame(0.05);

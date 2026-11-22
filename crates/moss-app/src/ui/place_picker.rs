@@ -4,7 +4,7 @@ use rune::*;
 use std::time::{Duration, Instant};
 
 pub fn popup(s: &State, t: Theme) -> Option<El> {
-    let picker = s.place_picker.as_ref()?;
+    let picker = s.place_picker()?;
     let map = &s.database_views.map;
     let input = super::inputs::field(
         &map.place_query,
@@ -17,7 +17,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     .on_input_change(|s: &mut State, tx| {
         s.database_views.map.search_changed();
         s.database_views.map.search_selected = 0;
-        if let Some(picker) = &mut s.place_picker {
+        if let Some(picker) = s.place_picker_mut() {
             picker.error = None;
             picker.search_at = Some(Instant::now() + Duration::from_millis(400));
         }
@@ -42,7 +42,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
         if let Some(place) = map.search_results.get(map.search_selected).cloned() {
             s.save_place_choice(Some(place), false);
         } else {
-            if let Some(picker) = &mut s.place_picker {
+            if let Some(picker) = s.place_picker_mut() {
                 picker.search_at = None;
             }
             s.database_views.map.search();
@@ -130,7 +130,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     Some(
         panel
             .focus_return(&picker.anchor)
-            .modal(true, |s: &mut State| s.dismiss_place_picker())
+            .modal(true, |s: &mut State| s.dismiss_cell_picker())
             .anchored_fit(&picker.anchor, Side::Bottom, Align::Start, 2.),
     )
 }

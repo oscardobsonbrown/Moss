@@ -211,7 +211,7 @@ fn board_cards_show_filled_properties_and_stack_related_pages() {
     let second = rect(&f.rt, &format!("board-relation-{}-1", relation.id));
     assert!(second[1] >= first[1] + first[3]);
     click(&mut f.rt, &format!("board-value-{}-{}", f.ids[0], relation.id));
-    assert!(f.rt.state.advanced_property.relation_picker.is_some());
+    assert!(f.rt.state.relation_picker().is_some());
     drop(f.rt);
     std::fs::remove_dir_all(f.path).unwrap();
 }
@@ -230,11 +230,11 @@ fn board_drag_can_start_on_a_property_and_click_still_opens_its_editor() {
     f.rt.pointer_up(to[0] + 40., to[1] + 20.);
     f.rt.frame(1. / 120.);
     assert_eq!(f.rt.state.store.get_record(&id).unwrap().unwrap().values[&f.status], "Done");
-    assert!(f.rt.state.property_picker.is_none());
+    assert!(f.rt.state.property_picker().is_none());
     assert!(f.rt.state.record_peek.is_none());
     wait_board(&mut f.rt, |p| projected_in(p, &id, &json!("Done"), &Value::Null));
     click(&mut f.rt, &key);
-    assert!(f.rt.state.property_picker.is_some());
+    assert!(f.rt.state.property_picker().is_some());
     drop(f.rt);
     std::fs::remove_dir_all(f.path).unwrap();
 }
@@ -556,7 +556,7 @@ fn board_card_property_and_context_actions_keep_the_target_id_and_do_not_open_th
     assert!(f.rt.find("property-picker").is_some());
     assert!(f.rt.state.record_peek.is_none());
     press(&mut f.rt, Key::Escape);
-    assert!(f.rt.state.property_picker.is_none());
+    assert!(f.rt.state.property_picker().is_none());
     let point = title_point(&f.rt, &id);
     f.rt.secondary_down(point[0], point[1]);
     f.rt.secondary_up(point[0], point[1]);
@@ -1009,7 +1009,7 @@ fn board_place_property_opens_shared_editor() {
     click(&mut f.rt, &format!("board-card-menu-{}", f.ids[0]));
     f.rt.frame(1.);
     click(&mut f.rt, &format!("board-menu-set-place-{property}"));
-    assert!(f.rt.state.place_picker.is_some(), "place picker missing: {:?}, menu {}, peek {}", f.rt.state.error, f.rt.state.database_views.board_ui.menu.is_some(), f.rt.state.record_peek.is_some());
+    assert!(f.rt.state.place_picker().is_some(), "place picker missing: {:?}, menu {}, peek {}", f.rt.state.error, f.rt.state.database_views.board_ui.menu.is_some(), f.rt.state.record_peek.is_some());
     assert!(f.rt.find("place-search-input").is_some());
     f.rt.state.database_views.map.place_query.replace_text("Fremantle");
     f.rt.invalidate(); f.rt.frame(1. / 120.);
