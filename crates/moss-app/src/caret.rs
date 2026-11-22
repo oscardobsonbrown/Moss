@@ -91,6 +91,17 @@ fn focused(s: &State) -> Option<(u64, bool)> {
             &s.view_search,
         ),
         (
+            s.modal == Some(crate::state::Modal::Settings),
+            "settings-workspace-name",
+            &s.settings.workspace_name,
+        ),
+        (
+            s.modal == Some(crate::state::Modal::Settings)
+                && s.settings.dropdown == Some(crate::settings::SettingsDropdown::WorkspaceIcon),
+            "settings-icon-search",
+            &s.settings.icon_search,
+        ),
+        (
             s.modal.is_none() && s.tab().is_some_and(|tab| tab.database.is_some()),
             "filter",
             &s.filter,

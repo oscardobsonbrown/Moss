@@ -1,5 +1,5 @@
 use super::theme::{Theme, label};
-use crate::state::{Modal, State};
+use crate::state::State;
 use rune::*;
 
 pub fn popup(s: &State, t: Theme) -> El {
@@ -38,7 +38,7 @@ pub fn popup(s: &State, t: Theme) -> El {
                 .child(rune::icon(&super::phosphor::GEAR_SIX, 16.).color(t.muted)),
         )
         .child(label("Settings", t.text).key("workspace-settings-label"))
-        .on_press(|s: &mut State| s.modal = Some(Modal::Settings));
+        .on_press(|s: &mut State| s.open_settings());
     let list = col()
         .key("workspace-list")
         .w_full()

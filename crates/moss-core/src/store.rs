@@ -126,6 +126,34 @@ impl Store {
         )?;
         Ok(w)
     }
+    pub fn update_workspace(&mut self, id: &str, name: &str, icon: &str) -> Result<Workspace> {
+        nonempty(id)?;
+        let trimmed = name.trim();
+        nonempty(trimmed)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let existing: Workspace = tx
+            .query_row("SELECT data FROM workspaces WHERE id=?1", [id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .map(decode)
+            .transpose()?
+            .ok_or_else(|| invalid("workspace does not exist"))?;
+        let updated = Workspace {
+            id: existing.id,
+            name: trimmed.into(),
+            icon: icon.into(),
+            created_at: existing.created_at,
+        };
+        tx.execute(
+            "UPDATE workspaces SET data=?2 WHERE id=?1",
+            params![updated.id, encode(&updated)?],
+        )?;
+        tx.commit()?;
+        Ok(updated)
+    }
     pub fn list_pages(&self, workspace_id: &str) -> Result<Vec<Page>> {
         collect_json(&mut self.conn.prepare("SELECT data FROM pages WHERE workspace_id=?1 AND deleted_at IS NULL AND json_extract(data,'$.kind') <> 'record' ORDER BY json_extract(data,'$.created_at'),id")?, [workspace_id])
     }

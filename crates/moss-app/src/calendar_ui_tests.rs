@@ -1304,9 +1304,10 @@ fn monday_preference_changes_calendar_and_date_picker_and_persists() {
     let (mut rt, path) = database_runtime(2);
     rt.state.tabs[rt.state.active].calendar_month =
         chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
-    rt.state.modal = Some(state::Modal::Settings);
+    rt.state.open_settings();
     rt.invalidate();
     rt.frame(0.3);
+    click(&mut rt, "settings-week-start-trigger");
     click(&mut rt, "week-start-monday");
     assert_eq!(rt.state.prefs.week_start(), 1);
     press(&mut rt, Key::Escape);
@@ -1352,15 +1353,17 @@ fn monday_preference_changes_calendar_and_date_picker_and_persists() {
 fn any_weekday_can_start_the_week_and_persists() {
     let (mut rt, path) = database_runtime(2);
     rt.state.tabs[rt.state.active].calendar_month = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
-    rt.state.modal = Some(state::Modal::Settings);
+    rt.state.open_settings();
     rt.invalidate();
     rt.frame(0.3);
     for (index, day) in ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"].into_iter().enumerate() {
+        click(&mut rt, "settings-week-start-trigger");
         click(&mut rt, &format!("week-start-{day}"));
         assert_eq!(rt.state.prefs.week_start(), index as u8);
         let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
         assert_eq!(crate::calendar_view::weekday_offset(date, rt.state.prefs.week_start()), ((7 - index) % 7) as u32);
     }
+    click(&mut rt, "settings-week-start-trigger");
     click(&mut rt, "week-start-wednesday");
     press(&mut rt, Key::Escape);
     rt.frame(0.3);

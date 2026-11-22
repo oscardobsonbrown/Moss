@@ -36,6 +36,7 @@ mod record_open;
 mod records;
 mod relation_titles;
 mod rich_text;
+mod settings;
 mod sidebar_favorites;
 mod sidebar_page_menu;
 mod sidebar_reveal;
@@ -152,6 +153,11 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
                 s.begin_page(None);
                 return true;
             }
+            ',' => {
+                tx.instant();
+                s.open_settings();
+                return true;
+            }
             'w' => {
                 tx.instant();
                 s.modal = None;
@@ -192,7 +198,15 @@ fn key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if event.key == Key::Escape && s.modal.is_some() {
         tx.instant();
-        s.modal = None;
+        if s.modal == Some(state::Modal::Settings) {
+            if s.settings.dropdown.is_some() {
+                s.dismiss_settings_dropdown();
+            } else {
+                s.close_settings();
+            }
+        } else {
+            s.modal = None;
+        }
         return true;
     }
     false
