@@ -76,6 +76,8 @@ mod records;
 mod relation_titles;
 #[path = "../src/rich_text.rs"]
 mod rich_text;
+#[path = "../src/settings.rs"]
+mod settings;
 #[path = "../src/sidebar_favorites.rs"]
 mod sidebar_favorites;
 #[path = "../src/sidebar_page_menu.rs"]

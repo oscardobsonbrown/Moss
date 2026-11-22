@@ -42,6 +42,7 @@ pub(crate) mod property_visibility;
 mod record_icon;
 mod record_metadata;
 mod record_peek;
+mod settings;
 mod shell;
 mod sidebar_actions;
 mod sidebar_section_menu;
@@ -105,18 +106,21 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     };
     cx.caption_color(if dark { Color::WHITE } else { Color::BLACK });
     cx.titlebar_height(CHROME_EDGE);
-    col()
+    let mut root = col()
         .key("root")
         .w_full()
         .h_full()
         .fill(t.sidebar)
         .color(t.text)
         .motion(Spring::NONE)
-        .hover_motion_within(Anim::INSTANT, Anim::INSTANT)
-        .on_pointer_move(|s: &mut State, point| {
+        .hover_motion_within(Anim::INSTANT, Anim::INSTANT);
+    if s.sidebar_collapsed() || s.sidebar_keyboard_controls {
+        root = root.on_pointer_move(|s: &mut State, point| {
             s.sidebar_keyboard_controls = false;
             s.sidebar_reveal_pointer(point.x, point.y);
-        })
+        });
+    }
+    root
         .on_key(|s: &mut State, event, tx| {
             if event.key == Key::Tab {
                 s.sidebar_keyboard_controls = true;

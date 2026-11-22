@@ -120,3 +120,6 @@ mod calendar_ui_tests;
 
 #[path = "comments_ui_tests.rs"]
 mod comments_ui_tests;
+
+#[path = "settings_ui_tests.rs"]
+mod settings_ui_tests;

@@ -149,7 +149,9 @@ mod tests {
             },
         );
         rt.poll = Some(crate::poll);
-        rt.state.modal = Some(crate::state::Modal::Settings);
+        rt.state.open_settings();
+        rt.state
+            .select_settings_section(crate::settings::SettingsSection::ImportExport);
         rt.frame(0.01);
         assert!(rt.find("export-workspace").is_some());
         assert!(rt.find("import-workspace").is_some());

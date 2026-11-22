@@ -628,3 +628,23 @@ fn record_page_lookup_reports_duplicate_legacy_links() {
         .unwrap();
     assert!(store.get_record_by_page(&page.id).is_err());
 }
+
+#[test]
+fn update_workspace_persists_name_and_icon_and_rejects_empty_names() {
+    let mut store = Store::in_memory().unwrap();
+    let workspace = store.create_workspace("Personal", "◈").unwrap();
+    let updated = store
+        .update_workspace(&workspace.id, "  Studio Notes  ", "🪴")
+        .unwrap();
+    assert_eq!(updated.id, workspace.id);
+    assert_eq!(updated.name, "Studio Notes");
+    assert_eq!(updated.icon, "🪴");
+    assert_eq!(updated.created_at, workspace.created_at);
+
+    let listed = store.list_workspaces().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0], updated);
+
+    assert!(store.update_workspace(&workspace.id, "   ", "🪴").is_err());
+    assert!(store.update_workspace("missing-id", "Valid", "").is_err());
+}

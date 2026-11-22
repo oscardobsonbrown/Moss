@@ -75,14 +75,22 @@ mod macos {
         let automatic = client.automatic();
         let action = match status {
             Status::Ready(_) | Status::SaveFailed(_) => {
-                update_button("settings-restart-update", "Restart to install", true, t)
-                    .on_press_tx(updater::restart)
+                super::super::settings::action_button(
+                    "settings-restart-update",
+                    "Restart to install",
+                    true,
+                    t,
+                )
+                .on_press_tx(updater::restart)
             }
-            Status::Available(_) => {
-                update_button("settings-download-update", "Download update", true, t)
-                    .on_press_tx(|s, tx| check(s, tx, true))
-            }
-            _ => update_button(
+            Status::Available(_) => super::super::settings::action_button(
+                "settings-download-update",
+                "Download update",
+                true,
+                t,
+            )
+            .on_press_tx(|s, tx| check(s, tx, true)),
+            _ => super::super::settings::action_button(
                 "check-for-updates",
                 if status == Status::Checking {
                     "Checking…"
@@ -99,18 +107,32 @@ mod macos {
             .on_press_tx(|s, tx| check(s, tx, false)),
         };
         let feedback = match status {
-            Status::Checking => Some(small(t, "Checking for updates…", t.muted)),
-            Status::Current => Some(small(t, "Moss is up to date", t.muted)),
-            Status::CheckFailed => {
-                Some(small(t, "Couldn’t check for updates. Try again.", t.error))
-            }
-            Status::Restarting(_) => Some(small(t, "Restarting to install update…", t.muted)),
+            Status::Checking => Some(
+                super::super::settings::description_text("Checking for updates…", t),
+            ),
+            Status::Current => Some(
+                super::super::settings::description_text("Moss is up to date.", t),
+            ),
+            Status::CheckFailed => Some(
+                text("Couldn’t check for updates. Try again.")
+                    .font(TextStyle::new(12.5, 400.).family(Family::Sans).lh(17.))
+                    .color(t.error)
+                    .wrap(),
+            ),
+            Status::Restarting(_) => Some(super::super::settings::description_text(
+                "Restarting to install update…",
+                t,
+            )),
             Status::Downloading(percent) => {
                 let percent = percent.min(100);
                 Some(
                     col()
-                        .gap(7.)
-                        .child(small(t, "Downloading update", t.muted))
+                        .pt(4.)
+                        .gap(6.)
+                        .child(super::super::settings::description_text(
+                            format!("Downloading update ({percent}%)…"),
+                            t,
+                        ))
                         .child(
                             el().key("update-download-progress")
                                 .role("progressbar")
@@ -128,55 +150,42 @@ mod macos {
             }
             _ => None,
         };
+        let version_detail = col()
+            .gap(4.)
+            .child(super::super::settings::description_text(
+                format!("Moss {}", updater::version_label(client.version)),
+                t,
+            ))
+            .children(feedback.map(|item| item.live_region(LiveRegion::Polite)));
+
         Some(
             col()
                 .key("software-update-settings")
                 .w_full()
-                .gap(8.)
-                .child(small(t, "Software update", t.muted))
-                .child(
-                    row()
-                        .h(34.)
-                        .gap(10.)
-                        .center_y()
-                        .child(
-                            small(
-                                t,
-                                format!("Moss {}", updater::version_label(client.version)),
-                                t.text,
-                            )
-                            .grow(1.),
-                        )
-                        .child(action),
-                )
-                .child(
-                    row()
-                        .center_y()
-                        .gap(8.)
-                        .child(small(t, "Automatic updates", t.text).grow(1.))
-                        .child(
-                            el().key("automatic-updates")
-                                .size(32., 18.)
-                                .radius(9.)
-                                .role("switch")
-                                .label("Automatic updates")
-                                .checked(automatic)
-                                .focusable(true)
-                                .fill(if automatic { t.blue } else { t.faint })
-                                .child(
-                                    el().size(14., 14.)
-                                        .radius(7.)
-                                        .fill(Color::WHITE)
-                                        .absolute(if automatic { 16. } else { 2. }, 2.),
-                                )
-                                .on_press_tx(|s: &mut State, tx| {
-                                    updater::toggle(s);
-                                    tx.instant();
-                                }),
-                        ),
-                )
-                .children(feedback.map(|item| item.live_region(LiveRegion::Polite)))
-                .child(el().h(1.).w_full().fill(t.line)),
+                .child(super::super::settings::setting_row(
+                    "Software update",
+                    version_detail,
+                    action,
+                    t,
+                ))
+                .child(super::super::settings::setting_row(
+                    "Automatic updates",
+                    super::super::settings::description_text(
+                        "Download and prepare new Moss releases automatically in the background.",
+                        t,
+                    ),
+                    super::super::settings::toggle_switch(
+                        "automatic-updates",
+                        "Automatic updates",
+                        automatic,
+                        t,
+                    )
+                    .on_press_tx(|s: &mut State, tx| {
+                        updater::toggle(s);
+                        tx.instant();
+                    }),
+                    t,
+                )),
         )
     }
 

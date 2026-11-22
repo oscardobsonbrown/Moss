@@ -351,7 +351,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
                 t,
             )
             .w_full()
-            .on_press(|s: &mut State| s.modal = Some(Modal::Settings)),
+            .on_press(|s: &mut State| s.open_settings()),
         )
         .child(
             nav(

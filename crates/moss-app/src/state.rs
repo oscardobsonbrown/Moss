@@ -72,11 +72,10 @@ pub struct NewItemDraft {
     pub blocks: Vec<Block>,
     pub created_link: Option<Block>,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modal {
     Search,
     Settings,
-    AgentSetup { feedback: Option<&'static str> },
     PageActions,
     Appearance,
     Trash,
@@ -162,6 +161,7 @@ pub struct State {
     pub prefs: Preferences,
     pub shared_preferences: std::sync::Arc<std::sync::Mutex<Preferences>>,
     pub modal: Option<Modal>,
+    pub settings: crate::settings::SettingsState,
     pub search: TextEdit,
     pub all_workspaces: bool,
     pub search_new_tab: bool,
@@ -306,6 +306,7 @@ impl State {
             shared_preferences: std::sync::Arc::new(std::sync::Mutex::new(prefs.clone())),
             prefs,
             modal: None,
+            settings: crate::settings::SettingsState::default(),
             search: TextEdit::new(""),
             all_workspaces: false,
             search_new_tab: false,
