@@ -30,6 +30,7 @@ pub struct CoverState {
     cache: Option<ImageCache>,
     wake: Option<Waker>,
     pending_images: BTreeSet<String>,
+    ready_images: BTreeSet<String>,
     result_tx: Option<mpsc::Sender<CoverResult>>,
     result_rx: Option<mpsc::Receiver<CoverResult>>,
 }
@@ -459,6 +460,7 @@ pub fn poll(s: &mut State, _time: f64, _tx: &mut Tx) -> bool {
                                     s.page_cover.images.remove(&key);
                                 }
                             }
+                            s.page_cover.ready_images.remove(&asset);
                             s.page_cover.images.insert(asset, cache.load(bytes));
                         }
                     }
@@ -538,6 +540,14 @@ pub fn poll(s: &mut State, _time: f64, _tx: &mut Tx) -> bool {
             }
         }
     }
+    for (asset, image) in &s.page_cover.images {
+        if image.is_ready() && s.page_cover.ready_images.insert(asset.clone()) {
+            changed = true;
+        }
+    }
+    s.page_cover
+        .ready_images
+        .retain(|asset| s.page_cover.images.contains_key(asset));
     changed
 }
 
@@ -827,7 +837,11 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(1. / 60.);
         rt.resolve_file_dialog(Some(image_path)).unwrap();
-        rt.state.open_page(&other.id, false);
+        let other_id = other.id.clone();
+        rt.update(move |s, tx| {
+            s.open_page(&other_id, false);
+            tx.instant();
+        });
         let deadline = Instant::now() + Duration::from_secs(5);
         while rt.state.store.get_blocks(&page).unwrap()[0]
             .config
@@ -842,7 +856,11 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        rt.state.open_page(&page, false);
+        let page_id = page.clone();
+        rt.update(move |s, tx| {
+            s.open_page(&page_id, false);
+            tx.instant();
+        });
         assert_eq!(
             rt.state.tab().unwrap().blocks[0].block.config["asset"],
             asset
