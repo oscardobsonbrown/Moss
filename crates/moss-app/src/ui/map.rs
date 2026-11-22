@@ -19,7 +19,19 @@ pub fn view(s: &State, tab: &crate::state::Tab, db: &Database, t: Theme) -> El {
         .and_then(|v| v.config.get("open_mode"))
         .and_then(Value::as_str)
         .unwrap_or("side");
-    let map = canvas(&m.points, &m.tiles, m.viewport, t, &db.id, mode, "map")
+    if let Some(surface) = &m.surface {
+        surface.sync_from_view(m.viewport, t.dark, t.scale);
+    }
+    let map = canvas(
+        &m.points,
+        &m.tiles,
+        m.surface.as_ref().map(|surface| surface.native_surface()),
+        m.viewport,
+        t,
+        &db.id,
+        mode,
+        "map",
+    )
         .child(super::map_controls::navigation_for_map(s, t))
         .cursor(if m.drag_start.is_some() {
             Cursor::Grabbing

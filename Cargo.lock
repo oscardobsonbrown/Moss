@@ -1960,11 +1960,11 @@ dependencies = [
  "chrono",
  "moss-core",
  "moss-engine",
+ "moss-maplibre",
  "moss-mcp",
  "rune",
  "serde",
  "serde_json",
- "skrifa",
  "uuid",
 ]
 
@@ -1992,6 +1992,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "moss-maplibre"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]

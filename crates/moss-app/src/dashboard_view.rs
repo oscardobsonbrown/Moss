@@ -54,6 +54,7 @@ pub struct DashboardState {
     pub map_drag: Option<MapDrag>,
     map_bases: BTreeMap<String, crate::map_view::MapViewport>,
     pub map_tiles: BTreeMap<String, crate::map_view::MapTileLoader>,
+    pub map_surfaces: BTreeMap<String, crate::map_view::MapSurface>,
     tile_keys: BTreeMap<String, String>,
     waker: Option<rune::Waker>,
     context: String,
@@ -87,6 +88,7 @@ impl Default for DashboardState {
             map_drag: None,
             map_bases: BTreeMap::new(),
             map_tiles: BTreeMap::new(),
+            map_surfaces: BTreeMap::new(),
             tile_keys: BTreeMap::new(),
             waker: None,
             context: String::new(),
@@ -685,6 +687,7 @@ pub fn poll(s: &mut State, _time: f64, tx: &mut Tx) -> bool {
         state.requested.clear();
         state.cancel_worker();
         state.map_tiles.clear();
+        state.map_surfaces.clear();
         state.tile_keys.clear();
         return false;
     };
@@ -711,6 +714,7 @@ pub fn poll(s: &mut State, _time: f64, tx: &mut Tx) -> bool {
         state.widgets.clear();
         state.candidates.clear();
         state.map_tiles.clear();
+        state.map_surfaces.clear();
         state.tile_keys.clear();
         state.map_viewports.clear();
         state.map_drag = None;
@@ -850,7 +854,9 @@ pub fn poll(s: &mut State, _time: f64, tx: &mut Tx) -> bool {
         .collect();
     let retained_ids: std::collections::BTreeSet<_> =
         config.widgets.iter().map(|w| w.id.clone()).collect();
+    let dark_hint = s.prefs.dark.unwrap_or(false);
     state.map_tiles.retain(|id, _| retained_ids.contains(id));
+    state.map_surfaces.retain(|id, _| retained_ids.contains(id));
     state.tile_keys.retain(|id, _| retained_ids.contains(id));
     state.map_bases.retain(|id, _| retained_ids.contains(id));
     state
@@ -873,16 +879,39 @@ pub fn poll(s: &mut State, _time: f64, tx: &mut Tx) -> bool {
                 .unwrap_or_default()
         };
         let tile_key = format!("{:?}", viewport);
-        let loader = state
-            .map_tiles
-            .entry(widget.id.clone())
-            .or_insert_with(|| crate::map_view::MapTileLoader::new(waker));
-        if state.tile_keys.get(&widget.id) != Some(&tile_key) {
-            loader.request(viewport, s.path.clone());
-            state.tile_keys.insert(widget.id.clone(), tile_key);
-            changed = true;
+        if crate::map_view::surface::use_maplibre() && !state.map_tiles.contains_key(&widget.id) {
+            if !state.map_surfaces.contains_key(&widget.id) {
+                if let Some(surface) = crate::map_view::MapSurface::start(
+                    viewport,
+                    s.path.clone(),
+                    dark_hint,
+                    2.0,
+                    waker,
+                ) {
+                    state.map_surfaces.insert(widget.id.clone(), surface);
+                    state.tile_keys.insert(widget.id.clone(), tile_key.clone());
+                    changed = true;
+                }
+            }
+            if let Some(surface) = state.map_surfaces.get(&widget.id) {
+                if state.tile_keys.get(&widget.id) != Some(&tile_key) {
+                    surface.set_viewport(viewport);
+                    state.tile_keys.insert(widget.id.clone(), tile_key);
+                    changed = true;
+                }
+            }
+        } else {
+            let loader = state
+                .map_tiles
+                .entry(widget.id.clone())
+                .or_insert_with(|| crate::map_view::MapTileLoader::new(waker));
+            if state.tile_keys.get(&widget.id) != Some(&tile_key) {
+                loader.request(viewport, s.path.clone());
+                state.tile_keys.insert(widget.id.clone(), tile_key);
+                changed = true;
+            }
+            changed |= loader.poll();
         }
-        changed |= loader.poll();
     }
     if state.receiver.is_some() {
         tx.wake_after(Duration::from_millis(30));

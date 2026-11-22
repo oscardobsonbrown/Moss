@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/moss-core", "crates/moss-engine", "crates/moss-app", "crates/moss-mcp"]
+members = ["crates/moss-core", "crates/moss-engine", "crates/moss-maplibre", "crates/moss-app", "crates/moss-mcp"]
 default-members = ["crates/moss-app"]
 resolver = "3"
 

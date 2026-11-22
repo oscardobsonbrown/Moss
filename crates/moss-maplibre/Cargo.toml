@@ -1,0 +1,11 @@
+[package]
+name = "moss-maplibre"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.build-dependencies]
+cc = "1"

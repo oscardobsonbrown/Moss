@@ -2,6 +2,7 @@ use rune::*;
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub dark: bool,
+    pub scale: f32,
     pub bg: Color,
     pub menu: Color,
     pub family: Family,
@@ -52,6 +53,7 @@ impl Theme {
         if dark {
             Self {
                 dark,
+                scale: 1.,
                 bg: hex(0x191919),
                 menu: hex(0x252525),
                 family: Family::Sans,
@@ -72,6 +74,7 @@ impl Theme {
         } else {
             Self {
                 dark,
+                scale: 1.,
                 bg: Color::WHITE,
                 menu: Color::WHITE,
                 family: Family::Sans,

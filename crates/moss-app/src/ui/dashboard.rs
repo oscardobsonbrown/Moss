@@ -683,10 +683,17 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
                     t,
                 );
                 let loader = s.database_views.dashboard.map_tiles.get(&id);
-                if loader.is_none() {
+                let surface = s.database_views.dashboard.map_surfaces.get(&id);
+                if let Some(surface) = surface {
+                    surface.sync_from_view(viewport, t.dark, t.scale);
+                }
+                if loader.is_none() && surface.is_none() {
                     card = card.child(t.label("Map tiles loading", t.muted));
                 }
-                if let Some(error) = loader.and_then(|loader| loader.error.as_ref()) {
+                let map_error = loader
+                    .and_then(|loader| loader.error.clone())
+                    .or_else(|| surface.and_then(|surface| surface.error()));
+                if let Some(error) = map_error.as_deref() {
                     card = card.child(
                         t.label(format!("Map tiles unavailable: {error}"), t.muted)
                             .key(format!("dashboard-map-error-{id}"))
@@ -700,6 +707,7 @@ fn widget_view(s: &State, widget: &DashboardWidget, widgets: &[DashboardWidget],
                     super::map::canvas(
                         &map.points,
                         loader.map(|loader| loader.tiles.as_slice()).unwrap_or(&[]),
+                        surface.map(|surface| surface.native_surface()),
                         viewport,
                         t,
                         &data.database.id,
