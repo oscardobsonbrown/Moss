@@ -1,0 +1,22 @@
+[package]
+name = "moss-updater"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "moss-update-helper"
+path = "src/bin/moss_update_helper.rs"
+
+[dependencies]
+base64 = "0.22"
+chrono.workspace = true
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+getrandom = "0.3"
+hex = "0.4"
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+uuid.workspace = true

@@ -22,17 +22,27 @@ Build the macOS app with `scripts/package-macos.sh`. Local builds create `dist/M
 
 ## Releases
 
-Each push to `main`, including a merged pull request, runs the release workflow. It tests the workspace, increments the latest stable minor version, and creates a [GitHub release](https://github.com/oscardobsonbrown/Moss/releases) with an Apple Silicon macOS archive. With no earlier tag, the workspace version is the baseline. A retry reuses the tag for the same commit. The app archive uses an ad hoc signature and is not notarized.
+Each push to `main`, including a merged pull request, runs the release workflow. It tests the workspace, increments the latest stable minor version, builds an Apple Silicon macOS archive, signs `latest.json` with Ed25519, and publishes both files to [GitHub Releases](https://github.com/oscardobsonbrown/Moss/releases). With no earlier tag, the workspace version is the baseline. A retry reuses the tag for the same commit. The app archive uses an ad hoc signature and is not notarized.
 
-GitHub release builds with an update public key check for a newer stable release at launch and every six hours. Download progress appears in Software update settings. When an update is ready, choose **Restart to install**, or quit Moss to install it. The installer replaces the app bundle. Workspace data stays in its current folder.
+Release builds with an embedded update public key check the static `latest.json` manifest at launch and every six hours (with `ETag` caching). Verified updates stage in `~/Library/Caches/app.moss.desktop/updates/` and persist across restarts. Download progress appears in Software update settings. Normal Quit (`Cmd+Q`) closes Moss without installing. Choose **Restart to install** to run the detached update helper, which waits for Moss to exit, swaps `Moss.app` atomically with rollback on failure, and relaunches Moss. Workspace data stays in its current folder.
 
-Install the first release with updater support manually. Update checks use the public release feed and require no GitHub account. To disable update checks for a launch, set `MOSS_DISABLE_UPDATES=1`.
+Install the first release with updater support manually. Update checks use public release downloads and require no GitHub account or GitHub API quota. To disable update checks for a launch, set `MOSS_DISABLE_UPDATES=1`.
 
-### Sign update archives
+### Configure automatic release signing
 
-On a Mac that you control, build the signing tool with `xcrun swiftc -O scripts/moss-update-helper.swift -o moss-update-helper`. Use `./moss-update-helper keygen /path/to/private-key` to save the new key with owner-only permissions and print its public key. Set the GitHub repository Actions variable `MOSS_UPDATE_PUBLIC_KEY` to that public value. Keep the private key separate from GitHub and its release workflow.
+Generate an Ed25519 signing keypair once:
 
-After you review a release archive, sign the exact ZIP that GitHub serves with `./moss-update-helper sign /path/to/private-key Moss-v0.9.0-macos-arm64.zip Moss-v0.9.0-macos-arm64.zip.sig`. Upload the `.sig` file to the same release. Moss requires the signature before it extracts the archive. Keep the same public key in future builds so that installed copies can verify new releases.
+```sh
+cargo run -p moss-updater --bin moss-update-helper -- keygen
+```
+
+Add `MOSS_UPDATE_SIGNING_KEY` as a GitHub Actions repository secret. The release workflow derives `MOSS_UPDATE_PUBLIC_KEY` from that secret automatically, embeds the public key into Moss, signs `latest.json` during the release job, and verifies the manifest against the archive before publishing. Keep the same signing key across future releases so installed copies can verify new manifests.
+
+To sign and notarize macOS releases for Gatekeeper, also set `APPLE_CERTIFICATE_P12_B64`, `APPLE_CERTIFICATE_PASSWORD`, and `APPLE_SIGNING_IDENTITY`, plus either App Store Connect API credentials (`APPLE_NOTARY_KEY_P8_B64`, `APPLE_NOTARY_KEY_ID`, `APPLE_NOTARY_ISSUER_ID`) or Apple ID notarization credentials (`APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID`). Without those secrets, CI falls back to ad hoc signing.
+
+### Test updates locally
+
+In non-release builds, you can test the full update cycle against a local manifest (`file://` or `http://127.0.0.1`) by setting `MOSS_UPDATE_MANIFEST_URL`, `MOSS_UPDATE_PUBLIC_KEY`, and optionally `MOSS_UPDATE_CURRENT_VERSION`, `MOSS_UPDATE_TARGET_APP`, and `MOSS_UPDATE_CACHE_DIR`.
 
 ## Hot reload
 

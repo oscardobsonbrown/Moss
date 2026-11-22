@@ -104,6 +104,7 @@ mod macos {
             Status::CheckFailed => {
                 Some(small(t, "Couldn’t check for updates. Try again.", t.error))
             }
+            Status::Restarting(_) => Some(small(t, "Restarting to install update…", t.muted)),
             Status::Downloading(percent) => {
                 let percent = percent.min(100);
                 Some(
@@ -183,7 +184,12 @@ mod macos {
         super::super::theme::link_button("update-release-notes", "Release notes", t)
             .label("Release notes on GitHub")
             .on_press_tx(move |s: &mut State, tx| {
-                if let Err(error) = tx.open_url(&updater::release_url(version)) {
+                let url = s
+                    .updates
+                    .client
+                    .as_ref()
+                    .map_or_else(|| updater::release_url(version), |c| c.release_url_for(version));
+                if let Err(error) = tx.open_url(&url) {
                     s.error = Some(error.to_string());
                 }
             })
@@ -256,6 +262,17 @@ mod macos {
                 Some("Move Moss to your Applications folder to update."),
                 true,
             ),
+            Status::InstallFailed(next) => (
+                "Moss couldn’t install the update".to_owned(),
+                &phosphor::X,
+                Some(
+                    update_button("retry-update-install", "Check again", false, t)
+                        .on_press_tx(|s, tx| check(s, tx, true)),
+                ),
+                Some(next),
+                Some("You can try again or download the update from GitHub."),
+                true,
+            ),
             Status::Restarting(_) => return None,
             _ => {
                 let version = view.updated?;
@@ -269,7 +286,10 @@ mod macos {
                 )
             }
         };
-        let stacked = matches!(view.status, Status::Available(_) | Status::SaveFailed(_));
+        let stacked = matches!(
+            view.status,
+            Status::Available(_) | Status::SaveFailed(_) | Status::InstallFailed(_)
+        );
         Some(
             col()
                 .key("software-update-toast")

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/moss-core", "crates/moss-engine", "crates/moss-maplibre", "crates/moss-app", "crates/moss-mcp"]
+members = ["crates/moss-core", "crates/moss-engine", "crates/moss-maplibre", "crates/moss-app", "crates/moss-mcp", "crates/moss-updater"]
 default-members = ["crates/moss-app"]
 resolver = "3"
 
@@ -17,6 +17,7 @@ thiserror = "2"
 rusqlite = { version = "0.41.1", features = ["bundled", "functions"] }
 moss-core = { path = "crates/moss-core" }
 moss-engine = { path = "crates/moss-engine" }
+moss-updater = { path = "crates/moss-updater" }
 
 [profile.dev.package."*"]
 debug = false
