@@ -29,6 +29,12 @@ jobs:
           APPLE_CERTIFICATE_P12_B64: ${{ secrets.APPLE_CERTIFICATE_P12_B64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARY_KEY_P8_B64: ${{ secrets.APPLE_NOTARY_KEY_P8_B64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -n "${APPLE_CERTIFICATE_P12_B64:-}" ] && [ -n "${APPLE_CERTIFICATE_PASSWORD:-}" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
             keychain="$RUNNER_TEMP/moss-signing.keychain-db"
@@ -49,6 +55,19 @@ jobs:
             if ! security find-identity -v -p codesigning "$keychain" | grep -Fq "$APPLE_SIGNING_IDENTITY"; then
               echo "Expected signing identity was not found in the imported certificate." >&2
               security find-identity -p codesigning "$keychain" >&2 || true
+              exit 1
+            fi
+            if [ -n "${APPLE_NOTARY_KEY_P8_B64:-}" ] && [ -n "${APPLE_NOTARY_KEY_ID:-}" ] && [ -n "${APPLE_NOTARY_ISSUER_ID:-}" ]; then
+              key_path="$RUNNER_TEMP/AuthKey.p8"
+              printf '%s' "$APPLE_NOTARY_KEY_P8_B64" | base64 --decode > "$key_path"
+              chmod 600 "$key_path"
+              xcrun notarytool history --key "$key_path" --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" >/dev/null
+              rm -f "$key_path"
+            elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+              xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" >/dev/null
+            else
+              echo "Developer ID signing is enabled, but notarization credentials are missing or empty." >&2
+              echo "Set APPLE_ID, APPLE_APP_PASSWORD, and APPLE_TEAM_ID (or App Store Connect API key secrets)." >&2
               exit 1
             fi
             echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
@@ -129,13 +148,15 @@ jobs:
               --wait
             notarized=true
           fi
-          if [ "$notarized" = true ]; then
-            xcrun stapler staple dist/Moss.app
-            xcrun stapler validate dist/Moss.app
-            spctl --assess --type execute --verbose=4 dist/Moss.app
-            rm -f "$archive"
-            ditto -c -k --sequesterRsrc --keepParent dist/Moss.app "$archive"
+          if [ "$notarized" != true ]; then
+            echo "Notarization did not run: check notarization secrets." >&2
+            exit 1
           fi
+          xcrun stapler staple dist/Moss.app
+          xcrun stapler validate dist/Moss.app
+          spctl --assess --type execute --verbose=4 dist/Moss.app
+          rm -f "$archive"
+          ditto -c -k --sequesterRsrc --keepParent dist/Moss.app "$archive"
 
       - name: Sign update manifest
         if: steps.keys.outputs.signed == 'true'
