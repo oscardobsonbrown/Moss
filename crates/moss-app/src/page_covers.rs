@@ -50,6 +50,10 @@ enum CoverResult {
         Result<moss_core::Block, String>,
     ),
 }
+enum BlockImageSource {
+    File(PathBuf),
+    Bytes(Vec<u8>),
+}
 impl CoverState {
     pub fn set_waker(&mut self, wake: Waker) {
         self.cache = Some(ImageCache::new(wake.clone()));
@@ -309,12 +313,12 @@ impl State {
             }
         }
     }
-    pub fn upload_block_image(
+    fn spawn_block_image_import(
         &mut self,
         page_id: &str,
         block_id: &str,
         expected: Option<String>,
-        path: PathBuf,
+        source: BlockImageSource,
     ) {
         let Some(sender) = self.page_cover.result_tx.clone() else {
             self.error = Some("Image worker is unavailable.".into());
@@ -328,14 +332,24 @@ impl State {
         let db = self.path.join("workspace.sqlite3");
         let wake = self.page_cover.wake.clone();
         std::thread::spawn(move || {
-            let result = Store::import_block_image_file(
-                &db,
-                &workspace,
-                &page_id,
-                &block_id,
-                expected.as_deref(),
-                &path,
-            )
+            let result = match source {
+                BlockImageSource::File(path) => Store::import_block_image_file(
+                    &db,
+                    &workspace,
+                    &page_id,
+                    &block_id,
+                    expected.as_deref(),
+                    &path,
+                ),
+                BlockImageSource::Bytes(bytes) => Store::import_block_image_bytes(
+                    &db,
+                    &workspace,
+                    &page_id,
+                    &block_id,
+                    expected.as_deref(),
+                    &bytes,
+                ),
+            }
             .map_err(|e| e.to_string());
             let _ = sender.send(CoverResult::BlockUploaded(
                 page_id, block_id, expected, result,
@@ -344,6 +358,147 @@ impl State {
                 wake();
             }
         });
+    }
+
+    pub fn upload_block_image(
+        &mut self,
+        page_id: &str,
+        block_id: &str,
+        expected: Option<String>,
+        path: PathBuf,
+    ) {
+        self.spawn_block_image_import(page_id, block_id, expected, BlockImageSource::File(path));
+    }
+
+    fn insert_editor_images(
+        &mut self,
+        page_id: &str,
+        peek: bool,
+        anchor: Option<(&str, crate::editor_drag::Side)>,
+        sources: Vec<BlockImageSource>,
+    ) -> bool {
+        if sources.is_empty() {
+            return false;
+        }
+        let Some(blocks) = self.editor_blocks_mut_for_page(page_id, peek) else {
+            return false;
+        };
+        let is_reusable = |b: &crate::state::EditableBlock| {
+            (b.block.kind == moss_core::BlockKind::Paragraph && b.edit.text.is_empty())
+                || (b.block.kind == moss_core::BlockKind::Image
+                    && b.block.config.get("asset").is_none())
+        };
+        let (mut at, reuse_first, col_source) = match anchor
+            .and_then(|(id, side)| blocks.iter().position(|b| b.block.id == id).map(|i| (i, side)))
+        {
+            Some((index, side)) => {
+                let col_block = blocks[index].block.clone();
+                if is_reusable(&blocks[index]) {
+                    (index, true, Some(col_block))
+                } else {
+                    (
+                        index + usize::from(side == crate::editor_drag::Side::After),
+                        false,
+                        Some(col_block),
+                    )
+                }
+            }
+            None => {
+                let reuse = blocks.last().is_some_and(is_reusable);
+                (if reuse { blocks.len() - 1 } else { blocks.len() }, reuse, None)
+            }
+        };
+        for b in blocks.iter_mut() {
+            b.edit.focused = false;
+        }
+        let mut uploads = Vec::with_capacity(sources.len());
+        for (idx, source) in sources.into_iter().enumerate() {
+            let block_id = if idx == 0 && reuse_first {
+                blocks[at].block.kind = moss_core::BlockKind::Image;
+                blocks[at].block.checked = false;
+                blocks[at].block.id.clone()
+            } else {
+                let mut block = moss_core::Block::paragraph(page_id, "", at as i64);
+                block.kind = moss_core::BlockKind::Image;
+                if let Some(src) = &col_source {
+                    crate::editor_drag::copy_column(src, &mut block);
+                }
+                let id = block.id.clone();
+                blocks.insert(
+                    at,
+                    crate::state::EditableBlock {
+                        block,
+                        edit: TextEdit::new("").rich(),
+                    },
+                );
+                id
+            };
+            at += 1;
+            uploads.push((block_id, source));
+        }
+        self.save_editor_blocks(peek);
+        if !self.editor_blocks_dirty(peek) {
+            for (block_id, source) in uploads {
+                self.spawn_block_image_import(page_id, &block_id, None, source);
+            }
+        }
+        true
+    }
+
+    pub fn drop_editor_image_files(
+        &mut self,
+        page_id: &str,
+        peek: bool,
+        files: &[PathBuf],
+        point: Option<[f32; 2]>,
+        zones: &[crate::editor_drag::DropZone],
+    ) {
+        self.editor_file_drop = None;
+        let target = point
+            .and_then(|p| crate::editor_drag::file_drop_target(p, zones))
+            .filter(|t| t.id != "@end");
+        let anchor = target.as_ref().map(|t| (t.id.as_str(), t.side));
+        let sources = files.iter().cloned().map(BlockImageSource::File).collect();
+        self.insert_editor_images(page_id, peek, anchor, sources);
+    }
+
+    pub fn paste_editor_image_content(
+        &mut self,
+        block_id: Option<&str>,
+        peek: bool,
+        content: &rune::ClipboardContent,
+    ) -> bool {
+        let sources: Vec<BlockImageSource> = if let Some(image) = content.image() {
+            vec![BlockImageSource::Bytes(image.png().to_vec())]
+        } else {
+            content
+                .files()
+                .iter()
+                .filter(|path| {
+                    path.extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| {
+                            matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
+                        })
+                })
+                .cloned()
+                .map(BlockImageSource::File)
+                .collect()
+        };
+        if sources.is_empty() {
+            return false;
+        }
+        let Some((page_id, _, blocks, _)) = self.editor_surface(peek) else {
+            return false;
+        };
+        let page_id = page_id.to_owned();
+        let anchor_id = block_id
+            .map(str::to_owned)
+            .or_else(|| blocks.iter().find(|b| b.edit.focused).map(|b| b.block.id.clone()));
+        let anchor = anchor_id
+            .as_deref()
+            .map(|id| (id, crate::editor_drag::Side::After));
+        self.insert_editor_images(&page_id, peek, anchor, sources)
     }
     pub fn retry_cover_image(&mut self, asset: &str) {
         self.page_cover.image_errors.remove(asset);

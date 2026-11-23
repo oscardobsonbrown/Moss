@@ -38,7 +38,7 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     }
     let results = s.block_command_matches();
     let anchor = current.anchor.clone();
-    let change = current.mode == BlockCommandMode::Change && !current.peek;
+    let change = current.mode == BlockCommandMode::Change;
     let empty = results.is_empty();
     let input = super::inputs::field(
         &s.block_command_search,
@@ -112,12 +112,15 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                         t.faint,
                     )),
             )
-            .on_press(move |s: &mut State| s.apply_block_command(kind))
+            .on_press_tx(move |s: &mut State, tx| {
+                s.apply_block_command(kind);
+                tx.instant();
+            })
         });
     let list = col()
         .w_full()
         .min_h(0.)
-        .max_h(300.)
+        .max_h(if change { 150. } else { 300. })
         .shrink()
         .scroll(ScrollSpec {
             stick_bottom: false,
@@ -138,20 +141,15 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
             .role("dialog")
             .label("Block commands")
             .focus_group()
-            .focus_return(format!(
-                "{}{}",
-                if current.peek {
-                    "peek-block-"
-                } else {
-                    "block-input-"
-                },
-                current.block_id
-            ))
             .modal(true, |s: &mut State| s.dismiss_block_commands())
             .transition(Transition::opacity())
             .child(input)
             .child(t.label(
-                if current.mode == BlockCommandMode::TextType { "Turn into" } else { "Basic blocks" },
+                if matches!(current.mode, BlockCommandMode::Change | BlockCommandMode::TextType) {
+                    "Turn into"
+                } else {
+                    "Basic blocks"
+                },
                 t.muted,
             ).px(10.))
             .child(list)
@@ -205,7 +203,10 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                             rune::icon(&phosphor::COPY, 16.).color(t.muted),
                             t,
                         )
-                        .on_press(|s: &mut State| s.block_command_action(true)),
+                        .on_press_tx(|s: &mut State, tx| {
+                            s.block_command_action(true);
+                            tx.instant();
+                        }),
                     )
                     .child(
                         menu::row_item(
@@ -214,7 +215,10 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                             rune::icon(&phosphor::TRASH, 16.).color(t.error),
                             Theme { text: t.error, ..t },
                         )
-                        .on_press(|s: &mut State| s.block_command_action(false)),
+                        .on_press_tx(|s: &mut State, tx| {
+                            s.block_command_action(false);
+                            tx.instant();
+                        }),
                     )
             }))
             .children(current.error.as_ref().map(|error| {

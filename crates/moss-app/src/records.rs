@@ -915,35 +915,9 @@ impl State {
             Err(e) => self.error = Some(format!("Page contents are not saved: {e}")),
         }
     }
+    #[cfg(test)]
     pub fn add_peek_block(&mut self, after: usize) {
-        let Some(peek) = &mut self.record_peek else {
-            return;
-        };
-        if after >= peek.blocks.len() {
-            return;
-        }
-        let edit = &mut peek.blocks[after].edit;
-        let (start, end) = edit.range();
-        let mut suffix = edit.clone();
-        suffix.set_selection(0, end);
-        suffix.insert("");
-        suffix.clear_history();
-        edit.set_selection(start, edit.text.len());
-        edit.insert("");
-        edit.focused = false;
-        suffix.set_caret(0);
-        suffix.focused = true;
-        let mut block = Block::paragraph(&peek.page.id, &suffix.text, after as i64 + 1);
-        crate::text_colors::copy_suffix(&peek.blocks[after].block, &mut block, end);
-        crate::editor_drag::copy_column(&peek.blocks[after].block, &mut block);
-        peek.blocks.insert(
-            after + 1,
-            EditableBlock {
-                block,
-                edit: suffix,
-            },
-        );
-        self.save_peek_blocks();
+        self.add_block_in(after, true);
     }
     pub fn close_peek(&mut self) -> bool {
         for _ in 0..2 {

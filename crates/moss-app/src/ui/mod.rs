@@ -121,6 +121,24 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         });
     }
     root
+        .on_paste_content(|s: &mut State, content, tx| {
+            if s.modal.is_some() || s.block_commands.is_some() {
+                return;
+            }
+            let peek = s.record_peek.is_some();
+            if !peek && s.tab().is_none_or(|t| t.choosing_type || t.database.is_some()) {
+                return;
+            }
+            let anchor = s
+                .editor_selection
+                .as_ref()
+                .filter(|sel| sel.peek == peek)
+                .and_then(|sel| sel.ids.last().cloned());
+            if s.paste_editor_image_content(anchor.as_deref(), peek, content) {
+                s.editor_selection = None;
+                tx.instant();
+            }
+        })
         .on_key(|s: &mut State, event, tx| {
             if event.key == Key::Tab {
                 s.sidebar_keyboard_controls = true;
@@ -138,8 +156,8 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .grow(1.)
                 .min_h(0.)
                 .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
-                .child(shell::content(s, t, (available_width - peek_width - comments_width).max(0.)))
-                .children(record_peek::side(s, t, peek_width))
+                .child(shell::content(s, cx, t, (available_width - peek_width - comments_width).max(0.)))
+                .children(record_peek::side(s, cx, t, peek_width))
                 .children((!center_peek_comments).then(|| comments::panel(s, t, comments_width)).flatten())
                 .children((!center_peek_history).then(|| history::panel(s, t, comments_width)).flatten()),
         )
@@ -150,7 +168,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         // Sticky and frozen Table cells are raised. Raise the later root
         // overlays too, so both paint and pointer input follow overlay order.
         .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
-        .children(record_peek::center(s, t).map(El::raise))
+        .children(record_peek::center(s, cx, t).map(El::raise))
         .children(text_toolbar::view(s, cx, t).map(El::raise))
         .children(database_new::menu(s, t).map(El::raise))
         .children(database::undated_overlay(s, t).map(El::raise))

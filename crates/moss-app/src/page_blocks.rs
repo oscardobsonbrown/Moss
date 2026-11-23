@@ -117,118 +117,12 @@ impl State {
             }
         }
     }
-    pub fn insert_peek_image(&mut self) {
-        let Some(menu) = &self.block_commands else {
-            return;
-        };
-        let (page, id) = (menu.page_id.clone(), menu.block_id.clone());
-        let Some(peek) = self
-            .record_peek
-            .as_mut()
-            .filter(|peek| peek.page.id == page)
-        else {
-            return;
-        };
-        let Some(index) = peek.blocks.iter().position(|block| block.block.id == id) else {
-            return;
-        };
-        let reuse = peek.blocks[index].block.kind == BlockKind::Paragraph
-            && peek.blocks[index].edit.text.is_empty();
-        let index = if reuse {
-            index
-        } else {
-            let mut block = Block::paragraph(&page, "", (index + 1) as i64);
-            crate::editor_drag::copy_column(&peek.blocks[index].block, &mut block);
-            peek.blocks.insert(
-                index + 1,
-                EditableBlock {
-                    edit: rune::TextEdit::new("").rich(),
-                    block,
-                },
-            );
-            index + 1
-        };
-        peek.blocks[index].block.kind = BlockKind::Image;
-        peek.blocks[index].edit.focused = false;
-        self.finish_peek_block_insert();
-    }
-    fn finish_peek_block_insert(&mut self) {
-        self.save_peek_blocks();
-        if self
-            .record_peek
-            .as_ref()
-            .is_some_and(|peek| peek.dirty_blocks)
-        {
-            if let Some(menu) = &mut self.block_commands {
-                menu.error = Some("Block is not saved. Retry to keep it.".into());
-            }
-        } else {
-            self.block_commands = None;
-            self.block_command_search.focused = false;
-        }
-    }
-    fn insert_peek_link(&mut self, page: Option<String>, url: Option<String>) {
-        let Some(menu) = &self.block_commands else {
-            return;
-        };
-        let (page_id, block_id) = (menu.page_id.clone(), menu.block_id.clone());
-        let target = page
-            .as_ref()
-            .and_then(|id| self.store.get_page(id).ok().flatten())
-            .filter(|p| p.workspace_id == self.workspace.id && p.deleted_at.is_none());
-        if page.is_some() && target.is_none() {
-            self.error = Some("Page is not available.".into());
-            return;
-        }
-        let Some(peek) = self
-            .record_peek
-            .as_mut()
-            .filter(|peek| peek.page.id == page_id)
-        else {
-            return;
-        };
-        let Some(index) = peek.blocks.iter().position(|b| b.block.id == block_id) else {
-            return;
-        };
-        let reuse = peek.blocks[index].block.kind == BlockKind::Paragraph
-            && peek.blocks[index].edit.text.is_empty();
-        let index = if reuse {
-            index
-        } else {
-            let mut block = Block::paragraph(&page_id, "", (index + 1) as i64);
-            crate::editor_drag::copy_column(&peek.blocks[index].block, &mut block);
-            peek.blocks.insert(
-                index + 1,
-                EditableBlock {
-                    edit: rune::TextEdit::new("").rich(),
-                    block,
-                },
-            );
-            index + 1
-        };
-        let block = &mut peek.blocks[index];
-        if block.block.config.is_null() {
-            block.block.config = serde_json::json!({});
-        }
-        if !block.block.config.is_object() {
-            self.error = Some("Link cannot replace this block's settings.".into());
-            return;
-        }
-        block.edit.focused = false;
-        if let Some(target) = target {
-            block.block.kind = BlockKind::ChildPage;
-            block.block.config["page_id"] = serde_json::json!(target.id);
-            peek.page_links.insert(target.id.clone(), target);
-        } else if let Some(url) = url {
-            block.block.kind = BlockKind::Bookmark;
-            block.block.config["url"] = serde_json::json!(url);
-        } else {
-            return;
-        }
-        self.finish_peek_block_insert();
-    }
     pub fn insert_block_link(&mut self, page: Option<String>, url: Option<String>) {
-        if self.block_commands.as_ref().is_some_and(|menu| matches!(menu.mode, BlockCommandMode::TextLink { .. })) {
+        if self
+            .block_commands
+            .as_ref()
+            .is_some_and(|menu| matches!(menu.mode, BlockCommandMode::TextLink { .. }))
+        {
             if let Some(id) = page {
                 match self.store.get_page(&id) {
                     Ok(Some(p)) if p.workspace_id == self.workspace.id && p.deleted_at.is_none() => {
@@ -236,19 +130,18 @@ impl State {
                     }
                     _ => self.error = Some("Page is not available.".into()),
                 }
-            } else if let Some(url) = url.as_deref().filter(|url| url.starts_with("https://") || url.starts_with("http://")) {
+            } else if let Some(url) = url
+                .as_deref()
+                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            {
                 self.apply_text_link(Some(url));
             }
-            return;
-        }
-        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
-            self.insert_peek_link(page, url);
             return;
         }
         let Some(menu) = &self.block_commands else {
             return;
         };
-        let (page_id, block_id) = (menu.page_id.clone(), menu.block_id.clone());
+        let (page_id, block_id, peek) = (menu.page_id.clone(), menu.block_id.clone(), menu.peek);
         let target = page
             .as_ref()
             .and_then(|id| self.store.get_page(id).ok().flatten())
@@ -257,24 +150,23 @@ impl State {
             self.error = Some("Page is not available.".into());
             return;
         }
-        let Some(tab) = self
-            .tabs
-            .get_mut(self.active)
-            .filter(|tab| tab.page.id == page_id)
+        let Some((_, _, blocks, page_links)) = self
+            .editor_surface_mut(peek)
+            .filter(|(id, _, _, _)| id == &page_id)
         else {
             return;
         };
-        let Some(index) = tab.blocks.iter().position(|b| b.block.id == block_id) else {
+        let Some(index) = blocks.iter().position(|b| b.block.id == block_id) else {
             return;
         };
-        let reuse = tab.blocks[index].block.kind == BlockKind::Paragraph
-            && tab.blocks[index].edit.text.is_empty();
+        let reuse = blocks[index].block.kind == BlockKind::Paragraph
+            && blocks[index].edit.text.is_empty();
         let index = if reuse {
             index
         } else {
             let mut block = Block::paragraph(&page_id, "", (index + 1) as i64);
-            crate::editor_drag::copy_column(&tab.blocks[index].block, &mut block);
-            tab.blocks.insert(
+            crate::editor_drag::copy_column(&blocks[index].block, &mut block);
+            blocks.insert(
                 index + 1,
                 EditableBlock {
                     edit: rune::TextEdit::new("").rich(),
@@ -283,7 +175,7 @@ impl State {
             );
             index + 1
         };
-        let block = &mut tab.blocks[index];
+        let block = &mut blocks[index];
         if block.block.config.is_null() {
             block.block.config = serde_json::json!({});
         }
@@ -295,15 +187,15 @@ impl State {
         if let Some(target) = target {
             block.block.kind = BlockKind::ChildPage;
             block.block.config["page_id"] = serde_json::json!(target.id);
-            tab.page_links.insert(target.id.clone(), target);
+            page_links.insert(target.id.clone(), target);
         } else if let Some(url) = url {
             block.block.kind = BlockKind::Bookmark;
             block.block.config["url"] = serde_json::json!(url);
         } else {
             return;
         }
-        self.save_blocks();
-        if self.tab().is_some_and(|tab| tab.dirty_blocks) {
+        self.save_editor_blocks(peek);
+        if self.editor_blocks_dirty(peek) {
             if let Some(menu) = &mut self.block_commands {
                 menu.error = Some("Link is not saved. Retry to keep it.".into());
             }
@@ -360,8 +252,30 @@ impl State {
         if menu.error.is_some() {
             return;
         }
-        let (parent, block, mode) = (menu.page_id.clone(), menu.block_id.clone(), menu.mode);
-        if !self.tab().is_some_and(|t| t.page.id == parent) || !self.flush_current() {
+        let (parent, block, mode, peek) = (
+            menu.page_id.clone(),
+            menu.block_id.clone(),
+            menu.mode,
+            menu.peek,
+        );
+        if peek {
+            if !self.record_peek.as_ref().is_some_and(|p| p.page.id == parent) {
+                return;
+            }
+            if self.record_peek.as_ref().is_some_and(|p| p.dirty_title) {
+                self.save_peek_title();
+            }
+            if self.record_peek.as_ref().is_some_and(|p| p.dirty_blocks) {
+                self.save_peek_blocks();
+            }
+            if self
+                .record_peek
+                .as_ref()
+                .is_some_and(|p| p.dirty_title || p.dirty_blocks)
+            {
+                return;
+            }
+        } else if !self.tab().is_some_and(|t| t.page.id == parent) || !self.flush_current() {
             return;
         }
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
@@ -377,21 +291,42 @@ impl State {
         match result {
             Ok((child, blocks)) => {
                 self.track_new_child_page(&child, &blocks);
-                let tab = &mut self.tabs[self.active];
-                tab.saved_blocks = blocks.clone();
-                tab.blocks = blocks
-                    .into_iter()
-                    .map(|block| {
-                        let edit = crate::rich_text::load(&block);
-                        EditableBlock { block, edit }
-                    })
-                    .collect();
-                tab.page_links.insert(child.id.clone(), child.clone());
-                tab.dirty_blocks = false;
+                if peek {
+                    if let Some(p) = self.record_peek.as_mut() {
+                        p.saved_blocks = blocks.clone();
+                        p.blocks = blocks
+                            .iter()
+                            .cloned()
+                            .map(|block| {
+                                let edit = crate::rich_text::load(&block);
+                                EditableBlock { block, edit }
+                            })
+                            .collect();
+                        p.page_links.insert(child.id.clone(), child.clone());
+                        p.dirty_blocks = false;
+                    }
+                    self.sync_gallery_preview(&parent, &blocks);
+                    self.sync_record_content(&parent, &blocks);
+                } else {
+                    let tab = &mut self.tabs[self.active];
+                    tab.saved_blocks = blocks.clone();
+                    tab.blocks = blocks
+                        .into_iter()
+                        .map(|block| {
+                            let edit = crate::rich_text::load(&block);
+                            EditableBlock { block, edit }
+                        })
+                        .collect();
+                    tab.page_links.insert(child.id.clone(), child.clone());
+                    tab.dirty_blocks = false;
+                }
                 self.block_commands = None;
                 self.block_command_search.focused = false;
                 self.refresh_child_pages(&parent);
                 self.refresh_pages();
+                if peek {
+                    let _ = self.close_peek();
+                }
                 self.open_page(&child.id, false);
             }
             Err(error) => {

@@ -418,7 +418,7 @@ pub fn sidebar(s: &State, t: Theme, width: f32) -> El {
         )
         .child(el().h(8.))
 }
-pub fn content(s: &State, t: Theme, width: f32) -> El {
+pub fn content(s: &State, cx: &Cx<State>, t: Theme, width: f32) -> El {
     let top = row()
         .key("page-toolbar")
         .h(42.)
@@ -478,7 +478,7 @@ pub fn content(s: &State, t: Theme, width: f32) -> El {
     let body = match s.tab() {
         Some(tab) if tab.choosing_type => super::page_creation::view(s, t, width),
         Some(tab) if tab.database.is_some() => super::database::view(s, t),
-        Some(_) => super::editor::view(s, t, width),
+        Some(_) => super::editor::view(s, cx, t, width),
         None => col()
             .grow(1.)
             .w_full()

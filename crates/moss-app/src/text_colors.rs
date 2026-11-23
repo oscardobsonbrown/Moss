@@ -276,6 +276,20 @@ pub fn copy_suffix(source: &Block, suffix: &mut Block, start: usize) {
     write_runs(suffix, colors);
 }
 
+pub fn append_runs(target: &mut Block, source: &Block, offset: usize) {
+    let source_runs = runs(source);
+    if source_runs.is_empty() {
+        return;
+    }
+    let mut combined = runs(target);
+    combined.extend(source_runs.into_iter().map(|r| Run {
+        start: r.start + offset,
+        end: r.end + offset,
+        ..r
+    }));
+    write_runs(target, combined);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
