@@ -5,20 +5,416 @@ use crate::text_colors::{self, Channel};
 use rune::*;
 use std::hash::{Hash, Hasher};
 
-pub fn view(s: &State, t: Theme, available_width: f32) -> El {
+pub(super) fn wire_title_arrows(el: El, peek: bool, at_last: bool) -> El {
+    el.on_input_key(move |s: &mut State, event, tx| {
+        matches!(event.key, Key::Down | Key::Right)
+            && !event.mods.shift
+            && !event.mods.cmd
+            && !event.mods.alt
+            && !event.mods.ctrl
+            && s.editor_title_arrow_key(peek, event.key.clone(), at_last, tx)
+    })
+}
+
+pub(super) fn wire_file_drop(
+    el: El,
+    page_id: &str,
+    peek: bool,
+    zones: std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+) -> El {
+    let hover_page = page_id.to_owned();
+    let hover_zones = zones.clone();
+    let move_page = page_id.to_owned();
+    let move_zones = zones.clone();
+    let drop_page = page_id.to_owned();
+    el.accepts_extensions(&["png", "jpg", "jpeg", "webp"])
+        .on_drop_hover(move |s: &mut State, over, tx| {
+            if over {
+                let point = tx.drop_point().map(|p| [p.window_x, p.window_y]);
+                s.hover_editor_file_drop(&hover_page, peek, point, &hover_zones);
+            } else {
+                s.clear_editor_file_drop();
+            }
+            tx.instant();
+        })
+        .on_drop_move(move |s: &mut State, point, tx| {
+            s.hover_editor_file_drop(
+                &move_page,
+                peek,
+                Some([point.window_x, point.window_y]),
+                &move_zones,
+            );
+            tx.instant();
+        })
+        .on_drop_files(move |s: &mut State, files, tx| {
+            let point = tx.drop_point().map(|p| [p.window_x, p.window_y]);
+            s.drop_editor_image_files(&drop_page, peek, files, point, &zones);
+            tx.instant();
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_text_block(
+    s: &State,
+    cx: &Cx<State>,
+    page_id: &str,
+    settings: moss_core::PageSettings,
+    b: &crate::state::EditableBlock,
+    i: usize,
+    number: usize,
+    marker_width: f32,
+    t: Theme,
+    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+    peek: bool,
+) -> El {
+    let kind = b.block.kind;
+    let scale = crate::fonts::scale(settings);
+    let (size, weight, line) = match kind {
+        BlockKind::Heading1 => (30., 600., 38.),
+        BlockKind::Heading2 => (24., 600., 32.),
+        BlockKind::Heading3 => (20., 600., 28.),
+        BlockKind::Code => (14., 400., 23.),
+        _ => (16., 400., 26.),
+    };
+    let mut style = crate::fonts::page_style(settings, size, weight).lh(line * scale);
+    if kind == BlockKind::Code {
+        style = style.mono();
+    }
+    let key_id = b.block.id.clone();
+    let submit_id = b.block.id.clone();
+    let paste_id = b.block.id.clone();
+    let input_key = crate::editor_commands::input_key(&b.block.id, peek);
+    let (at_first_line, at_last_line) = super::editor_layout::line_edges(cx, &input_key, &b.edit);
+    let links = if kind != BlockKind::Code {
+        crate::inline_links::links(&b.edit.text)
+    } else {
+        Vec::new()
+    };
+    let hidden = crate::inline_links::hidden_markdown_syntax(&b.edit, &links);
+    let comment_ranges = super::comments::keyed_ranges(s, page_id, &b.block.id, &b.edit.text);
+    let comment_color = rune::color::oklch(0.68, 0.14, 80.);
+    let open_link = move |s: &mut State, target: &str, tx: &mut Tx| {
+        if peek {
+            s.open_peek_inline_link(target, tx);
+        } else {
+            s.open_inline_link(target, tx);
+        }
+    };
+    let overlay = (!links.is_empty()).then(|| {
+        let mut underlines: Vec<_> = links
+            .iter()
+            .map(|(range, _)| Span::new(range.start, range.end).underline(t.muted))
+            .collect();
+        underlines.extend(hidden.iter().cloned());
+        let mut overlay = rich(&b.edit.text, underlines)
+            .font(style)
+            .wrap()
+            .color(Color::TRANSPARENT)
+            .absolute(0., 0.)
+            .w_full()
+            .min_h(line * scale);
+        for (range, target) in links {
+            overlay = overlay.link(
+                Link::new(range, target).hover(LinkPaint::default().underline(t.text)),
+            );
+        }
+        overlay.on_link(open_link)
+    });
+    let rich_links = super::inputs::link_hit_layer(&b.edit, style, &hidden, t)
+        .map(|layer| layer.on_link(open_link));
+    let background = super::editor_colors::block_paint(&b.block, Channel::Background, t);
+    let foreground = super::editor_colors::block_paint(&b.block, Channel::Text, t);
+    let mut spans: Vec<_> = text_colors::spans(&b.block, t.dark).collect();
+    spans.extend(hidden);
+    spans.extend(
+        comment_ranges
+            .iter()
+            .map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)),
+    );
+    let mut input = super::inputs::text(&b.edit, style, t)
+        .spans(spans)
+        .text_highlights(comment_ranges.into_iter().map(|(id, range)| {
+            rune::text::TextHighlight::new(range, comment_color.alpha(0.23))
+                .key(super::comments::highlight_key(&id, peek))
+        }))
+        .key(input_key)
+        .w_full()
+        .min_w(0.)
+        .min_h(line * scale)
+        .color(foreground.unwrap_or(if kind == BlockKind::Todo && b.block.checked {
+            t.faint
+        } else {
+            t.text
+        }))
+        .label("Block text");
+    if peek {
+        input = input.align(Align::Start);
+    }
+    let input = input
+        .on_edit(move |s: &mut State| {
+            if peek {
+                &mut s.record_peek.as_mut().unwrap().blocks[i].edit
+            } else {
+                &mut s.tabs[s.active].blocks[i].edit
+            }
+        })
+        .on_input_change(move |s: &mut State, _| {
+            s.editor_selection = None;
+            s.save_editor_blocks(peek);
+        })
+        .on_input_paste(move |s: &mut State, content, tx| {
+            if s.paste_editor_image_content(Some(&paste_id), peek, content) {
+                tx.instant();
+                return true;
+            }
+            let handled = s.paste_simple_table_into_paragraph(&paste_id, peek, content.text());
+            if handled {
+                tx.instant();
+            }
+            handled
+        })
+        .on_input_key(move |s: &mut State, event, tx| {
+            if super::text_toolbar::shortcut(s, &key_id, peek, event, tx) {
+                return true;
+            }
+            if event.key == Key::Text("-".into()) && s.editor_markdown_divider(&key_id, peek) {
+                tx.instant();
+                return true;
+            }
+            if matches!(event.key, Key::Command('b' | 'i' | 'u' | 'z')) {
+                if let Some(blocks) = s.editor_blocks_mut(peek)
+                    && let Some(block) = blocks.get_mut(i)
+                {
+                    block.edit.key(event, None);
+                }
+                s.save_editor_blocks(peek);
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Command('/') {
+                let anchor = crate::editor_commands::input_key(&key_id, peek);
+                s.open_block_commands_in(&key_id, &anchor, BlockCommandMode::Change, peek);
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Text(" ".into()) && s.editor_markdown_space_in(&key_id, peek) {
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Text("/".into())
+                && kind != BlockKind::Code
+                && s.editor_surface(peek)
+                    .and_then(|(_, _, blocks, _)| blocks.get(i))
+                    .is_some_and(|block| block.edit.text.is_empty())
+            {
+                let anchor = crate::editor_commands::input_key(&key_id, peek);
+                s.open_block_commands_in(&key_id, &anchor, BlockCommandMode::Slash, peek);
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Enter && event.mods.shift {
+                if let Some(blocks) = s.editor_blocks_mut(peek)
+                    && let Some(block) = blocks.get_mut(i)
+                {
+                    block.edit.insert("\n");
+                }
+                s.save_editor_blocks(peek);
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Escape && s.editor_escape_select_block(&key_id, peek, tx) {
+                return true;
+            }
+            let plain = !event.mods.cmd && !event.mods.alt && !event.mods.ctrl;
+            if event.key == Key::Backspace
+                && plain
+                && s.editor_backspace_in(&key_id, peek, Some(tx))
+            {
+                tx.instant();
+                return true;
+            }
+            if event.key == Key::Delete && plain && s.editor_delete_in(&key_id, peek, Some(tx)) {
+                tx.instant();
+                return true;
+            }
+            if matches!(event.key, Key::Up | Key::Down | Key::Left | Key::Right)
+                && plain
+                && !event.mods.shift
+                && s.editor_arrow_key(
+                    &key_id,
+                    peek,
+                    event.key.clone(),
+                    at_first_line,
+                    at_last_line,
+                    tx,
+                )
+            {
+                return true;
+            }
+            false
+        })
+        .on_submit(move |s: &mut State, tx| {
+            tx.instant();
+            if kind == BlockKind::Code {
+                if let Some(blocks) = s.editor_blocks_mut(peek)
+                    && let Some(block) = blocks.get_mut(i)
+                {
+                    block.edit.insert("\n");
+                }
+                s.save_editor_blocks(peek);
+            } else {
+                s.editor_enter_in(&submit_id, peek);
+            }
+        });
+    let list_color = foreground.unwrap_or(if peek { t.muted } else { t.text });
+    let marker = match kind {
+        BlockKind::Todo => Some(todo_checkbox(
+            &b.block.id,
+            b.block.checked,
+            i,
+            peek,
+            [marker_width, style.line_px()],
+            t,
+        )),
+        BlockKind::BulletedList => Some(super::editor_layout::list_label(
+            &b.block.id,
+            "•",
+            style,
+            marker_width,
+            list_color,
+        )),
+        BlockKind::NumberedList => Some(super::editor_layout::list_label(
+            &b.block.id,
+            format!("{number}."),
+            style,
+            marker_width,
+            list_color,
+        )),
+        BlockKind::Quote => Some(el().w(3.).h(26.).fill(t.text)),
+        BlockKind::Callout => Some(if peek {
+            t.sized_label("💡", 16., t.muted).w(24.)
+        } else {
+            super::theme::sized_label("💡", 20., t.text).w(28.)
+        }),
+        BlockKind::Toggle => Some(
+            row()
+                .key(if peek {
+                    format!("peek-toggle-{i}")
+                } else {
+                    format!("toggle-{i}")
+                })
+                .size(if peek { 24. } else { 26. }, if peek { 26. } else { 30. })
+                .center()
+                .radius(4.)
+                .hover(t.hover)
+                .role("button")
+                .label("Toggle block")
+                .focusable(true)
+                .child(
+                    rune::icon(
+                        if b.block.config["collapsed"].as_bool().unwrap_or(false) {
+                            &super::phosphor::CARET_RIGHT
+                        } else {
+                            &super::phosphor::CARET_DOWN
+                        },
+                        16.,
+                    )
+                    .color(t.muted),
+                )
+                .on_press_tx(move |s: &mut State, tx| {
+                    tx.instant();
+                    if let Some(blocks) = s.editor_blocks_mut(peek)
+                        && let Some(block) = blocks.get_mut(i)
+                    {
+                        block.block.config["collapsed"] = serde_json::json!(
+                            !block.block.config["collapsed"].as_bool().unwrap_or(false)
+                        );
+                        s.save_editor_blocks(peek);
+                    }
+                }),
+        ),
+        _ => None,
+    };
+    let text_col = col()
+        .grow(1.)
+        .min_w(0.)
+        .child(input)
+        .children(overlay)
+        .children(rich_links)
+        .children(b.edit.text.is_empty().then(|| {
+            text("Press / to insert blocks")
+                .key(format!(
+                    "{}block-hint-{}",
+                    if peek { "peek-" } else { "" },
+                    b.block.id
+                ))
+                .font(style)
+                .color(t.input_hint)
+                .absolute(0., 0.)
+                .w_full()
+                .group_opacity(if b.edit.focused { 1. } else { 0. }, 1.)
+                .a11y_hidden()
+        }));
+    let body = if peek {
+        row()
+            .w_full()
+            .py(2. * scale)
+            .gap(6.)
+            .children(marker)
+            .child(text_col)
+    } else {
+        row()
+            .key(format!("block-{}", b.block.id))
+            .hover_group_shared(format!("block-hover-{}", b.block.id))
+            .w_full()
+            .min_h(30. * scale)
+            .py(2. * scale)
+            .gap(6.)
+            .child(gutter(
+                s,
+                &b.block.id,
+                i,
+                b.edit.focused,
+                line * scale,
+                t,
+                zones,
+            ))
+            .children(marker)
+            .child(text_col)
+    };
+    if matches!(kind, BlockKind::Code | BlockKind::Callout) {
+        body.padding(if peek { 12. } else { 14. })
+            .radius(4.)
+            .fill(background.unwrap_or(t.sidebar))
+    } else if !peek
+        && let Some(background) = background
+    {
+        body.radius(6.).fill(background)
+    } else {
+        body
+    }
+}
+
+pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
     let tab = s.tab().unwrap();
-    let title = super::inputs::text(
-        &tab.title,
-        crate::fonts::page_style(tab.page.settings, 40., 700.)
-            .lh(48. * crate::fonts::scale(tab.page.settings)),
-        t,
+    let title_key = format!("title-{}", tab.page.id);
+    let (_, title_at_last) = super::editor_layout::line_edges(cx, &title_key, &tab.title);
+    let title = wire_title_arrows(
+        super::inputs::text(
+            &tab.title,
+            crate::fonts::page_style(tab.page.settings, 40., 700.)
+                .lh(48. * crate::fonts::scale(tab.page.settings)),
+            t,
+        )
+        .key(title_key)
+        .w_full()
+        .placeholder("Untitled", t.title_hint)
+        .label("Page title")
+        .on_edit(|s: &mut State| &mut s.tabs[s.active].title)
+        .on_input_change(|s: &mut State, _| s.save_title()),
+        false,
+        title_at_last,
     )
-    .key(format!("title-{}", tab.page.id))
-    .w_full()
-    .placeholder("Untitled", t.title_hint)
-    .label("Page title")
-    .on_edit(|s: &mut State| &mut s.tabs[s.active].title)
-    .on_input_change(|s: &mut State, _| s.save_title())
     .on_submit(|s: &mut State, tx| {
         s.tabs[s.active].title.focused = false;
         s.focus_first_page_block(false);
@@ -40,290 +436,50 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
     let blocks: Vec<_> = super::editor_layout::with_list_numbers(&tab.blocks)
         .enumerate()
         .map(|(i, (b, number))| {
-            let render_item = || {
-                let kind = b.block.kind;
-                if kind == BlockKind::ChildPage {
-                    return page_link(s, tab, b, i, t, &zones);
+            let render_item = || match b.block.kind {
+                BlockKind::ChildPage => page_link(s, tab, b, i, t, &zones),
+                BlockKind::Bookmark => website_link(s, b, i, t, &zones),
+                BlockKind::Image => {
+                    super::image_block::view(s, &b.block, i, t, available_width, &zones)
                 }
-                if kind == BlockKind::Bookmark {
-                    return website_link(s, b, i, t, &zones);
-                }
-                if kind == BlockKind::Image {
-                    return super::image_block::view(s, &b.block, i, t, available_width, &zones);
-                }
-                if kind == BlockKind::SimpleTable {
-                    return row()
-                        .key(format!("block-{}", b.block.id))
-                        .w_full()
-                        .min_w(0.)
-                        .gap(6.)
-                        .child(gutter(s, &b.block.id, i, false, 26., t, &zones))
-                        .child(
-                            col()
-                                .grow(1.)
-                                .min_w(0.)
-                                .child(super::simple_table::view(s, &b.block, false, t)),
-                        );
-                }
-                if kind == BlockKind::Divider {
-                    return row()
-                        .key(format!("block-{}", b.block.id))
-                        .w_full()
-                        .h(24.)
-                        .center_y()
-                        .child(el().h(1.).grow(1.).fill(t.line))
-                        .child(gutter(s, &b.block.id, i, b.edit.focused, 26., t, &zones));
-                }
-                let (size, weight, line) = match kind {
-                    BlockKind::Heading1 => (30., 600., 38.),
-                    BlockKind::Heading2 => (24., 600., 32.),
-                    BlockKind::Heading3 => (20., 600., 28.),
-                    BlockKind::Code => (14., 400., 23.),
-                    _ => (16., 400., 26.),
-                };
-                let style = if kind == BlockKind::Code {
-                    crate::fonts::page_style(tab.page.settings, size, weight)
-                        .lh(line * crate::fonts::scale(tab.page.settings))
-                        .mono()
-                } else {
-                    crate::fonts::page_style(tab.page.settings, size, weight)
-                        .lh(line * crate::fonts::scale(tab.page.settings))
-                };
-                let key_id = b.block.id.clone();
-                let submit_id = b.block.id.clone();
-                let paste_id = b.block.id.clone();
-                let links = if kind != BlockKind::Code {
-                    crate::inline_links::links(&b.edit.text)
-                } else {
-                    Vec::new()
-                };
-                let hidden = crate::inline_links::hidden_markdown_syntax(&b.edit, &links);
-                let comment_ranges = super::comments::keyed_ranges(s, &tab.page.id, &b.block.id, &b.edit.text);
-                let comment_color = rune::color::oklch(0.68, 0.14, 80.);
-                let overlay = if links.is_empty() {
-                    None
-                } else {
-                    let mut underlines: Vec<_> = links
-                        .iter()
-                        .map(|(range, _)| Span::new(range.start, range.end).underline(t.muted))
-                        .collect();
-                    underlines.extend(hidden.iter().cloned());
-                    let mut overlay = rich(&b.edit.text, underlines)
-                        .font(style)
-                        .wrap()
-                        .color(Color::TRANSPARENT)
-                        .absolute(0., 0.)
-                        .w_full()
-                        .min_h(line * crate::fonts::scale(tab.page.settings));
-                    for (range, target) in links {
-                        overlay = overlay.link(
-                            Link::new(range, target).hover(LinkPaint::default().underline(t.text)),
-                        );
-                    }
-                    Some(
-                        overlay.on_link(|s: &mut State, target, tx| s.open_inline_link(target, tx)),
-                    )
-                };
-                let rich_links = super::inputs::link_hit_layer(&b.edit, style, &hidden, t)
-                    .map(|layer| layer.on_link(|s: &mut State, target, tx| s.open_inline_link(target, tx)));
-                let background = super::editor_colors::block_paint(&b.block, Channel::Background, t);
-                let foreground = super::editor_colors::block_paint(&b.block, Channel::Text, t);
-                let mut spans: Vec<_> = text_colors::spans(&b.block, t.dark).collect();
-                spans.extend(hidden);
-                spans.extend(comment_ranges.iter().map(|(_, range)| Span::new(range.start, range.end).underline(comment_color)));
-                let input = super::inputs::text(&b.edit, style, t)
-                    .spans(spans)
-                    .text_highlights(comment_ranges.into_iter().map(|(id, range)| rune::text::TextHighlight::new(range, comment_color.alpha(0.23)).key(super::comments::highlight_key(&id, false))))
-                    .key(format!("block-input-{}", b.block.id))
+                BlockKind::SimpleTable => row()
+                    .key(format!("block-{}", b.block.id))
                     .w_full()
                     .min_w(0.)
-                    .min_h(line * crate::fonts::scale(tab.page.settings))
-                    .color(foreground.unwrap_or(if kind == BlockKind::Todo && b.block.checked {
-                        t.faint
-                    } else {
-                        t.text
-                    }))
-                    .label("Block text")
-                    .on_edit(move |s: &mut State| &mut s.tabs[s.active].blocks[i].edit)
-                    .on_input_change(|s: &mut State, _| {
-                        s.editor_selection = None;
-                        s.save_blocks();
-                    })
-                    .on_input_paste(move |s: &mut State, content, tx| {
-                        let handled =
-                            s.paste_simple_table_into_paragraph(&paste_id, false, content.text());
-                        if handled {
-                            tx.instant();
-                        }
-                        handled
-                    })
-                    .on_input_key(move |s: &mut State, event, tx| {
-                        if super::text_toolbar::shortcut(s, &key_id, false, event, tx) {
-                            return true;
-                        }
-                        if event.key == Key::Text("-".into())
-                            && s.editor_markdown_divider(&key_id, false)
-                        {
-                            tx.instant();
-                            return true;
-                        }
-                        if matches!(event.key, Key::Command('b' | 'i' | 'u' | 'z')) {
-                            s.tabs[s.active].blocks[i].edit.key(event, None);
-                            s.save_blocks();
-                            tx.instant();
-                            return true;
-                        }
-                        if event.key == Key::Command('/') {
-                            s.open_block_commands(
-                                &key_id,
-                                &format!("block-input-{key_id}"),
-                                BlockCommandMode::Change,
-                            );
-                            tx.instant();
-                            return true;
-                        }
-                        if event.key == Key::Text(" ".into()) && s.editor_markdown_space(&key_id) {
-                            tx.instant();
-                            return true;
-                        }
-                        if event.key == Key::Text("/".into())
-                            && kind != BlockKind::Code
-                            && s.tabs[s.active].blocks[i].edit.text.is_empty()
-                        {
-                            tx.instant();
-                            s.open_block_commands(
-                                &key_id,
-                                &format!("block-input-{key_id}"),
-                                BlockCommandMode::Slash,
-                            );
-                            return true;
-                        }
-                        if event.key == Key::Enter && event.mods.shift {
-                            s.tabs[s.active].blocks[i].edit.insert("\n");
-                            s.save_blocks();
-                            tx.instant();
-                            return true;
-                        }
-                        if event.key == Key::Backspace && s.editor_backspace_empty(&key_id) {
-                            tx.instant();
-                            return true;
-                        }
-                        false
-                    })
-                    .on_submit(move |s: &mut State, tx| {
-                        tx.instant();
-                        if kind == BlockKind::Code {
-                            s.tabs[s.active].blocks[i].edit.insert("\n");
-                            s.save_blocks();
-                        } else {
-                            s.editor_enter(&submit_id);
-                        }
-                    });
-                let marker = match kind {
-                    BlockKind::Todo => todo_checkbox(
-                        &b.block.id,
-                        b.block.checked,
-                        i,
-                        false,
-                        [marker_width, style.line_px()],
-                        t,
-                    ),
-                    BlockKind::BulletedList => super::editor_layout::list_label(
-                        &b.block.id, "•", style, marker_width, foreground.unwrap_or(t.text),
-                    ),
-                    BlockKind::NumberedList => super::editor_layout::list_label(
-                        &b.block.id, format!("{number}."), style, marker_width, foreground.unwrap_or(t.text),
-                    ),
-                    BlockKind::Quote => el().w(3.).h(26.).fill(t.text),
-                    BlockKind::Callout => super::theme::sized_label("💡", 20., t.text).w(28.),
-                    BlockKind::Toggle => row()
-                        .key(format!("toggle-{i}"))
-                        .size(26., 30.)
-                        .center()
-                        .radius(4.)
-                        .hover(t.hover)
-                        .role("button")
-                        .label("Toggle block")
-                        .focusable(true)
-                        .child(
-                            rune::icon(
-                                if b.block.config["collapsed"].as_bool().unwrap_or(false) {
-                                    &super::phosphor::CARET_RIGHT
-                                } else {
-                                    &super::phosphor::CARET_DOWN
-                                },
-                                16.,
-                            )
-                            .color(t.muted),
-                        )
-                        .on_press_tx(move |s: &mut State, tx| {
-                            tx.instant();
-                            let b = &mut s.tabs[s.active].blocks[i].block;
-                            b.config["collapsed"] = serde_json::json!(
-                                !b.config["collapsed"].as_bool().unwrap_or(false)
-                            );
-                            s.save_blocks();
-                        }),
-                    _ => el().w(0.),
-                };
-                let hover_key = format!("block-hover-{}", b.block.id);
-                let row = row()
-                    .key(format!("block-{}", b.block.id))
-                    .hover_group_shared(hover_key)
-                    .w_full()
-                    .min_h(30. * crate::fonts::scale(tab.page.settings))
-                    .py(2. * crate::fonts::scale(tab.page.settings))
                     .gap(6.)
-                    .child(gutter(
-                        s,
-                        &b.block.id,
-                        i,
-                        b.edit.focused,
-                        line * crate::fonts::scale(tab.page.settings),
-                        t,
-                        &zones,
-                    ))
-                    .children(
-                        matches!(
-                            kind,
-                            BlockKind::Todo
-                                | BlockKind::BulletedList
-                                | BlockKind::NumberedList
-                                | BlockKind::Quote
-                                | BlockKind::Callout
-                                | BlockKind::Toggle
-                        )
-                        .then_some(marker),
-                    )
+                    .child(gutter(s, &b.block.id, i, false, 26., t, &zones))
                     .child(
                         col()
                             .grow(1.)
                             .min_w(0.)
-                            .child(input)
-                            .children(overlay)
-                            .children(rich_links)
-                            .children(b.edit.text.is_empty().then(|| {
-                                text("Press / to insert blocks")
-                                    .key(format!("block-hint-{}", b.block.id))
-                                    .font(style)
-                                    .color(t.input_hint)
-                                    .absolute(0., 0.)
-                                    .w_full()
-                                    .group_opacity(if b.edit.focused { 1. } else { 0. }, 1.)
-                                    .a11y_hidden()
-                            })),
-                    );
-                if matches!(kind, BlockKind::Code | BlockKind::Callout) {
-                    row.padding(14.).radius(4.).fill(background.unwrap_or(t.sidebar))
-                } else if let Some(background) = background {
-                    row.radius(6.).fill(background)
-                } else {
-                    row
-                }
+                            .child(super::simple_table::view(s, &b.block, false, t)),
+                    ),
+                BlockKind::Divider => row()
+                    .key(format!("block-{}", b.block.id))
+                    .w_full()
+                    .h(24.)
+                    .center_y()
+                    .child(el().h(1.).grow(1.).fill(t.line))
+                    .child(gutter(s, &b.block.id, i, b.edit.focused, 26., t, &zones)),
+                _ => render_text_block(
+                    s,
+                    cx,
+                    &tab.page.id,
+                    tab.page.settings,
+                    b,
+                    i,
+                    number,
+                    marker_width,
+                    t,
+                    &zones,
+                    false,
+                ),
             };
             let render = || super::editor_layout::decorate(s, &b.block.id, render_item(), t);
             if b.block.kind == BlockKind::Todo
+                && !b.edit.focused
                 && s.editor_drag.is_none()
+                && s.editor_file_drop.is_none()
                 && s.editor_selection.is_none()
                 && super::comments::markers(s, &tab.page.id, &b.block.id, false, t).is_empty()
             {
@@ -464,36 +620,28 @@ pub fn view(s: &State, t: Theme, available_width: f32) -> El {
                             tx.instant();
                             s.append_editor_block();
                         })
-                        .children(
-                            s.editor_drag
-                                .as_ref()
-                                .and_then(|drag| drag.target.as_ref())
-                                .filter(|target| target.id == "@end")
-                                .map(|_| {
-                                    el().key("editor-block-drop-guide")
-                                        .absolute(0., 0.)
-                                        .w_full()
-                                        .h(3.)
-                                        .fill(t.blue)
-                                        .a11y_hidden()
-                                }),
-                        ),
+                        .children(super::editor_layout::end_drop_guide(
+                            s,
+                            &tab.page.id,
+                            false,
+                            t,
+                        )),
                 ),
         );
-    col()
-        .key(&viewport)
-        .grow(1.)
-        .min_h(0.)
-        .min_w(0.)
-        .w_full()
-        .child(scroll)
-        .children(super::editor_layout::selection_box(
-            s,
-            &tab.page.id,
-            false,
-            &viewport,
-            t,
-        ))
+    wire_file_drop(
+        col().key(&viewport).grow(1.).min_h(0.).min_w(0.).w_full(),
+        &tab.page.id,
+        false,
+        zones,
+    )
+    .child(scroll)
+    .children(super::editor_layout::selection_box(
+        s,
+        &tab.page.id,
+        false,
+        &viewport,
+        t,
+    ))
 }
 
 pub(super) fn todo_checkbox(

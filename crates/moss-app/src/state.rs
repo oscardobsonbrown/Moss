@@ -130,6 +130,7 @@ pub struct State {
     pub history: crate::history::HistoryState,
     pub editor_selection: Option<crate::editor_selection::Selection>,
     pub editor_drag: Option<crate::editor_drag::BlockDrag>,
+    pub editor_file_drop: Option<crate::editor_drag::FileDrop>,
     pub editor_column_resize: Option<crate::editor_drag::ColumnResize>,
     pub editor_drag_cancelled: bool,
     pub editor_drag_suppress_press: bool,
@@ -270,6 +271,7 @@ impl State {
             updates: Default::default(),
             editor_selection: None,
             editor_drag: None,
+            editor_file_drop: None,
             editor_column_resize: None,
             editor_drag_cancelled: false,
             editor_drag_suppress_press: false,
@@ -754,39 +756,9 @@ impl State {
             }
         }
     }
+    #[cfg(test)]
     pub fn add_block(&mut self, after: usize) {
-        let tab = &mut self.tabs[self.active];
-        if tab.blocks.is_empty() {
-            tab.blocks.push(EditableBlock {
-                block: Block::paragraph(&tab.page.id, "", 0),
-                edit: TextEdit::new("").rich(),
-            });
-        }
-        let after = after.min(tab.blocks.len() - 1);
-        let edit = &mut tab.blocks[after].edit;
-        let (start, end) = edit.range();
-        let mut suffix = edit.clone();
-        suffix.set_selection(0, end);
-        suffix.insert("");
-        suffix.clear_history();
-        edit.set_selection(start, edit.text.len());
-        edit.insert("");
-        edit.focused = false;
-        let mut edit = suffix;
-        edit.set_caret(0);
-        edit.focused = true;
-        let mut block = Block::paragraph(&tab.page.id, &edit.text, after as i64 + 1);
-        crate::text_colors::copy_suffix(&tab.blocks[after].block, &mut block, end);
-        crate::editor_drag::copy_column(&tab.blocks[after].block, &mut block);
-        let oldkind = tab.blocks[after].block.kind;
-        if matches!(
-            oldkind,
-            BlockKind::BulletedList | BlockKind::NumberedList | BlockKind::Todo
-        ) {
-            block.kind = oldkind;
-        }
-        tab.blocks.insert(after + 1, EditableBlock { block, edit });
-        self.save_blocks();
+        self.add_block_in(after, false);
     }
     pub fn open_view_chooser(&mut self) {
         self.dismiss_cell_picker();

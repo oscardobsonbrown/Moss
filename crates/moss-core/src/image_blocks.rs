@@ -22,6 +22,17 @@ impl Store {
             .take(12 * 1024 * 1024 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| invalid(&e.to_string()))?;
+        Self::import_block_image_bytes(database, workspace, page_id, block_id, expected, &bytes)
+    }
+    /// Validate and attach raw image bytes (e.g. from clipboard paste) on a worker thread.
+    pub fn import_block_image_bytes(
+        database: impl AsRef<std::path::Path>,
+        workspace: &str,
+        page_id: &str,
+        block_id: &str,
+        expected: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<Block> {
         if bytes.len() > 12 * 1024 * 1024 {
             return Err(invalid("image exceeds 12 MiB"));
         }
@@ -32,7 +43,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let mut store = Store { conn, history_actor: None, history_coalesce: true };
-        let asset = store.import_cover_image(&bytes)?;
+        let asset = store.import_cover_image(bytes)?;
         store.set_block_image_if_unchanged(workspace, page_id, block_id, expected, &asset)
     }
     /// Attach an imported image without overwriting a newer image or other block changes.

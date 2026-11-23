@@ -6,6 +6,47 @@ use crate::{
 use rune::*;
 use std::{collections::BTreeMap, rc::Rc};
 
+pub fn line_edges(cx: &Cx<State>, key: &str, edit: &TextEdit) -> (bool, bool) {
+    if !edit.focused {
+        return (false, false);
+    }
+    if let (Some(caret), Some(rect)) = (cx.caret(key), cx.window_layout(key))
+        && caret[3] > 0.
+        && rect[3] > 0.
+    {
+        let at_first = caret[1] <= rect[1] + caret[3] * 0.5;
+        let at_last = caret[1] + caret[3] >= rect[1] + rect[3] - caret[3] * 0.5;
+        return (at_first, at_last);
+    }
+    let pos = edit.focus.min(edit.text.len());
+    let at_first = !edit.text[..pos].contains('\n');
+    let at_last = !edit.text[pos..].contains('\n');
+    (at_first, at_last)
+}
+
+pub fn end_drop_guide(s: &State, page_id: &str, peek: bool, t: Theme) -> Option<El> {
+    let block_target = s
+        .editor_drag
+        .as_ref()
+        .filter(|d| d.page_id == page_id && d.peek == peek)
+        .and_then(|d| d.target.as_ref())
+        .is_some_and(|target| target.id == "@end");
+    let file_target = s
+        .editor_file_drop
+        .as_ref()
+        .filter(|d| d.page_id == page_id && d.peek == peek)
+        .and_then(|d| d.target.as_ref())
+        .is_some_and(|target| target.id == "@end");
+    (block_target || file_target).then(|| {
+        el().key("editor-block-drop-guide")
+            .absolute(0., 0.)
+            .w_full()
+            .h(3.)
+            .fill(t.blue)
+            .a11y_hidden()
+    })
+}
+
 pub fn with_list_numbers(
     blocks: &[EditableBlock],
 ) -> impl Iterator<Item = (&EditableBlock, usize)> {
@@ -95,7 +136,14 @@ pub fn decorate_for(s: &State, page_id: &str, id: &str, item: El, t: Theme, peek
     let moving = active.filter(|d| d.block_id == id);
     let target = active
         .and_then(|d| d.target.as_ref())
-        .filter(|d| d.id == id);
+        .filter(|d| d.id == id)
+        .or_else(|| {
+            s.editor_file_drop
+                .as_ref()
+                .filter(|d| d.page_id == page_id && d.peek == peek)
+                .and_then(|d| d.target.as_ref())
+                .filter(|d| d.id == id)
+        });
     let marker = target.map(|target| {
         let line = el()
             .key("editor-block-drop-guide")

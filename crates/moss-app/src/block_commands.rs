@@ -108,37 +108,7 @@ impl State {
     }
 
     pub fn open_block_commands(&mut self, block_id: &str, anchor: &str, mode: BlockCommandMode) {
-        if self
-            .block_commands
-            .as_ref()
-            .is_some_and(|p| p.error.is_some())
-        {
-            return;
-        }
-        let Some(tab) = self.tab() else {
-            return;
-        };
-        let Some(block) = tab.blocks.iter().find(|b| b.block.id == block_id) else {
-            return;
-        };
-        if mode == BlockCommandMode::Slash && (!block.edit.text.is_empty() || !block.edit.focused) {
-            return;
-        }
-        let page_id = tab.page.id.clone();
-        self.modal = None;
-        self.block_command_search = TextEdit::new("");
-        self.block_command_search.focused = true;
-        self.block_commands = Some(BlockCommands {
-            page_id,
-            block_id: block_id.into(),
-            anchor: anchor.into(),
-            mode,
-            selected: 0,
-            error: None,
-            peek: false,
-            link_picker: false,
-            link_results: Vec::new(),
-        });
+        self.open_block_commands_in(block_id, anchor, mode, false);
     }
     pub fn open_peek_block_commands(
         &mut self,
@@ -146,23 +116,31 @@ impl State {
         anchor: &str,
         mode: BlockCommandMode,
     ) {
-        if self
-            .block_commands
-            .as_ref()
-            .is_some_and(|menu| menu.error.is_some())
-        {
+        self.open_block_commands_in(block_id, anchor, mode, true);
+    }
+    pub fn open_block_commands_in(
+        &mut self,
+        block_id: &str,
+        anchor: &str,
+        mode: BlockCommandMode,
+        peek: bool,
+    ) {
+        if self.block_commands.as_ref().is_some_and(|m| m.error.is_some()) {
             return;
         }
-        let Some(peek) = &self.record_peek else {
+        let Some((page_id, _, blocks, _)) = self.editor_surface(peek) else {
             return;
         };
-        let Some(block) = peek.blocks.iter().find(|b| b.block.id == block_id) else {
+        let Some(block) = blocks.iter().find(|b| b.block.id == block_id) else {
             return;
         };
         if mode == BlockCommandMode::Slash && (!block.edit.text.is_empty() || !block.edit.focused) {
             return;
         }
-        let page_id = peek.page.id.clone();
+        let page_id = page_id.to_owned();
+        if !peek {
+            self.modal = None;
+        }
         self.block_command_search = TextEdit::new("");
         self.block_command_search.focused = true;
         self.block_commands = Some(BlockCommands {
@@ -172,19 +150,17 @@ impl State {
             mode,
             selected: 0,
             error: None,
-            peek: true,
+            peek,
             link_picker: false,
             link_results: Vec::new(),
         });
     }
     pub fn block_command_matches(&self) -> Vec<(BlockKind, &'static str)> {
         let mut results = matches(&self.block_command_search.text);
-        if let Some(menu) = &self.block_commands {
-            if menu.mode == BlockCommandMode::TextType {
-                results.retain(|(kind, _)| is_text_type(*kind));
-            } else if menu.peek {
-                results.retain(|(kind, _)| matches!(kind, BlockKind::Bookmark | BlockKind::Image));
-            }
+        if let Some(menu) = &self.block_commands
+            && menu.mode == BlockCommandMode::TextType
+        {
+            results.retain(|(kind, _)| is_text_type(*kind));
         }
         results
     }
@@ -200,59 +176,21 @@ impl State {
             self.block_command_search.replace_text("link");
             return;
         }
-        if menu.peek {
-            let (page, block, mode) = (menu.page_id.clone(), menu.block_id.clone(), menu.mode);
-            if mode == BlockCommandMode::Slash {
-                let literal = format!("/{}", self.block_command_search.text);
-                let Some(target) = self
-                    .record_peek
-                    .as_mut()
-                    .filter(|peek| peek.page.id == page)
-                    .and_then(|peek| peek.blocks.iter_mut().find(|b| b.block.id == block))
-                else {
-                    return;
-                };
-                target.edit.insert(&literal);
-                target.edit.focused = true;
-                if let Some(menu) = &mut self.block_commands {
-                    menu.mode = BlockCommandMode::Change;
-                }
-                self.save_peek_blocks();
-                if self
-                    .record_peek
-                    .as_ref()
-                    .is_some_and(|peek| peek.dirty_blocks)
-                {
-                    if let Some(menu) = &mut self.block_commands {
-                        menu.error = Some("Block text is not saved. Retry to keep it.".into());
-                    }
-                    return;
-                }
-            }
-            if let Some(block) = self
-                .record_peek
-                .as_mut()
-                .filter(|peek| peek.page.id == page)
-                .and_then(|peek| peek.blocks.iter_mut().find(|b| b.block.id == block))
-            {
-                block.edit.focused = true;
-            }
-            self.block_commands = None;
-            self.block_command_search.focused = false;
-            return;
-        }
-        let return_page = menu.page_id.clone();
-        let return_block = menu.block_id.clone();
-        if menu.mode == BlockCommandMode::Slash {
-            let (page, block) = (menu.page_id.clone(), menu.block_id.clone());
+        let (page, block, mode, peek) = (
+            menu.page_id.clone(),
+            menu.block_id.clone(),
+            menu.mode,
+            menu.peek,
+        );
+        if mode == BlockCommandMode::Slash {
             let literal = format!("/{}", self.block_command_search.text);
             let Some(target) = self
-                .tabs
-                .get_mut(self.active)
-                .filter(|tab| tab.page.id == page)
-                .and_then(|tab| tab.blocks.iter_mut().find(|b| b.block.id == block))
+                .editor_blocks_mut_for_page(&page, peek)
+                .and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == block))
             else {
-                if let Some(menu) = &mut self.block_commands {
+                if !peek
+                    && let Some(menu) = &mut self.block_commands
+                {
                     menu.error = Some("The block is no longer available.".into());
                 }
                 return;
@@ -262,25 +200,19 @@ impl State {
             if let Some(menu) = &mut self.block_commands {
                 menu.mode = BlockCommandMode::Change;
             }
-            self.save_blocks();
-            if self.tab().is_some_and(|tab| tab.dirty_blocks) {
+            self.save_editor_blocks(peek);
+            if self.editor_blocks_dirty(peek) {
                 if let Some(menu) = &mut self.block_commands {
                     menu.error = Some("Block text is not saved. Retry to keep it.".into());
                 }
                 return;
             }
         }
-        if let Some(block) = self
-            .tabs
-            .get_mut(self.active)
-            .filter(|tab| tab.page.id == return_page)
-            .and_then(|tab| {
-                tab.blocks
-                    .iter_mut()
-                    .find(|block| block.block.id == return_block)
-            })
+        if let Some(target) = self
+            .editor_blocks_mut_for_page(&page, peek)
+            .and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == block))
         {
-            block.edit.focused = true;
+            target.edit.focused = true;
         }
         self.block_commands = None;
         self.block_command_search.focused = false;
@@ -319,12 +251,6 @@ impl State {
             self.refresh_block_link_results();
             return;
         }
-        if self.block_commands.as_ref().is_some_and(|menu| menu.peek) {
-            if kind == BlockKind::Image {
-                self.insert_peek_image();
-            }
-            return;
-        }
         if kind == BlockKind::ChildPage {
             self.insert_child_page_block();
             return;
@@ -335,29 +261,26 @@ impl State {
         if menu.error.is_some() {
             return;
         }
-        let (page_id, block_id, mode) = (menu.page_id.clone(), menu.block_id.clone(), menu.mode);
-        let Some(tab) = self
-            .tabs
-            .get_mut(self.active)
-            .filter(|tab| tab.page.id == page_id)
-        else {
+        let (page_id, block_id, mode, peek) = (
+            menu.page_id.clone(),
+            menu.block_id.clone(),
+            menu.mode,
+            menu.peek,
+        );
+        let Some(blocks) = self.editor_blocks_mut_for_page(&page_id, peek) else {
             if let Some(menu) = &mut self.block_commands {
                 menu.error = Some("The page is no longer open.".into());
             }
             return;
         };
-        let Some(index) = tab
-            .blocks
-            .iter()
-            .position(|block| block.block.id == block_id)
-        else {
+        let Some(index) = blocks.iter().position(|block| block.block.id == block_id) else {
             if let Some(menu) = &mut self.block_commands {
                 menu.error = Some("The block is no longer available.".into());
             }
             return;
         };
         if mode == BlockCommandMode::Change
-            && tab.blocks[index].block.kind == BlockKind::SimpleTable
+            && blocks[index].block.kind == BlockKind::SimpleTable
             && kind != BlockKind::SimpleTable
         {
             if let Some(menu) = &mut self.block_commands {
@@ -368,39 +291,42 @@ impl State {
             }
             return;
         }
-        let reuse_empty = tab.blocks[index].block.kind == BlockKind::Paragraph
-            && tab.blocks[index].edit.text.is_empty();
-        // A Divider has no text input. Keep nonempty content visible by inserting
-        // the Divider after it, even when the user chose Change.
+        let reuse_empty = blocks[index].block.kind == BlockKind::Paragraph
+            && blocks[index].edit.text.is_empty();
+        // A Divider, SimpleTable, or Image has no text input. Keep nonempty content visible
+        // by inserting after it, even when the user chose Change.
         let insert = (mode == BlockCommandMode::InsertAfter && !reuse_empty)
             || (mode == BlockCommandMode::Change
                 && matches!(
                     kind,
                     BlockKind::Divider | BlockKind::SimpleTable | BlockKind::Image
                 )
-                && !tab.blocks[index].edit.text.is_empty());
+                && !blocks[index].edit.text.is_empty());
         let target_index = if insert {
-            tab.blocks[index].edit.focused = false;
+            blocks[index].edit.focused = false;
             let mut block = Block::paragraph(&page_id, "", (index + 1) as i64);
-            crate::editor_drag::copy_column(&tab.blocks[index].block, &mut block);
+            crate::editor_drag::copy_column(&blocks[index].block, &mut block);
             block.kind = kind;
             let mut edit = TextEdit::new("").rich();
-            edit.focused = true;
-            tab.blocks.insert(index + 1, EditableBlock { block, edit });
+            edit.focused = crate::editor_commands::is_text_block(kind);
+            blocks.insert(index + 1, EditableBlock { block, edit });
             index + 1
         } else {
-            set_kind(&mut tab.blocks[index], kind);
+            set_kind(&mut blocks[index], kind);
+            if !crate::editor_commands::is_text_block(kind) {
+                blocks[index].edit.focused = false;
+            }
             index
         };
-        let target_id = tab.blocks[target_index].block.id.clone();
+        let target_id = blocks[target_index].block.id.clone();
         if kind == BlockKind::Divider {
-            tab.blocks[target_index].edit.focused = false;
+            blocks[target_index].edit.focused = false;
             let next = target_index + 1;
-            let reuse = tab.blocks.get(next).is_some_and(|block| {
+            let reuse = blocks.get(next).is_some_and(|block| {
                 block.block.kind == BlockKind::Paragraph && block.edit.text.is_empty()
             });
             if !reuse {
-                tab.blocks.insert(
+                blocks.insert(
                     next,
                     EditableBlock {
                         block: Block::paragraph(&page_id, "", next as i64),
@@ -408,15 +334,15 @@ impl State {
                     },
                 );
             }
-            tab.blocks[next].edit.set_caret(0);
-            tab.blocks[next].edit.focused = true;
+            blocks[next].edit.set_caret(0);
+            blocks[next].edit.focused = true;
         }
         if let Some(menu) = &mut self.block_commands {
             menu.block_id = target_id.clone();
             menu.mode = BlockCommandMode::Change;
         }
-        self.save_blocks();
-        if self.tab().is_some_and(|tab| tab.dirty_blocks) {
+        self.save_editor_blocks(peek);
+        if self.editor_blocks_dirty(peek) {
             if let Some(menu) = &mut self.block_commands {
                 menu.error = Some("Block change is not saved. Retry to keep it.".into());
             }
@@ -424,14 +350,12 @@ impl State {
             self.block_commands = None;
             self.block_command_search.focused = false;
             if kind == BlockKind::SimpleTable {
-                if let Some(block) = self.tabs[self.active]
-                    .blocks
-                    .iter_mut()
-                    .find(|b| b.block.id == target_id)
+                if let Some(blocks) = self.editor_blocks_mut_for_page(&page_id, peek)
+                    && let Some(block) = blocks.iter_mut().find(|b| b.block.id == target_id)
                 {
                     block.edit.focused = false;
                 }
-                self.start_simple_table_cell(&page_id, &target_id, 0, 0, false);
+                self.start_simple_table_cell(&page_id, &target_id, 0, 0, peek);
             }
         }
     }
@@ -455,30 +379,12 @@ impl State {
         let Some(menu) = &self.block_commands else {
             return;
         };
-        if menu.peek {
-            if !self
-                .record_peek
-                .as_ref()
-                .is_some_and(|peek| peek.page.id == menu.page_id)
-            {
-                return;
-            }
-            self.save_peek_blocks();
-            if self
-                .record_peek
-                .as_ref()
-                .is_some_and(|peek| !peek.dirty_blocks)
-            {
-                self.block_commands = None;
-                self.block_command_search.focused = false;
-            }
+        let (page_id, peek) = (menu.page_id.clone(), menu.peek);
+        if self.editor_page_id(peek).as_deref() != Some(page_id.as_str()) {
             return;
         }
-        if !self.tab().is_some_and(|tab| tab.page.id == menu.page_id) {
-            return;
-        }
-        self.save_blocks();
-        if self.tab().is_some_and(|tab| !tab.dirty_blocks) {
+        self.save_editor_blocks(peek);
+        if !self.editor_blocks_dirty(peek) {
             self.block_commands = None;
             self.block_command_search.focused = false;
         }
@@ -492,30 +398,25 @@ impl State {
         else {
             return;
         };
-        let (page_id, block_id) = (menu.page_id.clone(), menu.block_id.clone());
-        if let Some(tab) = self
-            .tabs
-            .get_mut(self.active)
-            .filter(|tab| tab.page.id == page_id)
-        {
-            if !tab
-                .blocks
+        let (page_id, block_id, peek) = (menu.page_id.clone(), menu.block_id.clone(), menu.peek);
+        if let Some(blocks) = self.editor_blocks_mut_for_page(&page_id, peek) {
+            if !blocks
                 .iter()
-                .any(|block| block.edit.focused && block.block.kind != BlockKind::Divider)
+                .any(|block| block.edit.focused && crate::editor_commands::is_text_block(block.block.kind))
             {
-                let index = tab
-                    .blocks
+                let index = blocks
                     .iter()
                     .position(|block| {
-                        block.block.id == block_id && block.block.kind != BlockKind::Divider
+                        block.block.id == block_id
+                            && crate::editor_commands::is_text_block(block.block.kind)
                     })
                     .or_else(|| {
-                        tab.blocks
+                        blocks
                             .iter()
-                            .position(|block| block.block.kind != BlockKind::Divider)
+                            .position(|block| crate::editor_commands::is_text_block(block.block.kind))
                     });
                 if let Some(index) = index {
-                    tab.blocks[index].edit.focused = true;
+                    blocks[index].edit.focused = true;
                 }
             }
         }
@@ -529,60 +430,50 @@ impl State {
         if menu.error.is_some() || menu.mode != BlockCommandMode::Change {
             return;
         }
-        let (page_id, block_id) = (menu.page_id.clone(), menu.block_id.clone());
-        let Some(tab) = self
-            .tabs
-            .get_mut(self.active)
-            .filter(|tab| tab.page.id == page_id)
-        else {
+        let (page_id, block_id, peek) = (menu.page_id.clone(), menu.block_id.clone(), menu.peek);
+        let Some(blocks) = self.editor_blocks_mut_for_page(&page_id, peek) else {
             return;
         };
-        let Some(index) = tab.blocks.iter().position(|b| b.block.id == block_id) else {
+        let Some(index) = blocks.iter().position(|b| b.block.id == block_id) else {
             return;
         };
         if duplicate {
-            let mut block = tab.blocks[index].block.clone();
+            let mut block = blocks[index].block.clone();
             block.id = moss_core::new_id();
-            let mut edit = tab.blocks[index].edit.clone();
+            let mut edit = blocks[index].edit.clone();
             edit.clear_history();
-            edit.focused = true;
-            tab.blocks.insert(index + 1, EditableBlock { block, edit });
-        } else if tab.blocks.len() > 1 {
-            tab.blocks.remove(index);
-            crate::editor_drag::normalize(&mut tab.blocks);
+            edit.focused = crate::editor_commands::is_text_block(block.kind);
+            blocks.insert(index + 1, EditableBlock { block, edit });
+        } else if blocks.len() > 1 {
+            blocks.remove(index);
+            crate::editor_drag::normalize(blocks);
             if let Some(menu) = &mut self.block_commands {
-                menu.anchor = "page-toolbar".into();
+                menu.anchor = if peek {
+                    "peek-actions".into()
+                } else {
+                    "page-toolbar".into()
+                };
             }
         } else {
-            tab.blocks[index].edit.replace_text("");
-            tab.blocks[index].block.kind = BlockKind::Paragraph;
-            tab.blocks[index].block.checked = false;
-            tab.blocks[index].block.config = serde_json::Value::Null;
+            blocks[index].edit.replace_text("");
+            blocks[index].block.kind = BlockKind::Paragraph;
+            blocks[index].block.checked = false;
+            blocks[index].block.config = serde_json::Value::Null;
         }
-        let preferred = (index + usize::from(duplicate)).min(tab.blocks.len() - 1);
-        let focus = (preferred..tab.blocks.len())
-            .chain((0..preferred).rev())
-            .find(|&i| tab.blocks[i].block.kind != BlockKind::Divider);
-        let focus = focus.unwrap_or_else(|| {
-            tab.blocks.push(EditableBlock {
-                block: Block::paragraph(&page_id, "", tab.blocks.len() as i64),
-                edit: TextEdit::new("").rich(),
-            });
-            tab.blocks.len() - 1
-        });
-        tab.title.focused = false;
-        for block in &mut tab.blocks {
-            block.edit.focused = false;
+        let focus_id = if duplicate {
+            let preferred = (index + 1).min(
+                self.editor_blocks_mut_for_page(&page_id, peek)
+                    .map_or(0, |b| b.len().saturating_sub(1)),
+            );
+            self.focus_block_index(preferred, None, peek, None)
+        } else {
+            self.focus_after_removal(index, peek, None)
+        };
+        if let (Some(menu), Some(focus_id)) = (&mut self.block_commands, focus_id) {
+            menu.block_id = focus_id;
         }
-        tab.blocks[focus].edit.focused = true;
-        if !duplicate {
-            tab.blocks[focus].edit.set_caret(0);
-        }
-        if let Some(menu) = &mut self.block_commands {
-            menu.block_id = tab.blocks[focus].block.id.clone();
-        }
-        self.save_blocks();
-        if self.tab().is_some_and(|tab| tab.dirty_blocks) {
+        self.save_editor_blocks(peek);
+        if self.editor_blocks_dirty(peek) {
             if let Some(menu) = &mut self.block_commands {
                 menu.error = Some("Block change is not saved. Retry to keep it.".into());
             }

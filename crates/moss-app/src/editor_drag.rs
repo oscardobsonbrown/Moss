@@ -29,6 +29,11 @@ pub struct BlockDrag {
     pub rect: [f32; 4],
     pub peek: bool,
 }
+pub struct FileDrop {
+    pub page_id: String,
+    pub peek: bool,
+    pub target: Option<Target>,
+}
 pub struct ColumnResize {
     pub page_id: String,
     pub group: String,
@@ -136,7 +141,93 @@ pub fn drop_target(point: [f32; 2], zones: &[DropZone], source: &str) -> Option<
         side,
     })
 }
+pub fn file_drop_target(point: [f32; 2], zones: &[DropZone]) -> Option<Target> {
+    if let Some(zone) = zones
+        .iter()
+        .filter(|z| z.rect[2] > 0. && z.rect[3] > 0.)
+        .filter(|z| {
+            point[0] >= z.rect[0] - 40.
+                && point[0] <= z.rect[0] + z.rect[2] + 40.
+                && point[1] >= z.rect[1] - 4.
+                && point[1] <= z.rect[1] + z.rect[3] + 4.
+        })
+        .min_by(|a, b| a.rect[3].total_cmp(&b.rect[3]))
+    {
+        let side = if zone.id == "@end" || point[1] >= zone.rect[1] + zone.rect[3] / 2. {
+            Side::After
+        } else {
+            Side::Before
+        };
+        return Some(Target {
+            id: zone.id.clone(),
+            side,
+        });
+    }
+    let blocks: Vec<_> = zones
+        .iter()
+        .filter(|z| z.id != "@end" && z.rect[2] > 0. && z.rect[3] > 0.)
+        .collect();
+    let first = blocks
+        .iter()
+        .min_by(|a, b| a.rect[1].total_cmp(&b.rect[1]))?;
+    if point[1] < first.rect[1] {
+        return Some(Target {
+            id: first.id.clone(),
+            side: Side::Before,
+        });
+    }
+    let last = blocks
+        .iter()
+        .max_by(|a, b| (a.rect[1] + a.rect[3]).total_cmp(&(b.rect[1] + b.rect[3])))?;
+    if point[1] > last.rect[1] + last.rect[3] {
+        return Some(Target {
+            id: if zones.iter().any(|z| z.id == "@end") {
+                "@end".into()
+            } else {
+                last.id.clone()
+            },
+            side: Side::After,
+        });
+    }
+    let nearest = blocks.iter().min_by(|a, b| {
+        let da = ((a.rect[1] + a.rect[3] / 2.) - point[1]).abs();
+        let db = ((b.rect[1] + b.rect[3] / 2.) - point[1]).abs();
+        da.total_cmp(&db)
+    })?;
+    Some(Target {
+        id: nearest.id.clone(),
+        side: if point[1] < nearest.rect[1] + nearest.rect[3] / 2. {
+            Side::Before
+        } else {
+            Side::After
+        },
+    })
+}
 impl State {
+    pub fn hover_editor_file_drop(
+        &mut self,
+        page_id: &str,
+        peek: bool,
+        point: Option<[f32; 2]>,
+        zones: &[DropZone],
+    ) {
+        let target = point
+            .and_then(|p| file_drop_target(p, zones))
+            .or_else(|| {
+                zones.iter().find(|z| z.id == "@end").map(|_| Target {
+                    id: "@end".into(),
+                    side: Side::After,
+                })
+            });
+        self.editor_file_drop = Some(FileDrop {
+            page_id: page_id.into(),
+            peek,
+            target,
+        });
+    }
+    pub fn clear_editor_file_drop(&mut self) {
+        self.editor_file_drop = None;
+    }
     pub fn resize_editor_columns(
         &mut self,
         group: &str,

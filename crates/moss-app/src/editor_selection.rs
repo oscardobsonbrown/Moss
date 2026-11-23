@@ -353,6 +353,68 @@ impl State {
         }
         let peek = selection.peek;
         let ids = selection.ids.clone();
+        if matches!(event.key, Key::Up | Key::Down | Key::Enter)
+            && !event.mods.cmd
+            && !event.mods.alt
+            && !event.mods.ctrl
+            && !event.mods.shift
+        {
+            let indices: Vec<usize> = {
+                let blocks = if peek {
+                    &self.record_peek.as_ref().unwrap().blocks
+                } else {
+                    &self.tab().unwrap().blocks
+                };
+                blocks
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| ids.contains(&b.block.id))
+                    .map(|(i, _)| i)
+                    .collect()
+            };
+            if let (Some(&first), Some(&last)) = (indices.first(), indices.last()) {
+                let count = if peek {
+                    self.record_peek.as_ref().unwrap().blocks.len()
+                } else {
+                    self.tab().unwrap().blocks.len()
+                };
+                match event.key {
+                    Key::Up => {
+                        if first == 0 {
+                            self.focus_editor_title(peek, true);
+                        } else {
+                            self.focus_block_index(first - 1, None, peek, Some(tx));
+                        }
+                        tx.instant();
+                        return true;
+                    }
+                    Key::Down => {
+                        if last + 1 < count {
+                            self.focus_block_index(last + 1, Some(0), peek, Some(tx));
+                            tx.instant();
+                            return true;
+                        }
+                    }
+                    Key::Enter => {
+                        let is_text = if peek {
+                            crate::editor_commands::is_text_block(
+                                self.record_peek.as_ref().unwrap().blocks[first].block.kind,
+                            )
+                        } else {
+                            crate::editor_commands::is_text_block(
+                                self.tab().unwrap().blocks[first].block.kind,
+                            )
+                        };
+                        if is_text {
+                            self.focus_block_index(first, None, peek, Some(tx));
+                            tx.instant();
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         if event.key == Key::Command('c') {
             let (blocks, links) = if peek {
                 let page = self.record_peek.as_ref().unwrap();
@@ -390,25 +452,30 @@ impl State {
             return true;
         }
         if matches!(event.key, Key::Backspace | Key::Delete) {
-            let blocks = if peek {
-                &mut self.record_peek.as_mut().unwrap().blocks
-            } else {
-                &mut self.tabs[self.active].blocks
+            let page_id = selection.page_id.clone();
+            let first_removed = {
+                let blocks = if peek {
+                    &mut self.record_peek.as_mut().unwrap().blocks
+                } else {
+                    &mut self.tabs[self.active].blocks
+                };
+                let first = blocks
+                    .iter()
+                    .position(|block| ids.contains(&block.block.id))
+                    .unwrap_or(0);
+                blocks.retain(|block| !ids.contains(&block.block.id));
+                if blocks.is_empty() {
+                    blocks.push(EditableBlock {
+                        block: Block::paragraph(&page_id, "", 0),
+                        edit: TextEdit::new("").rich(),
+                    });
+                }
+                crate::editor_drag::normalize(blocks);
+                first
             };
-            blocks.retain(|block| !ids.contains(&block.block.id));
-            if blocks.is_empty() {
-                blocks.push(EditableBlock {
-                    block: Block::paragraph(&selection.page_id, "", 0),
-                    edit: TextEdit::new("").rich(),
-                });
-            }
-            crate::editor_drag::normalize(blocks);
             self.editor_selection = None;
-            if peek {
-                self.save_peek_blocks()
-            } else {
-                self.save_blocks()
-            }
+            self.focus_after_removal(first_removed, peek, Some(tx));
+            self.save_editor_blocks(peek);
             tx.instant();
             return true;
         }
