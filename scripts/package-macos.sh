@@ -12,9 +12,9 @@ if [ "${CI:-}" = true ] || [ "${GITHUB_ACTIONS:-}" = true ]; then
     locked="--locked"
 fi
 if [ "$profile" = debug ]; then
-    cargo build $locked -p moss -p moss-mcp -p moss-updater
+    env -u MOSS_VERSION cargo build $locked -p moss -p moss-mcp -p moss-updater
 else
-    cargo build $locked --profile "$profile" -p moss -p moss-mcp -p moss-updater
+    env -u MOSS_VERSION cargo build $locked --profile "$profile" -p moss -p moss-mcp -p moss-updater
 fi
 app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
