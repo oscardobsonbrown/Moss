@@ -28,7 +28,7 @@ fn banner_height(surface: &str) -> f32 {
 
 fn fade_geometry(height: f32, dark: bool) -> (f32, usize) {
     let fade = if dark { height * 0.8 } else { height * (2. / 3.) };
-    let step = if fade % 6. == 0. { 6. } else { 5. };
+    let step = if fade % 12. == 0. { 12. } else { 10. };
     (fade, (fade / step) as usize)
 }
 
@@ -47,6 +47,16 @@ fn lerp_color_srgb(a: Color, b: Color, t: f32) -> Color {
         g: mix(a.g, b.g),
         b: mix(a.b, b.b),
         a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn blend_linear(fg: Color, bg: Color, alpha: f32) -> Color {
+    let inv = 1. - alpha;
+    Color {
+        r: fg.r * inv + bg.r * alpha,
+        g: fg.g * inv + bg.g * alpha,
+        b: fg.b * inv + bg.b * alpha,
+        a: 1.,
     }
 }
 
@@ -107,6 +117,9 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
         return el().h(0.);
     };
     let height = banner_height(surface);
+    let (fade_height, fade_bands) = fade_geometry(height, t.dark);
+    let fade_top = height - fade_height;
+    let fade_key = format!("cover-banner-fade-{}-{surface}", page.id);
     let width_key = format!("{}:{surface}", page.id);
     let layout_key = width_key.clone();
     let mut banner = el()
@@ -114,7 +127,6 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
         .w_full()
         .h(height)
         .clip_rounded(0.)
-        .fill(t.sidebar)
         .on_layout_tx(move |s: &mut State, rect, _| {
             if !s.page_cover.widths.contains_key(&layout_key) && s.page_cover.widths.len() >= 32 {
                 if let Some(key) = s.page_cover.widths.keys().next().cloned() {
@@ -125,24 +137,73 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
         });
     let mut crop_overflow = 0.;
     let mut retry_button = None;
+    let mut needs_alpha_fade = false;
     match cover {
         PageCover::Color { color } => {
             if let Some(color) = parse_color(color) {
-                banner = banner.fill(color);
+                banner = banner.child(
+                    rune::memo(
+                        format!("cover-color-memo-{}-{surface}", page.id),
+                        (color.r.to_bits(), color.g.to_bits(), color.b.to_bits(), height.to_bits(), t.dark, t.bg.r.to_bits()),
+                        || {
+                            col()
+                                .w_full()
+                                .h(height)
+                                .child(el().w_full().h(fade_top).fill(color))
+                                .child(
+                                    vertical_bands(fade_height, fade_bands, |p| {
+                                        blend_linear(color, t.bg, banner_fade_alpha(t, p))
+                                    })
+                                    .key(fade_key.clone()),
+                                )
+                        },
+                    )
+                    .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+                    .inert(),
+                );
+            } else {
+                banner = banner.fill(t.sidebar);
+                needs_alpha_fade = true;
             }
         }
         PageCover::Gradient { start, end } => {
             if let (Some(a), Some(b)) = (parse_color(start), parse_color(end)) {
-                let bands = (height / 10.) as usize;
-                banner = banner.fill(a).child(
-                    vertical_bands(height, bands, |p| {
-                        lerp_color_srgb(a, b, ease_in_out((p / 0.72).clamp(0., 1.)))
-                    })
-                    .pin(Some(0.), Some(0.), Some(0.), Some(0.)),
+                banner = banner.child(
+                    rune::memo(
+                        format!("cover-grad-memo-{}-{surface}", page.id),
+                        (
+                            a.r.to_bits(), a.g.to_bits(), a.b.to_bits(),
+                            b.r.to_bits(), b.g.to_bits(), b.b.to_bits(),
+                            height.to_bits(), t.dark, t.bg.r.to_bits(),
+                        ),
+                        || {
+                            let grad_at = |y: f32| {
+                                lerp_color_srgb(a, b, ease_in_out(((y / height) / 0.72).clamp(0., 1.)))
+                            };
+                            let top_bands = ((fade_top / 12.).round() as usize).max(1);
+                            col()
+                                .w_full()
+                                .h(height)
+                                .child(vertical_bands(fade_top, top_bands, |p| grad_at(p * fade_top)))
+                                .child(
+                                    vertical_bands(fade_height, fade_bands, |p| {
+                                        blend_linear(grad_at(fade_top + p * fade_height), t.bg, banner_fade_alpha(t, p))
+                                    })
+                                    .key(fade_key.clone()),
+                                )
+                        },
+                    )
+                    .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+                    .inert(),
                 );
+            } else {
+                banner = banner.fill(t.sidebar);
+                needs_alpha_fade = true;
             }
         }
         PageCover::Image { asset, position } => {
+            banner = banner.fill(t.sidebar);
+            needs_alpha_fade = true;
             if let Some(error) = s.page_cover.image_errors.get(asset) {
                 let asset = asset.clone();
                 retry_button = Some(
@@ -180,14 +241,17 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
             }
         }
     }
-    let (fade_height, fade_bands) = fade_geometry(height, t.dark);
-    banner = banner.child(
-        vertical_bands(fade_height, fade_bands, |p| {
-            t.bg.alpha(banner_fade_alpha(t, p))
-        })
-        .key(format!("cover-banner-fade-{}-{surface}", page.id))
-        .pin(Some(0.), Some(height - fade_height), Some(0.), Some(0.)),
-    );
+    if needs_alpha_fade {
+        banner = banner.child(
+            rune::memo(
+                fade_key.clone(),
+                (height.to_bits(), t.dark, t.bg.r.to_bits()),
+                || vertical_bands(fade_height, fade_bands, |p| t.bg.alpha(banner_fade_alpha(t, p))),
+            )
+            .pin(Some(0.), Some(fade_top), Some(0.), Some(0.))
+            .inert(),
+        );
+    }
     if let Some(retry) = retry_button {
         banner = banner.child(retry);
     }
