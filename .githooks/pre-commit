@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+staged_rs=$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')
+if [ -n "$staged_rs" ]; then
+    if ! command -v rustfmt >/dev/null 2>&1; then
+        printf '%s\n' "pre-commit: rustfmt is required to verify staged Rust files." >&2
+        exit 1
+    fi
+    printf '%s\n' "$staged_rs" | while IFS= read -r file; do
+        [ -f "$file" ] || continue
+        rustfmt --edition 2024 --check "$file"
+    done
+fi
+
+staged_sh=$(git diff --cached --name-only --diff-filter=ACMR -- '*.sh' '.githooks/*')
+if [ -n "$staged_sh" ]; then
+    printf '%s\n' "$staged_sh" | while IFS= read -r file; do
+        [ -f "$file" ] || continue
+        sh -n "$file"
+    done
+fi
