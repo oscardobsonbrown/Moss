@@ -111,7 +111,7 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
         .w_full()
         .gap(4.)
         .px(32.)
-        .pt(if peek.page.cover.is_some() { 32. } else { 48. })
+        .pt(if peek.page.cover.is_some() { 4. } else { 48. })
         .pb(160.)
         .child(
             col()

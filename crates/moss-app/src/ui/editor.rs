@@ -520,7 +520,7 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
         .self_center()
         .px((available_width * 0.1).clamp(56., 70.))
         .min_w(0.)
-        .pt(if tab.page.cover.is_some() { 24. } else { 54. })
+        .pt(if tab.page.cover.is_some() { 0. } else { 54. })
         .pb(220.)
         .gap(4.);
     if !tab.page.settings.full_width {

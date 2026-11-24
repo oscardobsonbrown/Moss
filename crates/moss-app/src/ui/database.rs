@@ -97,7 +97,7 @@ pub fn view(s: &State, t: Theme) -> El {
         .min_h(0.)
         .gap(10.)
         .px(28.)
-        .pt(if tab.page.cover.is_some() { 20. } else { 42. })
+        .pt(if tab.page.cover.is_some() { 4. } else { 42. })
         .child(
             super::inputs::text(
                 &tab.title,

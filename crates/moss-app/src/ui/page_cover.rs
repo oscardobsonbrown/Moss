@@ -22,6 +22,145 @@ fn reposition(start: f32, delta: f32, overflow: f32, cancelled: bool) -> f32 {
         (start - delta / overflow).clamp(0., 1.)
     }
 }
+const BANNER_HEIGHT: f32 = 360.;
+const LIGHT_FADE_HEIGHT: f32 = 240.;
+const DARK_FADE_HEIGHT: f32 = 288.;
+const LIGHT_FADE_BANDS: usize = 12;
+const DARK_FADE_BANDS: usize = 16;
+const GRADIENT_BANDS: usize = 9;
+
+fn ease_in_out(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    let cubic = t * t * (3. - 2. * t);
+    let quintic = t * t * t * (t * (t * 6. - 15.) + 10.);
+    0.5 * (cubic + quintic)
+}
+
+fn cosine_ease_in_out(t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    0.5 * (1. - (std::f32::consts::PI * t).cos())
+}
+
+fn fade_geometry(t: Theme) -> (f32, usize) {
+    if t.dark {
+        (DARK_FADE_HEIGHT, DARK_FADE_BANDS)
+    } else {
+        (LIGHT_FADE_HEIGHT, LIGHT_FADE_BANDS)
+    }
+}
+
+fn lerp_color_srgb(a: Color, b: Color, t: f32) -> Color {
+    let mix = |ca: f32, cb: f32| {
+        let sa = rune::color::srgb_encode(ca);
+        let sb = rune::color::srgb_encode(cb);
+        rune::color::srgb_decode(sa + (sb - sa) * t)
+    };
+    Color {
+        r: mix(a.r, b.r),
+        g: mix(a.g, b.g),
+        b: mix(a.b, b.b),
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn banner_gradient_color(start: Color, end: Color, t: f32) -> Color {
+    let u = (t / 0.72).clamp(0., 1.);
+    lerp_color_srgb(start, end, ease_in_out(u))
+}
+
+fn banner_gradient_band_stops(start: Color, end: Color, band: usize) -> [(f32, Color); 8] {
+    let t0 = band as f32 / GRADIENT_BANDS as f32;
+    let t1 = (band + 1) as f32 / GRADIENT_BANDS as f32;
+    std::array::from_fn(|i| {
+        let local = i as f32 / 7.;
+        let global = t0 + (t1 - t0) * local;
+        (local, banner_gradient_color(start, end, global))
+    })
+}
+
+fn banner_fade_alpha(t: Theme, pos: f32) -> f32 {
+    if pos <= 0. {
+        return 0.;
+    }
+    if pos >= 1. {
+        return 1.;
+    }
+    if t.dark {
+        // Use Oklab lightness (cube root of linear luminance) calibrated for bright
+        // covers so dark-mode gradients roll off gradually instead of forming a steep
+        // shelf above the dark background.
+        let bg_lin = t.bg.r.clamp(0., 1.);
+        let ref_lin = rune::color::srgb_decode(0.80_f32);
+        let l_bg = bg_lin.cbrt();
+        let l_ref = ref_lin.cbrt();
+        let eased = cosine_ease_in_out(pos);
+        let l_target = l_ref + (l_bg - l_ref) * eased;
+        let target_lin = l_target * l_target * l_target;
+        let denom = bg_lin - ref_lin;
+        if denom.abs() > 1e-5 {
+            ((target_lin - ref_lin) / denom).clamp(0., 1.)
+        } else {
+            eased
+        }
+    } else {
+        let bg_srgb = rune::color::srgb_encode(t.bg.r);
+        let ref_srgb = 0.45_f32;
+        let bg_lin = rune::color::srgb_decode(bg_srgb);
+        let ref_lin = rune::color::srgb_decode(ref_srgb);
+        let denom = bg_lin - ref_lin;
+        let eased = ease_in_out(pos);
+        let target_srgb = ref_srgb + (bg_srgb - ref_srgb) * eased;
+        let target_lin = rune::color::srgb_decode(target_srgb);
+        if denom.abs() > 1e-5 {
+            ((target_lin - ref_lin) / denom).clamp(0., 1.)
+        } else {
+            eased
+        }
+    }
+}
+
+fn banner_fade_band_stops(t: Theme, band: usize, bands: usize) -> [(f32, Color); 8] {
+    let t0 = band as f32 / bands as f32;
+    let t1 = (band + 1) as f32 / bands as f32;
+    std::array::from_fn(|i| {
+        let local = i as f32 / 7.;
+        let global = t0 + (t1 - t0) * local;
+        (local, t.bg.alpha(banner_fade_alpha(t, global)))
+    })
+}
+
+fn banner_gradient_layer(start: Color, end: Color) -> El {
+    let band_height = BANNER_HEIGHT / GRADIENT_BANDS as f32;
+    let mut layer = col()
+        .pin(Some(0.), Some(0.), Some(0.), Some(0.))
+        .inert();
+    for band in 0..GRADIENT_BANDS {
+        layer = layer.child(
+            el().w_full()
+                .h(band_height)
+                .linear_gradient(std::f32::consts::PI, banner_gradient_band_stops(start, end, band)),
+        );
+    }
+    layer
+}
+
+fn banner_fade_layer(key: String, t: Theme) -> El {
+    let (fade_height, bands) = fade_geometry(t);
+    let band_height = fade_height / bands as f32;
+    let mut layer = col()
+        .key(key)
+        .pin(Some(0.), Some(BANNER_HEIGHT - fade_height), Some(0.), Some(0.))
+        .inert();
+    for band in 0..bands {
+        layer = layer.child(
+            el().w_full()
+                .h(band_height)
+                .linear_gradient(std::f32::consts::PI, banner_fade_band_stops(t, band, bands)),
+        );
+    }
+    layer
+}
+
 pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
     let editor = s
         .page_cover
@@ -40,7 +179,7 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
     let mut banner = el()
         .key(format!("cover-banner-{}-{surface}", page.id))
         .w_full()
-        .h(200.)
+        .h(BANNER_HEIGHT)
         .clip_rounded(0.)
         .fill(t.sidebar)
         .on_layout_tx(move |s: &mut State, rect, _| {
@@ -52,6 +191,7 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
             s.page_cover.widths.insert(layout_key.clone(), rect[2]);
         });
     let mut crop_overflow = 0.;
+    let mut retry_button = None;
     match cover {
         PageCover::Color { color } => {
             if let Some(color) = parse_color(color) {
@@ -60,13 +200,13 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
         }
         PageCover::Gradient { start, end } => {
             if let (Some(a), Some(b)) = (parse_color(start), parse_color(end)) {
-                banner = banner.gradient(a, b);
+                banner = banner.fill(a).child(banner_gradient_layer(a, b));
             }
         }
         PageCover::Image { asset, position } => {
             if let Some(error) = s.page_cover.image_errors.get(asset) {
                 let asset = asset.clone();
-                banner = banner.child(
+                retry_button = Some(
                     button(
                         format!("cover-image-retry-{}-{surface}", page.id),
                         "Retry image",
@@ -85,14 +225,14 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
                         .copied()
                         .unwrap_or(1.)
                         .max(1.);
-                    let scale = (width / w as f32).max(200. / h as f32);
+                    let scale = (width / w as f32).max(BANNER_HEIGHT / h as f32);
                     let image_width = w as f32 * scale;
                     let image_height = h as f32 * scale;
-                    crop_overflow = (image_height - 200.).max(0.);
+                    crop_overflow = (image_height - BANNER_HEIGHT).max(0.);
                     banner = banner.child(
                         el().absolute(
                             (width - image_width) / 2.,
-                            -(image_height - 200.) * position.clamp(0., 1.),
+                            -(image_height - BANNER_HEIGHT) * position.clamp(0., 1.),
                         )
                         .size(image_width, image_height)
                         .pixels(image.pixels()),
@@ -100,6 +240,13 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
                 }
             }
         }
+    }
+    banner = banner.child(banner_fade_layer(
+        format!("cover-banner-fade-{}-{surface}", page.id),
+        t,
+    ));
+    if let Some(retry) = retry_button {
+        banner = banner.child(retry);
     }
     if editor.is_some_and(|e| e.reposition) {
         banner = banner.on_drag(move |s: &mut State, event, tx| {
@@ -530,10 +677,297 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn drag_uses_crop_overflow_and_cancel_restores_start() {
         assert!((reposition(0.5, 30., 300., false) - 0.4).abs() < 0.0001);
         assert_eq!(reposition(0.5, 30., 300., true), 0.5);
         assert_eq!(reposition(0.5, 30., 0., false), 0.5);
+    }
+
+    #[test]
+    fn banner_fade_stops_ease_in_and_out_monotonically_in_both_themes() {
+        for dark in [false, true] {
+            let t = Theme::new(dark);
+            let (_, bands) = fade_geometry(t);
+            let mut prev_alpha = -1.0_f32;
+            for band in 0..bands {
+                let stops = banner_fade_band_stops(t, band, bands);
+                assert_eq!(stops[0].0, 0.);
+                assert_eq!(stops[7].0, 1.);
+                if band == 0 {
+                    assert_eq!(stops[0].1.a, 0.);
+                } else {
+                    assert!((stops[0].1.a - prev_alpha).abs() < 1e-6);
+                }
+                for pair in stops.windows(2) {
+                    assert!(pair[0].0 < pair[1].0);
+                    assert!(pair[0].1.a < pair[1].1.a);
+                    assert!((pair[1].1.r - t.bg.r).abs() < 1e-6);
+                    assert!((pair[1].1.g - t.bg.g).abs() < 1e-6);
+                    assert!((pair[1].1.b - t.bg.b).abs() < 1e-6);
+                }
+                prev_alpha = stops[7].1.a;
+            }
+            assert_eq!(prev_alpha, 1.);
+            assert!(banner_fade_alpha(t, 0.10) < 0.08);
+            assert!(banner_fade_alpha(t, 0.90) > 0.96);
+        }
+    }
+
+    #[test]
+    fn banner_gradient_stops_ease_from_start_to_end_before_bottom() {
+        let a = parse_color("#4568dc").unwrap();
+        let b = parse_color("#b06ab3").unwrap();
+        let first = banner_gradient_band_stops(a, b, 0);
+        let last = banner_gradient_band_stops(a, b, GRADIENT_BANDS - 1);
+        assert!((first[0].1.r - a.r).abs() < 1e-5);
+        assert!((last[0].1.r - b.r).abs() < 1e-5);
+        assert!((last[7].1.r - b.r).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rendered_banner_fades_gradually_into_page_background_without_edges() {
+        use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+        let gpu = Gpu::headless();
+        let preview_dir = std::env::var("MOSS_BANNER_PREVIEW_DIR").ok();
+        let size = (1280u32, 820u32);
+        for (mode, dark) in [("light", false), ("dark", true)] {
+            for (kind, cover) in [
+                (
+                    "color",
+                    PageCover::Color {
+                        color: "#5b6ea8".into(),
+                    },
+                ),
+                (
+                    "gradient",
+                    PageCover::Gradient {
+                        start: "#6b66b8".into(),
+                        end: "#eab59b".into(),
+                    },
+                ),
+                (
+                    "image",
+                    PageCover::Image {
+                        asset: "0".repeat(64),
+                        position: 0.5,
+                    },
+                ),
+            ] {
+                let path =
+                    std::env::temp_dir().join(format!("moss-banner-render-{}", moss_core::new_id()));
+                let mut state = State::open(path.clone(), None).unwrap();
+                state.prefs.dark = Some(dark);
+                state.new_page(false, None);
+                state.tabs[state.active].title.replace_text("Moss Page");
+                state.tabs[state.active].blocks[0]
+                    .edit
+                    .replace_text("The banner fades smoothly into the page background.");
+                if let PageCover::Image { asset, .. } = &cover {
+                    let cache = rune::ImageCache::new(std::sync::Arc::new(|| {}));
+                    let (w, h) = (320u32, 160u32);
+                    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+                    for y in 0..h {
+                        let ty = y as f32 / (h - 1) as f32;
+                        for x in 0..w {
+                            let check = ((x / 8) + (y / 8)) % 2 == 0;
+                            let r = (100. + 135. * ty + if check { 14. } else { -14. }) as u8;
+                            let g = (95. + 90. * ty + if check { 10. } else { -10. }) as u8;
+                            let b = (180. - 30. * ty + if check { 12. } else { -12. }) as u8;
+                            pixels.extend_from_slice(&[r, g, b, 255]);
+                        }
+                    }
+                    let img = cache.rgba(w, h, pixels);
+                    img.wait().unwrap();
+                    state.page_cover.images.insert(asset.clone(), img);
+                }
+                state.tabs[state.active].page.cover = Some(cover);
+                let page_id = state.tabs[state.active].page.id.clone();
+                let mut rt = Runtime::with_text(
+                    state,
+                    crate::ui::view,
+                    (size.0 as f32, size.1 as f32),
+                    Env {
+                        system_dark: dark,
+                        scale: 1.,
+                    },
+                    rune::text::TextSystem::new(crate::fonts::all(), crate::fonts::FAMILIES),
+                );
+                rt.frame(0.);
+                rt.frame(1. / 60.);
+                let banner_rect = rt
+                    .presented(&format!("cover-banner-{page_id}-document"))
+                    .expect("banner rect")
+                    .0;
+                assert!((banner_rect[3] - BANNER_HEIGHT).abs() < 0.5);
+                let (expected_fade_height, _) = fade_geometry(Theme::new(dark));
+                let fade_rect = rt
+                    .presented(&format!("cover-banner-fade-{page_id}-document"))
+                    .expect("fade rect")
+                    .0;
+                assert!((fade_rect[3] - expected_fade_height).abs() < 0.5);
+                assert!(
+                    (fade_rect[1] + fade_rect[3] - (banner_rect[1] + banner_rect[3])).abs() < 0.5
+                );
+
+                let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+                let target = Offscreen::with_format(&gpu.device, size.0, size.1, OFFSCREEN_FORMAT);
+                renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+                renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, size);
+                renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+                let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                renderer.draw(&mut encoder, &target.view, rt.clear_color());
+                target.copy(&mut encoder);
+                renderer.submit(&gpu.queue, encoder);
+                let rgba = target.read(&gpu.device);
+
+                if let Some(dir) = &preview_dir {
+                    let dir = std::path::Path::new(dir);
+                    std::fs::create_dir_all(dir).unwrap();
+                    let ppm_path = dir.join(format!("banner-{mode}-{kind}.ppm"));
+                    let mut ppm = format!("P6\n{} {}\n255\n", size.0, size.1).into_bytes();
+                    ppm.reserve((size.0 * size.1 * 3) as usize);
+                    for px in rgba.chunks_exact(4) {
+                        ppm.extend_from_slice(&px[..3]);
+                    }
+                    std::fs::write(ppm_path, ppm).unwrap();
+                }
+
+                let sample_x = (banner_rect[0] + banner_rect[2] * 0.5) as u32;
+                let top_y = banner_rect[1].round() as u32 + 10;
+                let fade_start_y = fade_rect[1].round() as u32;
+                let bottom_y = (banner_rect[1] + banner_rect[3]).round() as u32 - 1;
+                let below_y = bottom_y + 4;
+                let px = |y: u32| -> [u8; 4] {
+                    let i = ((y * size.0 + sample_x) * 4) as usize;
+                    rgba[i..i + 4].try_into().unwrap()
+                };
+                let bg = px(below_y);
+                let bottom = px(bottom_y);
+                let top = px(top_y);
+                // Bottom edge seamlessly matches page background.
+                for c in 0..3 {
+                    assert!(
+                        bottom[c].abs_diff(bg[c]) <= 1,
+                        "{mode}/{kind}: bottom {bottom:?} != bg {bg:?}"
+                    );
+                }
+                // Top is visibly distinct from background.
+                let top_diff: i32 = (0..3).map(|c| top[c].abs_diff(bg[c]) as i32).sum();
+                assert!(top_diff > 60, "{mode}/{kind}: top {top:?} too close to bg {bg:?}");
+
+                // Measure start edge, end edge, and per-step smoothness across the fade zone
+                // on color and gradient covers to confirm zero stepped banding or creases.
+                if matches!(kind, "color" | "gradient") {
+                    if kind == "color" {
+                        let before_start = px(fade_start_y - 2);
+                        let after_start = px(fade_start_y + 12);
+                        let near_end = px(bottom_y - 12);
+                        let start_step: u8 = (0..3)
+                            .map(|c| before_start[c].abs_diff(after_start[c]))
+                            .max()
+                            .unwrap();
+                        let end_step: u8 = (0..3)
+                            .map(|c| near_end[c].abs_diff(bottom[c]))
+                            .max()
+                            .unwrap();
+                        assert!(
+                            start_step <= 4,
+                            "{mode}: start of fade has sharp edge: {before_start:?} -> {after_start:?} (delta {start_step})"
+                        );
+                        assert!(
+                            end_step <= 4,
+                            "{mode}: end of fade has sharp edge: {near_end:?} -> {bottom:?} (delta {end_step})"
+                        );
+                    }
+                    let mut prev_delta = [0i32; 3];
+                    let mut have_prev = false;
+                    let mut y = fade_start_y;
+                    while y + 4 <= bottom_y {
+                        let a = px(y);
+                        let b = px(y + 4);
+                        let delta = [
+                            b[0] as i32 - a[0] as i32,
+                            b[1] as i32 - a[1] as i32,
+                            b[2] as i32 - a[2] as i32,
+                        ];
+                        if have_prev {
+                            for c in 0..3 {
+                                let kink = (delta[c] - prev_delta[c]).abs();
+                                assert!(
+                                    kink <= 2,
+                                    "{mode}/{kind} banding kink at y={y} ch={c}: prev_delta={} delta={}",
+                                    prev_delta[c],
+                                    delta[c]
+                                );
+                            }
+                        }
+                        prev_delta = delta;
+                        have_prev = true;
+                        y += 4;
+                    }
+                }
+
+                drop(rt);
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
+    }
+
+    #[test]
+    fn fade_overlay_does_not_block_image_reposition_drag() {
+        let path = std::env::temp_dir().join(format!("moss-banner-drag-{}", moss_core::new_id()));
+        let mut state = State::open(path.clone(), None).unwrap();
+        state.new_page(false, None);
+        let page_id = state.tabs[state.active].page.id.clone();
+        // Create a tall 10x600 PNG so crop_overflow > 0 on a 1000pt window.
+        let png = {
+            // Minimal valid 2x400 solid PNG built using a small raw encoder is unnecessary;
+            // verify reposition with a valid imported image and direct drag over the fade zone.
+            [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
+                1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120, 156, 99,
+                248, 207, 192, 0, 0, 3, 1, 1, 0, 201, 254, 146, 239, 0, 0, 0, 0, 73, 69, 78, 68,
+                174, 66, 96, 130,
+            ]
+        };
+        let asset = state.store.import_cover_image(&png).unwrap();
+        let cover = PageCover::Image {
+            asset: asset.clone(),
+            position: 0.5,
+        };
+        state.tabs[state.active].page.cover = Some(cover.clone());
+        let page = state.tabs[state.active].page.clone();
+        state.open_page_cover(&page, &format!("page-cover-open-{page_id}-document"));
+        state.page_cover.editor.as_mut().unwrap().reposition = true;
+        let cache = rune::ImageCache::new(std::sync::Arc::new(|| {}));
+        let image = cache.rgba(400, 300, vec![120; 400 * 300 * 4]);
+        image.wait().unwrap();
+        state.page_cover.images.insert(asset, image);
+        let mut rt = Runtime::new(state, crate::ui::view, (1000., 800.), Env::default());
+        rt.frame(0.);
+        rt.frame(1. / 60.);
+        let fade = rt
+            .presented(&format!("cover-banner-fade-{page_id}-document"))
+            .unwrap()
+            .0;
+        let x = fade[0] + fade[2] * 0.5;
+        let y = fade[1] + fade[3] * 0.5;
+        rt.pointer_down(x, y);
+        rt.pointer_move(x, y - 40.);
+        rt.pointer_up(x, y - 40.);
+        rt.frame(1. / 60.);
+        match &rt.state.page_cover.editor.as_ref().unwrap().draft {
+            Some(PageCover::Image { position, .. }) => {
+                assert!(
+                    (*position - 0.5).abs() > 0.05,
+                    "fade overlay intercepted reposition drag: position={position}"
+                );
+            }
+            other => panic!("unexpected draft: {other:?}"),
+        }
+        drop(rt);
+        let _ = std::fs::remove_dir_all(path);
     }
 }
