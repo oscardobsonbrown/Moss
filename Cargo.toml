@@ -20,6 +20,7 @@ moss-engine = { path = "crates/moss-engine" }
 moss-updater = { path = "crates/moss-updater" }
 
 [profile.dev.package."*"]
+opt-level = 2
 debug = false
 
 [profile.release]

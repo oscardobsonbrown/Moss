@@ -243,14 +243,46 @@ pub fn agent_setup_text(data: &Path, codex: bool) -> Result<String, &'static str
     }
 }
 
+fn installed_bundle_version() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let bundle = exe.ancestors().nth(3)?;
+    if bundle.extension().and_then(|ext| ext.to_str()) == Some("app")
+        && exe == bundle.join("Contents/MacOS/Moss")
+    {
+        moss_updater::bundle::installed_version(bundle).map(moss_updater::version::format_version)
+    } else {
+        None
+    }
+}
+
+pub fn app_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        installed_bundle_version()
+            .or_else(|| option_env!("MOSS_VERSION").map(str::to_owned))
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned())
+    })
+}
+
 pub fn version_string() -> String {
     format!(
         "Moss {}{}",
-        option_env!("MOSS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+        app_version(),
         if cfg!(debug_assertions) {
             " · Local dev"
         } else {
             ""
         }
     )
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{app_version, version_string};
+
+    #[test]
+    fn runtime_version_falls_back_outside_app_bundle() {
+        assert!(!app_version().is_empty());
+        assert!(version_string().starts_with(&format!("Moss {}", app_version())));
+    }
 }

@@ -7,10 +7,14 @@ if ! printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|
     printf '%s\n' "MOSS_VERSION must be a stable semantic version." >&2
     exit 1
 fi
+locked=""
+if [ "${CI:-}" = true ] || [ "${GITHUB_ACTIONS:-}" = true ]; then
+    locked="--locked"
+fi
 if [ "$profile" = debug ]; then
-    cargo build -p moss -p moss-mcp -p moss-updater --jobs 2
+    env -u MOSS_VERSION cargo build $locked -p moss -p moss-mcp -p moss-updater
 else
-    cargo build --profile "$profile" -p moss -p moss-mcp -p moss-updater --jobs 2
+    env -u MOSS_VERSION cargo build $locked --profile "$profile" -p moss -p moss-mcp -p moss-updater
 fi
 app="dist/Moss.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

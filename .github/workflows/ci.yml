@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      rust: ${{ steps.resolved.outputs.rust }}
+      scripts: ${{ steps.resolved.outputs.scripts }}
+    steps:
+      - name: Detect changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.cargo/**'
+              - '.config/nextest.toml'
+              - 'crates/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+            scripts:
+              - 'scripts/**'
+              - '.githooks/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+
+      - name: Resolve changed filters
+        id: resolved
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FILTER_RUST: ${{ steps.filter.outputs.rust }}
+          FILTER_SCRIPTS: ${{ steps.filter.outputs.scripts }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            echo "scripts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=${FILTER_RUST:-false}" >> "$GITHUB_OUTPUT"
+            echo "scripts=${FILTER_SCRIPTS:-false}" >> "$GITHUB_OUTPUT"
+          fi
+
+  format:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.scripts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check Rust formatting on changed files
+        if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed_rs=$(git diff --name-only --diff-filter=ACMR "${BASE_SHA}...HEAD" -- '*.rs')
+          if [ -n "$changed_rs" ]; then
+            printf '%s\n' "$changed_rs" | while IFS= read -r file; do
+              [ -f "$file" ] || continue
+              rustfmt --edition 2024 --check "$file"
+            done
+          fi
+
+      - name: Check shell script syntax
+        if: needs.changes.outputs.scripts == 'true'
+        run: |
+          for file in scripts/*.sh .githooks/*; do
+            [ -f "$file" ] || continue
+            sh -n "$file"
+          done
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Configure Cargo environment
+        run: |
+          echo "CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "MOSS_MAPLIBRE_CACHE_DIR=$RUNNER_TEMP/moss-maplibre-native" >> "$GITHUB_ENV"
+
+      - name: Cache MapLibre native SDK
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/moss-maplibre-native
+          key: maplibre-macos-arm64-${{ hashFiles('crates/moss-maplibre/build.rs') }}
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test-macos-arm64
+          save-if: false
+
+      - name: Clippy
+        run: cargo clippy --workspace --lib --bins --tests --locked -- -D clippy::correctness
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.scripts == 'true'
+    runs-on: macos-15
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out source
+        if: needs.changes.outputs.rust == 'true' || matrix.shard == 1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test Python scripts
+        if: matrix.shard == 1
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Configure Cargo environment
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          echo "CARGO_BUILD_JOBS=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+          echo "MOSS_MAPLIBRE_CACHE_DIR=$RUNNER_TEMP/moss-maplibre-native" >> "$GITHUB_ENV"
+
+      - name: Install cargo-nextest
+        if: needs.changes.outputs.rust == 'true'
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: nextest
+
+      - name: Cache MapLibre native SDK
+        if: needs.changes.outputs.rust == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/moss-maplibre-native
+          key: maplibre-macos-arm64-${{ hashFiles('crates/moss-maplibre/build.rs') }}
+
+      - name: Cache Cargo dependencies
+        if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test-macos-arm64
+          cache-on-failure: true
+          save-if: ${{ matrix.shard == 1 }}
+
+      - name: Test Rust workspace (shard ${{ matrix.shard }}/2)
+        if: needs.changes.outputs.rust == 'true'
+        run: |
+          cargo nextest run \
+            --profile ci \
+            --workspace \
+            --lib \
+            --bins \
+            --tests \
+            --locked \
+            --partition count:${{ matrix.shard }}/2
+
+  ci-gate:
+    if: always()
+    needs: [changes, format, check, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Verify required checks
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          FORMAT: ${{ needs.format.result }}
+          CHECK: ${{ needs.check.result }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          for status in "$CHANGES" "$FORMAT" "$CHECK" "$TEST"; do
+            if [ "$status" != "success" ] && [ "$status" != "skipped" ]; then
+              echo "CI gate failed: changes=$CHANGES format=$FORMAT check=$CHECK test=$TEST" >&2
+              exit 1
+            fi
+          done
+          echo "CI gate passed: changes=$CHANGES format=$FORMAT check=$CHECK test=$TEST"

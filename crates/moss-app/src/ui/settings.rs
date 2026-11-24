@@ -1,7 +1,7 @@
 use super::{menu, phosphor, theme::Theme};
 use crate::{
     emoji_catalog,
-    settings::{SettingsDropdown, SettingsSection, agent_setup_text, version_string},
+    settings::{SettingsDropdown, SettingsSection, agent_setup_text, app_version, version_string},
     state::State,
 };
 use rune::*;
@@ -454,9 +454,9 @@ fn action_button_with_icon(
         } else {
             t.selected
         })
-        .children(glyph.map(|icon| {
-            rune::icon(icon, 14.).color(if primary { ink } else { t.muted })
-        }))
+        .children(
+            glyph.map(|icon| rune::icon(icon, 14.).color(if primary { ink } else { t.muted })),
+        )
         .child(
             text(title)
                 .font(TextStyle::new(13., 500.).family(Family::Sans).lh(18.))
@@ -488,7 +488,7 @@ fn preferences_page(s: &State, t: Theme) -> El {
                 description_text(
                     format!(
                         "Moss {}{}",
-                        option_env!("MOSS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+                        app_version(),
                         if cfg!(debug_assertions) {
                             " · Local development build"
                         } else {
@@ -1025,17 +1025,12 @@ fn active_dropdown(s: &State, t: Theme) -> Option<El> {
                     .into_iter()
                     .map(|(dark, key_suffix, label)| {
                         let checked = s.prefs.dark == dark;
-                        dropdown_option(
-                            format!("theme-{key_suffix}"),
-                            label,
-                            checked,
-                            t,
-                        )
-                        .on_press_tx(move |s: &mut State, tx| {
-                            tx.instant();
-                            s.set_theme(dark);
-                            s.dismiss_settings_dropdown();
-                        })
+                        dropdown_option(format!("theme-{key_suffix}"), label, checked, t)
+                            .on_press_tx(move |s: &mut State, tx| {
+                                tx.instant();
+                                s.set_theme(dark);
+                                s.dismiss_settings_dropdown();
+                            })
                     }),
                 )
                 .anchored_fit("settings-appearance-trigger", Side::Bottom, Align::End, 4.),
@@ -1072,7 +1067,11 @@ fn dropdown_menu(key: &'static str, label: &'static str, width: f32, t: Theme) -
         .fill(t.menu)
         .radius(8.)
         .border(1., t.line)
-        .shadow(6., 20., Color::BLACK.alpha(if t.dark { 0.42 } else { 0.16 }))
+        .shadow(
+            6.,
+            20.,
+            Color::BLACK.alpha(if t.dark { 0.42 } else { 0.16 }),
+        )
         .role("menu")
         .label(label)
         .focus_group()
@@ -1113,24 +1112,27 @@ fn workspace_icon_picker(s: &State, t: Theme) -> El {
     let matches = emoji_catalog::matches(&s.settings.icon_search.text, None);
     let visible: Vec<_> = matches.into_iter().take(48).collect();
     let rows = visible.chunks(8).enumerate().map(|(r, chunk)| {
-        row().w_full().gap(2.).children(chunk.iter().enumerate().map(|(c, item)| {
-            let glyph = item.glyph;
-            row()
-                .key(format!("settings-icon-choice-{r}-{c}"))
-                .size(32., 32.)
-                .center()
-                .radius(5.)
-                .hover(t.hover)
-                .press(t.selected)
-                .role("button")
-                .label(item.name)
-                .focusable(true)
-                .child(text(glyph).font(TextStyle::new(18., 400.)))
-                .on_press_tx(move |s: &mut State, tx| {
-                    tx.instant();
-                    s.set_workspace_icon(glyph);
-                })
-        }))
+        row()
+            .w_full()
+            .gap(2.)
+            .children(chunk.iter().enumerate().map(|(c, item)| {
+                let glyph = item.glyph;
+                row()
+                    .key(format!("settings-icon-choice-{r}-{c}"))
+                    .size(32., 32.)
+                    .center()
+                    .radius(5.)
+                    .hover(t.hover)
+                    .press(t.selected)
+                    .role("button")
+                    .label(item.name)
+                    .focusable(true)
+                    .child(text(glyph).font(TextStyle::new(18., 400.)))
+                    .on_press_tx(move |s: &mut State, tx| {
+                        tx.instant();
+                        s.set_workspace_icon(glyph);
+                    })
+            }))
     });
 
     col()
@@ -1141,7 +1143,11 @@ fn workspace_icon_picker(s: &State, t: Theme) -> El {
         .fill(t.menu)
         .radius(10.)
         .border(1., t.line)
-        .shadow(8., 24., Color::BLACK.alpha(if t.dark { 0.45 } else { 0.18 }))
+        .shadow(
+            8.,
+            24.,
+            Color::BLACK.alpha(if t.dark { 0.45 } else { 0.18 }),
+        )
         .role("dialog")
         .label("Choose workspace icon")
         .focus_group()
@@ -1182,9 +1188,11 @@ fn workspace_icon_picker(s: &State, t: Theme) -> El {
                     stick_bottom: false,
                 })
                 .children(rows)
-                .children(visible.is_empty().then(|| {
-                    description_text("No matching emoji", t).padding(10.)
-                })),
+                .children(
+                    visible
+                        .is_empty()
+                        .then(|| description_text("No matching emoji", t).padding(10.)),
+                ),
         )
         .anchored_fit("settings-workspace-icon", Side::Bottom, Align::Start, 6.)
 }

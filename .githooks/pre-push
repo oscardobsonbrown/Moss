@@ -1,0 +1,24 @@
+#!/bin/sh
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+base=$(git merge-base HEAD origin/main 2>/dev/null || true)
+if [ -n "$base" ]; then
+    changed_rs=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.rs')
+    if [ -n "$changed_rs" ] && command -v rustfmt >/dev/null 2>&1; then
+        printf '%s\n' "$changed_rs" | while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            rustfmt --edition 2024 --check "$file"
+        done
+    fi
+fi
+
+python3 -m unittest discover -s scripts -p 'test_*.py'
+
+if cargo clippy --version >/dev/null 2>&1; then
+    cargo clippy --workspace --lib --bins --tests --locked -- -D clippy::correctness
+else
+    cargo check --workspace --lib --bins --tests --locked
+fi
