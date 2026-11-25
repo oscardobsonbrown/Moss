@@ -2,15 +2,8 @@ use super::sidebar_sections::PageDropZone;
 use super::theme::{Theme, label};
 use crate::{sidebar_tree::SidebarRow, state::State};
 use rune::*;
-use std::rc::Rc;
 
-pub fn row_at(
-    s: &State,
-    i: usize,
-    t: Theme,
-    zones: Rc<Vec<PageDropZone>>,
-    viewport: [f32; 4],
-) -> El {
+pub fn row_at(s: &State, i: usize, width: f32, t: Theme) -> El {
     match &s.sidebar_tree.rows[i] {
         SidebarRow::Page {
             page,
@@ -25,8 +18,7 @@ pub fn row_at(
             *depth,
             "page",
             "private",
-            zones,
-            viewport,
+            width,
             t,
         ),
         SidebarRow::Paging {
@@ -76,6 +68,7 @@ pub fn row_at(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn page_row(
     s: &State,
     page: &moss_core::Page,
@@ -84,280 +77,292 @@ pub fn page_row(
     depth: usize,
     prefix: &str,
     source: &str,
-    zones: Rc<Vec<PageDropZone>>,
-    viewport: [f32; 4],
+    width: f32,
     t: Theme,
 ) -> El {
-    let id = page.id.clone();
-    let title = if page.title.is_empty() {
-        "Untitled"
-    } else {
-        &page.title
-    };
-    let active = s.tab().is_some_and(|tab| tab.page.id == id);
+    let active = s.tab().is_some_and(|tab| tab.page.id == page.id);
     let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
-    let width = rune::memo::layout_with("sidebar", |rect| rect[2]).unwrap_or(270.);
-    // Keep at least 40 pt for titles after padding and the fixed control lanes.
-    let indent = if compact {
-        0.
-    } else {
-        (depth as f32 * 16.).min(160.).min((width - 163.).max(0.))
-    };
-    let icon_key = format!("{prefix}-icon-{id}");
-    let menu_key = format!("{prefix}-actions-{id}");
-    let menu_id = id.clone();
-    let row_id = id.clone();
-    let context_icon = icon_key.clone();
-    let icon_id = id.clone();
-    let icon_anchor = icon_key.clone();
-    let action_id = id.clone();
-    let action_anchor = menu_key.clone();
-    let action_icon = icon_key.clone();
-    let child_id = id.clone();
-    let disclosure_id = id.clone();
-    let drop = s
-        .sidebar_sections
-        .page_drag
-        .as_ref()
-        .filter(|drag| drag.target.as_deref() == Some(source));
-    let over = drop.is_some_and(|drag| {
-        source == "private" && drag.source == "private" && drag.over.as_deref() == Some(id.as_str())
-    });
-    let inside = over && drop.is_some_and(|drag| drag.inside);
-    let marker = if source == "private" && drop.is_some_and(|drag| drag.source == "private") {
-        over && !inside
-    } else {
-        drop.is_some_and(|drag| drag.before.as_deref() == Some(id.as_str()))
-    };
-    let marker_after = over && drop.is_some_and(|drag| drag.after);
-    let mut item = row()
-        .key(format!("{prefix}-highlight-{id}"))
-        .w_full()
-        .h(28.)
-        .pl(5. + indent)
-        .pr(5.)
-        .gap(7.)
-        .center_y()
-        .radius(7.)
-        .fill(if (active && !compact) || inside {
-            t.selected
+    let build = || {
+        let id = page.id.clone();
+        let title = if page.title.is_empty() {
+            "Untitled"
         } else {
-            t.sidebar
-        })
-        .hover(if compact { t.sidebar } else { t.hover })
-        .hover_group()
-        .hover_motion(Anim::INSTANT, Anim::INSTANT)
-        .on_press_tx(move |s: &mut State, tx| {
-            if s.sidebar_sections.suppress_page_press {
-                s.sidebar_sections.suppress_page_press = false;
-                return;
-            }
-            s.open_page(&row_id, false);
-            if has_children && !compact {
-                s.toggle_sidebar_page(&row_id);
-            }
-            tx.instant();
-        })
-        .role("group")
-        .on_secondary_press(move |s: &mut State, point, _| {
-            s.open_sidebar_page_menu(&menu_id, point);
-            if let Some(menu) = &mut s.sidebar_page_menu {
-                menu.icon_anchor = context_icon.clone();
-            }
-        })
-        .child({
-            let icon = if page.icon.is_empty() {
-                rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
+            &page.title
+        };
+        // Keep at least 40 pt for titles after padding and the fixed control lanes.
+        let indent = if compact {
+            0.
+        } else {
+            (depth as f32 * 16.).min(160.).min((width - 163.).max(0.))
+        };
+        let highlight_key = format!("{prefix}-highlight-{id}");
+        let highlight_rect = s.sidebar_sections.row_rects.slot(&highlight_key);
+        let icon_key = format!("{prefix}-icon-{id}");
+        let menu_key = format!("{prefix}-actions-{id}");
+        let menu_id = id.clone();
+        let row_id = id.clone();
+        let context_icon = icon_key.clone();
+        let icon_id = id.clone();
+        let icon_anchor = icon_key.clone();
+        let action_id = id.clone();
+        let action_anchor = menu_key.clone();
+        let action_icon = icon_key.clone();
+        let child_id = id.clone();
+        let disclosure_id = id.clone();
+        let drop = s
+            .sidebar_sections
+            .page_drag
+            .as_ref()
+            .filter(|drag| drag.target.as_deref() == Some(source));
+        let over = drop.is_some_and(|drag| {
+            source == "private"
+                && drag.source == "private"
+                && drag.over.as_deref() == Some(id.as_str())
+        });
+        let inside = over && drop.is_some_and(|drag| drag.inside);
+        let marker = if source == "private" && drop.is_some_and(|drag| drag.source == "private") {
+            over && !inside
+        } else {
+            drop.is_some_and(|drag| drag.before.as_deref() == Some(id.as_str()))
+        };
+        let marker_after = over && drop.is_some_and(|drag| drag.after);
+        let mut item = row()
+            .key(highlight_key)
+            .drawn_rect_into(&highlight_rect)
+            .w_full()
+            .h(28.)
+            .pl(5. + indent)
+            .pr(5.)
+            .gap(7.)
+            .center_y()
+            .radius(7.)
+            .fill(if (active && !compact) || inside {
+                t.selected
             } else {
-                super::theme::sized_label(&page.icon, 16., t.text)
-            };
-            let slot = el()
-                .key(icon_key)
-                .size(20., 20.)
-                .offset(if compact { -8. } else { 0. }, 0.)
-                .offset_motion(tok::motion::SNAP_EXIT)
-                .center()
-                .radius(4.)
-                .hover(if compact {
-                    Color::TRANSPARENT
+                t.sidebar
+            })
+            .hover(if compact { t.sidebar } else { t.hover })
+            .hover_group()
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .on_press_tx(move |s: &mut State, tx| {
+                if s.sidebar_sections.suppress_page_press {
+                    s.sidebar_sections.suppress_page_press = false;
+                    return;
+                }
+                s.open_page(&row_id, false);
+                if has_children && !compact {
+                    s.toggle_sidebar_page(&row_id);
+                }
+                tx.instant();
+            })
+            .role("group")
+            .on_secondary_press(move |s: &mut State, point, _| {
+                s.open_sidebar_page_menu(&menu_id, point);
+                if let Some(menu) = &mut s.sidebar_page_menu {
+                    menu.icon_anchor = context_icon.clone();
+                }
+            })
+            .child({
+                let icon = if page.icon.is_empty() {
+                    rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
                 } else {
-                    t.selected
-                })
-                .children(compact.then(|| {
+                    super::theme::sized_label(&page.icon, 16., t.text)
+                };
+                let slot = el()
+                    .key(icon_key)
+                    .size(20., 20.)
+                    .offset(if compact { -8. } else { 0. }, 0.)
+                    .offset_motion(tok::motion::SNAP_EXIT)
+                    .center()
+                    .radius(4.)
+                    .hover(if compact {
+                        Color::TRANSPARENT
+                    } else {
+                        t.selected
+                    })
+                    .children(compact.then(|| {
+                        let page_id = page.id.clone();
+                        el().key(format!("{prefix}-compact-tile-{id}"))
+                            .size(26., 26.)
+                            .a11y_hidden()
+                            .absolute(-3., -3.)
+                            .radius(4.)
+                            .fill(if active {
+                                t.selected
+                            } else {
+                                Color::TRANSPARENT
+                            })
+                            .hover(t.hover)
+                            .on_press_tx(move |s: &mut State, tx| {
+                                s.open_page(&page_id, false);
+                                tx.instant();
+                            })
+                    }));
+                if compact {
                     let page_id = page.id.clone();
-                    el().key(format!("{prefix}-compact-tile-{id}"))
-                        .size(26., 26.)
-                        .a11y_hidden()
-                        .absolute(-3., -3.)
-                        .radius(4.)
-                        .fill(if active {
-                            t.selected
-                        } else {
-                            Color::TRANSPARENT
-                        })
-                        .hover(t.hover)
+                    slot.role("button")
+                        .label(title)
+                        .focusable(true)
+                        .child(icon)
                         .on_press_tx(move |s: &mut State, tx| {
                             s.open_page(&page_id, false);
                             tx.instant();
                         })
-                }));
-            if compact {
-                let page_id = page.id.clone();
-                slot.role("button")
+                } else if has_children {
+                    slot.child(
+                        icon.key(format!("{prefix}-icon-glyph-{disclosure_id}"))
+                            .group_opacity(if s.sidebar_keyboard_controls { 0. } else { 1. }, 0.),
+                    )
+                    .child(draggable(
+                        el().key(format!("{prefix}-disclosure-{disclosure_id}"))
+                            .size(20., 20.)
+                            .absolute(0., 0.)
+                            .center()
+                            .role("button")
+                            .label(if expanded {
+                                "Collapse page"
+                            } else {
+                                "Expand page"
+                            })
+                            .expanded(expanded)
+                            .focusable(true)
+                            .child(
+                                rune::icon(if expanded { &DOWN } else { &RIGHT }, 14.)
+                                    .key(format!("{prefix}-disclosure-glyph-{disclosure_id}"))
+                                    .color(t.muted)
+                                    .group_opacity(
+                                        if s.sidebar_keyboard_controls { 1. } else { 0. },
+                                        1.,
+                                    ),
+                            )
+                            .on_press_tx(move |s: &mut State, tx| {
+                                if s.sidebar_sections.suppress_page_press {
+                                    s.sidebar_sections.suppress_page_press = false;
+                                    return;
+                                }
+                                s.toggle_sidebar_page(&disclosure_id);
+                                tx.instant();
+                            }),
+                        page,
+                        source,
+                    ))
+                } else {
+                    draggable(
+                        slot.role("button")
+                            .label(format!("Change icon for {title}"))
+                            .focusable(true)
+                            .child(icon)
+                            .on_press(move |s: &mut State| {
+                                if s.sidebar_sections.suppress_page_press {
+                                    s.sidebar_sections.suppress_page_press = false;
+                                    return;
+                                }
+                                s.open_page_icon_picker(&icon_id, &icon_anchor)
+                            }),
+                        page,
+                        source,
+                    )
+                }
+            })
+            .child(draggable(
+                row()
+                    .key(format!("{prefix}-open-{id}"))
+                    .h_full()
+                    .grow(1.)
+                    .min_w(0.)
+                    .center_y()
+                    .role("treeitem")
                     .label(title)
-                    .focusable(true)
-                    .child(icon)
+                    .focus_selected(active)
+                    .focusable(!compact)
+                    .opacity(if compact { 0. } else { 1. })
+                    .opacity_motion(tok::motion::SNAP_EXIT)
+                    .child(
+                        label(title, t.text)
+                            .key(format!("{prefix}-title-{id}"))
+                            .truncate()
+                            .grow(1.)
+                            .min_w(0.),
+                    )
                     .on_press_tx(move |s: &mut State, tx| {
-                        s.open_page(&page_id, false);
+                        if s.sidebar_sections.suppress_page_press {
+                            s.sidebar_sections.suppress_page_press = false;
+                            return;
+                        }
                         tx.instant();
-                    })
-            } else if has_children {
-                slot.child(
-                    icon.key(format!("{prefix}-icon-glyph-{disclosure_id}"))
-                        .group_opacity(if s.sidebar_keyboard_controls { 0. } else { 1. }, 0.),
-                )
-                .child(draggable(
-                    el().key(format!("{prefix}-disclosure-{disclosure_id}"))
-                        .size(20., 20.)
-                        .absolute(0., 0.)
-                        .center()
-                        .role("button")
-                        .label(if expanded {
-                            "Collapse page"
-                        } else {
-                            "Expand page"
-                        })
-                        .expanded(expanded)
-                        .focusable(true)
-                        .child(
-                            rune::icon(if expanded { &DOWN } else { &RIGHT }, 14.)
-                                .key(format!("{prefix}-disclosure-glyph-{disclosure_id}"))
-                                .color(t.muted)
-                                .group_opacity(
-                                    if s.sidebar_keyboard_controls { 1. } else { 0. },
-                                    1.,
-                                ),
+                        s.open_page(&id, false);
+                        if has_children && !compact {
+                            s.toggle_sidebar_page(&id);
+                        }
+                    }),
+                page,
+                source,
+            ))
+            .child(
+                row()
+                    .gap(0.)
+                    .center_y()
+                    .opacity(if compact { 0. } else { 1. })
+                    .opacity_motion(tok::motion::SNAP_EXIT)
+                    .child(
+                        action(s, menu_key, "Page actions", &MORE, t)
+                            .focusable(!compact)
+                            .on_press(move |s: &mut State| {
+                                s.open_sidebar_page_menu_at_anchor(
+                                    &action_id,
+                                    &action_anchor,
+                                    &action_icon,
+                                )
+                            }),
+                    )
+                    .child(
+                        action(
+                            s,
+                            format!("{prefix}-add-{child_id}"),
+                            "New subpage",
+                            &PLUS,
+                            t,
                         )
+                        .focusable(!compact)
                         .on_press_tx(move |s: &mut State, tx| {
-                            if s.sidebar_sections.suppress_page_press {
-                                s.sidebar_sections.suppress_page_press = false;
-                                return;
-                            }
-                            s.toggle_sidebar_page(&disclosure_id);
+                            s.begin_page(Some(child_id.clone()));
                             tx.instant();
                         }),
-                    page,
-                    source,
-                    zones.clone(),
-                    viewport,
-                ))
-            } else {
-                draggable(
-                    slot.role("button")
-                        .label(format!("Change icon for {title}"))
-                        .focusable(true)
-                        .child(icon)
-                        .on_press(move |s: &mut State| {
-                            if s.sidebar_sections.suppress_page_press {
-                                s.sidebar_sections.suppress_page_press = false;
-                                return;
-                            }
-                            s.open_page_icon_picker(&icon_id, &icon_anchor)
-                        }),
-                    page,
-                    source,
-                    zones.clone(),
-                    viewport,
-                )
-            }
-        })
-        .child(draggable(
-            row()
-                .key(format!("{prefix}-open-{id}"))
-                .h_full()
-                .grow(1.)
-                .min_w(0.)
-                .center_y()
-                .role("treeitem")
-                .label(title)
-                .focus_selected(active)
-                .focusable(!compact)
-                .opacity(if compact { 0. } else { 1. })
-                .opacity_motion(tok::motion::SNAP_EXIT)
-                .child(
-                    label(title, t.text)
-                        .key(format!("{prefix}-title-{id}"))
-                        .truncate()
-                        .grow(1.)
-                        .min_w(0.),
-                )
-                .on_press_tx(move |s: &mut State, tx| {
-                    if s.sidebar_sections.suppress_page_press {
-                        s.sidebar_sections.suppress_page_press = false;
-                        return;
-                    }
-                    tx.instant();
-                    s.open_page(&id, false);
-                    if has_children && !compact {
-                        s.toggle_sidebar_page(&id);
-                    }
-                }),
-            page,
-            source,
-            zones.clone(),
-            viewport,
-        ))
-        .child(
-            row()
-                .gap(0.)
-                .center_y()
-                .opacity(if compact { 0. } else { 1. })
-                .opacity_motion(tok::motion::SNAP_EXIT)
-                .child(
-                    action(s, menu_key, "Page actions", &MORE, t)
-                        .focusable(!compact)
-                        .on_press(move |s: &mut State| {
-                            s.open_sidebar_page_menu_at_anchor(
-                                &action_id,
-                                &action_anchor,
-                                &action_icon,
-                            )
-                        }),
-                )
-                .child(
-                    action(
-                        s,
-                        format!("{prefix}-add-{child_id}"),
-                        "New subpage",
-                        &PLUS,
-                        t,
-                    )
-                    .focusable(!compact)
-                    .on_press_tx(move |s: &mut State, tx| {
-                        s.begin_page(Some(child_id.clone()));
-                        tx.instant();
-                    }),
+                    ),
+            )
+            .children(marker.then(|| {
+                el().key("sidebar-page-drop-marker")
+                    .absolute(0., if marker_after { 26. } else { 0. })
+                    .w_full()
+                    .h(2.)
+                    .fill(t.blue)
+            }))
+            .children(inside.then(|| el().absolute(0., 4.).w(2.).h(20.).fill(t.blue)));
+        item = draggable(item, page, source);
+        row().w_full().h(30.).px(7.).center_y().child(item)
+    };
+    if s.sidebar_sections.page_drag.is_none() {
+        rune::memo(
+            format!("sidebar-page-row-memo-{prefix}-{source}-{}", page.id),
+            (
+                (&page.title, &page.icon),
+                (has_children, expanded, depth, active),
+                (compact, width.to_bits(), s.sidebar_keyboard_controls),
+                (
+                    t.dark,
+                    t.bg.r.to_bits(),
+                    t.text_scale.to_bits(),
+                    t.scale.to_bits(),
                 ),
+            ),
+            build,
         )
-        .children(marker.then(|| {
-            el().key("sidebar-page-drop-marker")
-                .absolute(0., if marker_after { 26. } else { 0. })
-                .w_full()
-                .h(2.)
-                .fill(t.blue)
-        }))
-        .children(inside.then(|| el().absolute(0., 4.).w(2.).h(20.).fill(t.blue)));
-    item = draggable(item, page, source, zones, viewport);
-    row().w_full().h(30.).px(7.).center_y().child(item)
+    } else {
+        build()
+    }
 }
 
-fn draggable(
-    item: El,
-    page: &moss_core::Page,
-    source: &str,
-    zones: Rc<Vec<PageDropZone>>,
-    viewport: [f32; 4],
-) -> El {
+fn draggable(item: El, page: &moss_core::Page, source: &str) -> El {
     if source == "recents" {
         return item;
     }
@@ -379,6 +384,8 @@ fn draggable(
         }
         if (drag.dx.abs() >= 4. || drag.dy.abs() >= 4.) && !drag.cancelled() {
             let point = drag.window_point();
+            let zones = super::sidebar_sections::page_drop_zones(s);
+            let viewport = s.sidebar_sections.viewport_rect.get();
             let destination = drop_at(&zones, viewport, point, &drag_source);
             s.sidebar_sections.suppress_page_press = true;
             s.sidebar_sections.page_drag = Some(crate::sidebar_sections::SidebarPageDrag {

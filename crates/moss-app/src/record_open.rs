@@ -82,6 +82,7 @@ impl State {
             Ok(RecordPeek {
                 database,
                 saved_blocks,
+                block_rects: crate::state::RectSlots::default(),
                 record,
                 page,
                 title,

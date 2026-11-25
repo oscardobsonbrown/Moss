@@ -388,9 +388,12 @@ impl State {
                 || (b.block.kind == moss_core::BlockKind::Image
                     && b.block.config.get("asset").is_none())
         };
-        let (mut at, reuse_first, col_source) = match anchor
-            .and_then(|(id, side)| blocks.iter().position(|b| b.block.id == id).map(|i| (i, side)))
-        {
+        let (mut at, reuse_first, col_source) = match anchor.and_then(|(id, side)| {
+            blocks
+                .iter()
+                .position(|b| b.block.id == id)
+                .map(|i| (i, side))
+        }) {
             Some((index, side)) => {
                 let col_block = blocks[index].block.clone();
                 if is_reusable(&blocks[index]) {
@@ -405,7 +408,15 @@ impl State {
             }
             None => {
                 let reuse = blocks.last().is_some_and(is_reusable);
-                (if reuse { blocks.len() - 1 } else { blocks.len() }, reuse, None)
+                (
+                    if reuse {
+                        blocks.len() - 1
+                    } else {
+                        blocks.len()
+                    },
+                    reuse,
+                    None,
+                )
             }
         };
         for b in blocks.iter_mut() {
@@ -451,11 +462,11 @@ impl State {
         peek: bool,
         files: &[PathBuf],
         point: Option<[f32; 2]>,
-        zones: &[crate::editor_drag::DropZone],
     ) {
         self.editor_file_drop = None;
+        let zones = self.editor_drop_zones(peek);
         let target = point
-            .and_then(|p| crate::editor_drag::file_drop_target(p, zones))
+            .and_then(|p| crate::editor_drag::file_drop_target(p, &zones))
             .filter(|t| t.id != "@end");
         let anchor = target.as_ref().map(|t| (t.id.as_str(), t.side));
         let sources = files.iter().cloned().map(BlockImageSource::File).collect();
@@ -475,11 +486,12 @@ impl State {
                 .files()
                 .iter()
                 .filter(|path| {
-                    path.extension()
-                        .and_then(|e| e.to_str())
-                        .is_some_and(|e| {
-                            matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp")
-                        })
+                    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                        matches!(
+                            e.to_ascii_lowercase().as_str(),
+                            "png" | "jpg" | "jpeg" | "webp"
+                        )
+                    })
                 })
                 .cloned()
                 .map(BlockImageSource::File)
@@ -492,9 +504,12 @@ impl State {
             return false;
         };
         let page_id = page_id.to_owned();
-        let anchor_id = block_id
-            .map(str::to_owned)
-            .or_else(|| blocks.iter().find(|b| b.edit.focused).map(|b| b.block.id.clone()));
+        let anchor_id = block_id.map(str::to_owned).or_else(|| {
+            blocks
+                .iter()
+                .find(|b| b.edit.focused)
+                .map(|b| b.block.id.clone())
+        });
         let anchor = anchor_id
             .as_deref()
             .map(|id| (id, crate::editor_drag::Side::After));

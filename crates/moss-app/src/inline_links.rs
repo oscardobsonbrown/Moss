@@ -6,6 +6,9 @@ use std::{
 
 /// Byte ranges retain the exact Markdown source so editing never rewrites imported notes.
 pub fn links(text: &str) -> Vec<(Range<usize>, String)> {
+    if !text.contains('[') {
+        return Vec::new();
+    }
     let bytes = text.as_bytes();
     let mut result = Vec::new();
     let mut i = 0;

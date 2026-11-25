@@ -4,6 +4,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[derive(Clone, Default)]
+pub struct RectSlots {
+    slots: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, rune::Live<[f32; 4]>>>>,
+}
+impl RectSlots {
+    pub fn slot(&self, key: &str) -> rune::Live<[f32; 4]> {
+        let mut map = self.slots.borrow_mut();
+        if let Some(live) = map.get(key) {
+            return live.clone();
+        }
+        let live = rune::Live::new([0.; 4]);
+        map.insert(key.to_owned(), live.clone());
+        live
+    }
+    pub fn get(&self, key: &str) -> Option<[f32; 4]> {
+        let rect = self.slots.borrow().get(key)?.get();
+        (rect[2] > 0. && rect[3] > 0.).then_some(rect)
+    }
+}
 pub struct EditableBlock {
     pub block: Block,
     pub edit: TextEdit,
@@ -13,6 +32,7 @@ pub struct Tab {
     pub title: TextEdit,
     pub blocks: Vec<EditableBlock>,
     pub(crate) saved_blocks: Vec<Block>,
+    pub block_rects: RectSlots,
     pub choosing_type: bool,
     pub child_pages: Option<PageChildren>,
     pub page_links: BTreeMap<String, Page>,
@@ -61,6 +81,7 @@ pub struct RecordPeek {
     pub title: TextEdit,
     pub blocks: Vec<EditableBlock>,
     pub(crate) saved_blocks: Vec<Block>,
+    pub block_rects: RectSlots,
     pub page_links: BTreeMap<String, Page>,
     pub mode: PeekMode,
     pub dirty_title: bool,
@@ -161,6 +182,8 @@ pub struct State {
     navigating_history: bool,
     pub prefs: Preferences,
     pub shared_preferences: std::sync::Arc<std::sync::Mutex<Preferences>>,
+    pub(crate) prefs_dirty: bool,
+    pub(crate) prefs_dirty_at: Option<f64>,
     pub modal: Option<Modal>,
     pub settings: crate::settings::SettingsState,
     pub search: TextEdit,
@@ -306,6 +329,8 @@ impl State {
             navigation_position: 0,
             navigating_history: false,
             shared_preferences: std::sync::Arc::new(std::sync::Mutex::new(prefs.clone())),
+            prefs_dirty: false,
+            prefs_dirty_at: None,
             prefs,
             modal: None,
             settings: crate::settings::SettingsState::default(),
@@ -420,10 +445,7 @@ impl State {
                 .insert(self.workspace.id.clone(), width);
         }
     }
-    pub fn save_preferences(&mut self) {
-        if self.loading {
-            return;
-        }
+    fn sync_preferences_in_memory(&mut self) {
         let owner = self.shared_preferences.clone();
         let mut shared = owner.lock().unwrap();
         shared.workspace = self.workspace.id.clone();
@@ -466,6 +488,38 @@ impl State {
             }
         }
         self.prefs = shared.clone();
+    }
+    pub fn defer_save_preferences(&mut self) {
+        if self.loading {
+            return;
+        }
+        self.sync_preferences_in_memory();
+        self.prefs_dirty = true;
+        self.prefs_dirty_at = None;
+    }
+    pub fn poll_preferences(&mut self, time: f64, tx: &mut rune::Tx) -> bool {
+        if !self.prefs_dirty {
+            return false;
+        }
+        match self.prefs_dirty_at {
+            None => {
+                self.prefs_dirty_at = Some(time);
+                tx.wake_after(std::time::Duration::from_millis(250));
+            }
+            Some(started) if time - started < 0.25 => {
+                tx.wake_after(std::time::Duration::from_millis(250));
+            }
+            Some(_) => self.save_preferences(),
+        }
+        false
+    }
+    pub fn save_preferences(&mut self) {
+        if self.loading {
+            return;
+        }
+        self.sync_preferences_in_memory();
+        self.prefs_dirty = false;
+        self.prefs_dirty_at = None;
         let result = serde_json::to_vec(&self.prefs)
             .map_err(|e| e.to_string())
             .and_then(|b| {
@@ -487,7 +541,10 @@ impl State {
             if self.local_service.lock().unwrap().is_none() {
                 match crate::local_service::start(&self.path, self.handles.clone()) {
                     Ok(service) => *self.local_service.lock().unwrap() = Some(service),
-                    Err(error) => { self.error = Some(format!("Could not start local agent access: {error}")); return; }
+                    Err(error) => {
+                        self.error = Some(format!("Could not start local agent access: {error}"));
+                        return;
+                    }
                 }
             }
         } else {
@@ -545,11 +602,11 @@ impl State {
             Err(e) => self.error = Some(format!("Page settings are not saved: {e}")),
         }
     }
-    pub(crate) fn record_navigation(&mut self, id: &str) {
+    pub(crate) fn record_navigation_deferred(&mut self, page: Option<&Page>, id: &str) {
         if self.loading {
             return;
         }
-        self.record_sidebar_recent(id);
+        self.record_sidebar_recent_deferred(page, id);
         if self.navigating_history {
             return;
         }
@@ -737,7 +794,10 @@ impl State {
             })
             .collect();
         let page_id = tab.page.id.clone();
-        match self.store.save_editor_blocks_if_unchanged(&page_id, &tab.saved_blocks, &blocks) {
+        match self
+            .store
+            .save_editor_blocks_if_unchanged(&page_id, &tab.saved_blocks, &blocks)
+        {
             Ok(blocks) => {
                 crate::page_covers::sync_saved_image_assets(&mut tab.blocks, &blocks);
                 tab.saved_blocks = blocks.clone();
@@ -745,7 +805,12 @@ impl State {
                 self.sync_gallery_preview(&page_id, &blocks);
                 self.sync_record_content(&page_id, &blocks);
                 self.keep_draft_for_page(&page_id);
-                if self.comments.threads.get(&page_id).is_some_and(|threads| !threads.is_empty()) {
+                if self
+                    .comments
+                    .threads
+                    .get(&page_id)
+                    .is_some_and(|threads| !threads.is_empty())
+                {
                     self.load_comments(&page_id);
                 }
             }
@@ -921,6 +986,14 @@ pub fn display_value(v: &Value) -> String {
                 .to_owned()
         }
         _ => v.to_string(),
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if self.prefs_dirty {
+            self.save_preferences();
+        }
     }
 }
 

@@ -29,7 +29,6 @@ pub struct SidebarSection {
     pub hidden: bool,
 }
 
-#[derive(Default)]
 pub struct SidebarSections {
     pub sections: Vec<SidebarSection>,
     pub pages: BTreeMap<String, Vec<Page>>,
@@ -40,6 +39,28 @@ pub struct SidebarSections {
     pub page_drag_cancelled: bool,
     pub scroll: Rc<Cell<rune::ScrollPos>>,
     pub page_scroll_at: f64,
+    pub viewport_rect: rune::Live<[f32; 4]>,
+    pub row_rects: crate::state::RectSlots,
+    pub visible_rows: std::ops::Range<usize>,
+}
+
+impl Default for SidebarSections {
+    fn default() -> Self {
+        Self {
+            sections: Vec::new(),
+            pages: BTreeMap::new(),
+            dragging: None,
+            drag_target: None,
+            page_drag: None,
+            suppress_page_press: false,
+            page_drag_cancelled: false,
+            scroll: Rc::new(Cell::new(rune::ScrollPos::default())),
+            page_scroll_at: 0.,
+            viewport_rect: rune::Live::new([0.; 4]),
+            row_rects: crate::state::RectSlots::default(),
+            visible_rows: 0..0,
+        }
+    }
 }
 
 pub struct SidebarPageDrag {
@@ -226,6 +247,9 @@ impl State {
                 cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
                 cache.scroll = self.sidebar_sections.scroll.clone();
                 cache.page_scroll_at = self.sidebar_sections.page_scroll_at;
+                cache.viewport_rect = self.sidebar_sections.viewport_rect.clone();
+                cache.row_rects = self.sidebar_sections.row_rects.clone();
+                cache.visible_rows = self.sidebar_sections.visible_rows.clone();
                 self.sidebar_sections = cache;
                 self.close_missing_sidebar_section_menu();
                 true
@@ -309,6 +333,9 @@ impl State {
         cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
         cache.scroll = self.sidebar_sections.scroll.clone();
         cache.page_scroll_at = self.sidebar_sections.page_scroll_at;
+        cache.viewport_rect = self.sidebar_sections.viewport_rect.clone();
+        cache.row_rects = self.sidebar_sections.row_rects.clone();
+        cache.visible_rows = self.sidebar_sections.visible_rows.clone();
         self.sidebar_sections = cache;
         if let Some(pages) = favorite_pages {
             self.sidebar_favorites.pages = pages;
@@ -551,16 +578,28 @@ impl State {
         })
     }
     pub fn record_sidebar_recent(&mut self, id: &str) {
-        let page = match self.store.get_page(id) {
-            Ok(Some(page))
-                if page.workspace_id == self.workspace.id && page.deleted_at.is_none() =>
-            {
-                page
-            }
-            Ok(_) => return,
-            Err(error) => {
-                self.error = Some(format!("Recent pages could not be loaded: {error}"));
-                return;
+        self.record_sidebar_recent_inner(None, id, false);
+    }
+    pub fn record_sidebar_recent_deferred(&mut self, page: Option<&Page>, id: &str) {
+        self.record_sidebar_recent_inner(page, id, true);
+    }
+    fn record_sidebar_recent_inner(&mut self, provided: Option<&Page>, id: &str, defer: bool) {
+        let page = if let Some(page) =
+            provided.filter(|p| p.workspace_id == self.workspace.id && p.deleted_at.is_none())
+        {
+            page.clone()
+        } else {
+            match self.store.get_page(id) {
+                Ok(Some(page))
+                    if page.workspace_id == self.workspace.id && page.deleted_at.is_none() =>
+                {
+                    page
+                }
+                Ok(_) => return,
+                Err(error) => {
+                    self.error = Some(format!("Recent pages could not be loaded: {error}"));
+                    return;
+                }
             }
         };
         let owner = self.shared_preferences.clone();
@@ -570,22 +609,31 @@ impl State {
             .get(&self.workspace.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let cached_recents = self.sidebar_sections.pages.get("recents");
         let mut pages = vec![page];
         let mut seen = BTreeSet::from([id.to_owned()]);
         for old in previous.iter().take(MAX_RECENTS) {
             if !seen.insert(old.clone()) {
                 continue;
             }
-            match self.store.get_page(old) {
-                Ok(Some(page))
-                    if page.workspace_id == self.workspace.id && page.deleted_at.is_none() =>
-                {
-                    pages.push(page)
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    self.error = Some(format!("Recent pages could not be loaded: {error}"));
-                    return;
+            if defer
+                && let Some(cached) = cached_recents
+                    .and_then(|list| list.iter().find(|p| p.id == *old))
+                    .filter(|p| p.workspace_id == self.workspace.id && p.deleted_at.is_none())
+            {
+                pages.push(cached.clone());
+            } else {
+                match self.store.get_page(old) {
+                    Ok(Some(page))
+                        if page.workspace_id == self.workspace.id && page.deleted_at.is_none() =>
+                    {
+                        pages.push(page)
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        self.error = Some(format!("Recent pages could not be loaded: {error}"));
+                        return;
+                    }
                 }
             }
             if pages.len() == MAX_RECENTS {
@@ -594,14 +642,23 @@ impl State {
         }
         let ids: Vec<_> = pages.iter().map(|page| page.id.clone()).collect();
         if previous != ids.as_slice() {
-            let mut next = shared.clone();
-            next.recent_pages.insert(self.workspace.id.clone(), ids);
-            if let Err(error) = write_preferences(&self.path, &next) {
-                self.error = Some(format!("Recent pages could not be saved: {error}"));
-                return;
+            if defer {
+                shared
+                    .recent_pages
+                    .insert(self.workspace.id.clone(), ids.clone());
+                self.prefs
+                    .recent_pages
+                    .insert(self.workspace.id.clone(), ids);
+            } else {
+                let mut next = shared.clone();
+                next.recent_pages.insert(self.workspace.id.clone(), ids);
+                if let Err(error) = write_preferences(&self.path, &next) {
+                    self.error = Some(format!("Recent pages could not be saved: {error}"));
+                    return;
+                }
+                *shared = next.clone();
+                self.prefs = next;
             }
-            *shared = next.clone();
-            self.prefs = next;
         }
         self.sidebar_sections.pages.insert("recents".into(), pages);
     }
@@ -614,13 +671,14 @@ fn valid_name(name: &str) -> Option<String> {
 }
 
 pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
+    let prefs = s.poll_preferences(time, tx);
     let Some(drag) = &s.sidebar_sections.page_drag else {
-        return false;
+        return prefs;
     };
     let [x, y] = drag.point;
     let [left, top, width, height] = drag.viewport;
     if x < left || x > left + width || y < top || y > top + height {
-        return false;
+        return prefs;
     }
     let delta = if y < top + 28. {
         -12.
@@ -630,17 +688,17 @@ pub fn poll(s: &mut State, time: f64, tx: &mut rune::Tx) -> bool {
         0.
     };
     if delta == 0. {
-        return false;
+        return prefs;
     }
     tx.wake_after(std::time::Duration::from_millis(16));
     if time - s.sidebar_sections.page_scroll_at < 1. / 60. {
-        return false;
+        return prefs;
     }
     s.sidebar_sections.page_scroll_at = time;
     let scroll = s.sidebar_sections.scroll.get();
     let next = (scroll.offset[1] + delta).clamp(0., scroll.max[1]);
     if next == scroll.offset[1] {
-        return false;
+        return prefs;
     }
     tx.scroll_to_instant("sidebar-scroll", 0., next);
     true

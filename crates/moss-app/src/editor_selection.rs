@@ -1,7 +1,4 @@
-use crate::{
-    editor_drag::DropZone,
-    state::{EditableBlock, State},
-};
+use crate::state::{EditableBlock, State};
 use moss_core::{Block, BlockKind};
 use rune::{Drag, Key, KeyEvent, Phase, TextEdit, Tx};
 
@@ -279,14 +276,7 @@ mod tests {
 }
 
 impl State {
-    pub fn select_editor_blocks(
-        &mut self,
-        page_id: &str,
-        peek: bool,
-        zones: &[DropZone],
-        drag: &Drag,
-        tx: &mut Tx,
-    ) {
+    pub fn select_editor_blocks(&mut self, page_id: &str, peek: bool, drag: &Drag, tx: &mut Tx) {
         if drag.cancelled() {
             self.editor_selection = None;
         } else if drag.phase == Phase::Down {
@@ -298,12 +288,15 @@ impl State {
                 end: drag.window_point(),
                 dragging: false,
             });
-        } else if let Some(selection) = self
+        } else if self
             .editor_selection
-            .as_mut()
-            .filter(|selection| selection.page_id == page_id && selection.peek == peek)
+            .as_ref()
+            .is_some_and(|selection| selection.page_id == page_id && selection.peek == peek)
         {
-            if drag.dx.abs() >= 4. || drag.dy.abs() >= 4. || selection.dragging {
+            let active = self.editor_selection.as_ref().unwrap().dragging;
+            if drag.dx.abs() >= 4. || drag.dy.abs() >= 4. || active {
+                let zones = self.editor_drop_zones(peek);
+                let selection = self.editor_selection.as_mut().unwrap();
                 selection.end = drag.window_point();
                 selection.dragging = drag.phase != Phase::Up;
                 let [x, y] = selection.start;
@@ -325,7 +318,12 @@ impl State {
                     .collect();
                 tx.blur();
             }
-            if drag.phase == Phase::Up && selection.ids.is_empty() {
+            if drag.phase == Phase::Up
+                && self
+                    .editor_selection
+                    .as_ref()
+                    .is_some_and(|selection| selection.ids.is_empty())
+            {
                 self.editor_selection = None;
             }
         }

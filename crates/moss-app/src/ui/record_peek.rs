@@ -1,8 +1,8 @@
 use super::theme::{Theme, icon_button};
 use crate::state::{PeekMode, State};
+use crate::text_colors::Channel;
 use moss_core::BlockKind;
 use rune::*;
-use crate::text_colors::Channel;
 
 pub fn side(s: &State, cx: &Cx<State>, t: Theme, width: f32) -> Option<El> {
     let peek = s.record_peek.as_ref()?;
@@ -128,15 +128,14 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
                             let anchor = format!("peek-icon-{id}");
                             let key = anchor.clone();
                             let control = if peek.page.icon.is_empty() {
-                                super::page_cover::header_action(key, "Add icon", t)
-                                    .group_opacity(
-                                        super::page_cover::header_action_visibility(
-                                            s,
-                                            &peek.page.id,
-                                            peek.title.focused,
-                                        ),
-                                        1.,
-                                    )
+                                super::page_cover::header_action(key, "Add icon", t).group_opacity(
+                                    super::page_cover::header_action_visibility(
+                                        s,
+                                        &peek.page.id,
+                                        peek.title.focused,
+                                    ),
+                                    1.,
+                                )
                             } else {
                                 el().key(key)
                                     .radius(5.)
@@ -181,9 +180,7 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
         .child(el().h(22.))
         .child(el().w_full().h(1.).fill(t.line))
         .child(el().h(22.));
-    let zones = super::editor_layout::peek_zones(peek);
     let selection_page = page_id.clone();
-    let selection_zones = zones.clone();
     let marker_width = super::editor_layout::list_marker_width(&peek.blocks, scale);
     let mut block_views = Vec::with_capacity(peek.blocks.len());
     for (i, (block, number)) in super::editor_layout::with_list_numbers(&peek.blocks).enumerate() {
@@ -257,26 +254,24 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
                 number,
                 marker_width,
                 t,
-                &zones,
+                None,
                 true,
             )
         })();
         let background = super::editor_colors::block_paint(&block.block, Channel::Background, t);
         let row = row()
             .key(format!("peek-drag-block-{}", block.block.id))
+            .drawn_rect_into(&peek.block_rects.slot(&block.block.id))
             .w_full()
             .min_w(0.)
             .hover_group_shared(format!("peek-block-hover-{}", block.block.id))
-            .child(peek_gutter(
-                s,
-                &block.block.id,
-                i,
-                block.edit.focused,
-                t,
-                &zones,
-            ))
+            .child(peek_gutter(s, &block.block.id, i, block.edit.focused, t))
             .child(view.grow(1.).min_w(0.));
-        let row = if let Some(background) = background { row.radius(6.).fill(background) } else { row };
+        let row = if let Some(background) = background {
+            row.radius(6.).fill(background)
+        } else {
+            row
+        };
         block_views.push(super::editor_layout::decorate_for(
             s,
             page_id,
@@ -291,6 +286,7 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
         .child(
             row()
                 .key("peek-append-block")
+                .drawn_rect_into(&peek.block_rects.slot("@end"))
                 .w_full()
                 .h(30.)
                 .center_y()
@@ -357,55 +353,45 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
         )
         .child(
             super::editor::wire_file_drop(
-                col().key("peek-selection-viewport").w_full().grow(1.).min_h(0.),
+                col()
+                    .key("peek-selection-viewport")
+                    .w_full()
+                    .grow(1.)
+                    .min_h(0.),
                 page_id,
                 true,
-                zones,
             )
             .child(
-                    col()
-                        .key("peek-scroll")
-                        .w_full()
-                        .grow(1.)
-                        .min_h(0.)
-                        .scroll(ScrollSpec {
-                            stick_bottom: false,
-                        })
-                        .on_drag(move |s: &mut State, drag, tx| {
-                            s.select_editor_blocks(
-                                &selection_page,
-                                true,
-                                &selection_zones,
-                                drag,
-                                tx,
-                            );
-                        })
-                        .child(
-                            col()
-                                .w_full()
-                                .child(super::page_cover::view(s, &peek.page, t, "peek"))
-                                .child(content),
-                        ),
-                )
-                .children(super::editor_layout::selection_box(
-                    s,
-                    page_id,
-                    true,
-                    "peek-selection-viewport",
-                    t,
-                )),
+                col()
+                    .key("peek-scroll")
+                    .w_full()
+                    .grow(1.)
+                    .min_h(0.)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .on_drag(move |s: &mut State, drag, tx| {
+                        s.select_editor_blocks(&selection_page, true, drag, tx);
+                    })
+                    .child(
+                        col()
+                            .w_full()
+                            .child(super::page_cover::view(s, &peek.page, t, "peek"))
+                            .child(content),
+                    ),
+            )
+            .children(super::editor_layout::selection_box(
+                s,
+                page_id,
+                true,
+                "peek-selection-viewport",
+                t,
+            )),
         )
         .child(header)
 }
 
-fn peek_gutter(
-    s: &State,
-    id: &str,
-    index: usize,
-    focused: bool,
-    t: Theme,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
-) -> El {
+fn peek_gutter(s: &State, id: &str, index: usize, focused: bool, t: Theme) -> El {
     use crate::block_commands::BlockCommandMode;
     let visible = focused
         || s.block_commands
@@ -416,7 +402,6 @@ fn peek_gutter(
     let anchor = add_key.clone();
     let menu_id = id.to_owned();
     let drag_id = id.to_owned();
-    let drag_zones = zones.clone();
     let menu_key = format!("peek-block-menu-{index}");
     let menu_anchor = menu_key.clone();
     row()
@@ -441,7 +426,7 @@ fn peek_gutter(
                 .group_opacity(if visible { 1. } else { 0. }, 1.)
                 .preserve_focus_on_press(true)
                 .on_drag(move |s: &mut State, drag, tx| {
-                    s.drag_editor_block(&drag_id, drag, &drag_zones, true);
+                    s.drag_editor_block(&drag_id, drag, true);
                     tx.instant();
                 })
                 .on_press(move |s: &mut State| {

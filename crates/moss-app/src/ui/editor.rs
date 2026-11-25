@@ -1,9 +1,8 @@
 use super::theme::{Theme, icon_button};
+use crate::text_colors::{self, Channel};
 use crate::{block_commands::BlockCommandMode, state::State};
 use moss_core::BlockKind;
-use crate::text_colors::{self, Channel};
 use rune::*;
-use std::hash::{Hash, Hasher};
 
 pub(super) fn wire_title_arrows(el: El, peek: bool, at_last: bool) -> El {
     el.on_input_key(move |s: &mut State, event, tx| {
@@ -16,39 +15,27 @@ pub(super) fn wire_title_arrows(el: El, peek: bool, at_last: bool) -> El {
     })
 }
 
-pub(super) fn wire_file_drop(
-    el: El,
-    page_id: &str,
-    peek: bool,
-    zones: std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
-) -> El {
+pub(super) fn wire_file_drop(el: El, page_id: &str, peek: bool) -> El {
     let hover_page = page_id.to_owned();
-    let hover_zones = zones.clone();
     let move_page = page_id.to_owned();
-    let move_zones = zones.clone();
     let drop_page = page_id.to_owned();
     el.accepts_extensions(&["png", "jpg", "jpeg", "webp"])
         .on_drop_hover(move |s: &mut State, over, tx| {
             if over {
                 let point = tx.drop_point().map(|p| [p.window_x, p.window_y]);
-                s.hover_editor_file_drop(&hover_page, peek, point, &hover_zones);
+                s.hover_editor_file_drop(&hover_page, peek, point);
             } else {
                 s.clear_editor_file_drop();
             }
             tx.instant();
         })
         .on_drop_move(move |s: &mut State, point, tx| {
-            s.hover_editor_file_drop(
-                &move_page,
-                peek,
-                Some([point.window_x, point.window_y]),
-                &move_zones,
-            );
+            s.hover_editor_file_drop(&move_page, peek, Some([point.window_x, point.window_y]));
             tx.instant();
         })
         .on_drop_files(move |s: &mut State, files, tx| {
             let point = tx.drop_point().map(|p| [p.window_x, p.window_y]);
-            s.drop_editor_image_files(&drop_page, peek, files, point, &zones);
+            s.drop_editor_image_files(&drop_page, peek, files, point);
             tx.instant();
         })
 }
@@ -64,7 +51,7 @@ pub(super) fn render_text_block(
     number: usize,
     marker_width: f32,
     t: Theme,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+    rect: Option<&rune::Live<[f32; 4]>>,
     peek: bool,
 ) -> El {
     let kind = b.block.kind;
@@ -114,9 +101,8 @@ pub(super) fn render_text_block(
             .w_full()
             .min_h(line * scale);
         for (range, target) in links {
-            overlay = overlay.link(
-                Link::new(range, target).hover(LinkPaint::default().underline(t.text)),
-            );
+            overlay = overlay
+                .link(Link::new(range, target).hover(LinkPaint::default().underline(t.text)));
         }
         overlay.on_link(open_link)
     });
@@ -141,11 +127,13 @@ pub(super) fn render_text_block(
         .w_full()
         .min_w(0.)
         .min_h(line * scale)
-        .color(foreground.unwrap_or(if kind == BlockKind::Todo && b.block.checked {
-            t.faint
-        } else {
-            t.text
-        }))
+        .color(
+            foreground.unwrap_or(if kind == BlockKind::Todo && b.block.checked {
+                t.faint
+            } else {
+                t.text
+            }),
+        )
         .label("Block text");
     if peek {
         input = input.align(Align::Start);
@@ -363,32 +351,26 @@ pub(super) fn render_text_block(
             .children(marker)
             .child(text_col)
     } else {
-        row()
+        let mut r = row()
             .key(format!("block-{}", b.block.id))
             .hover_group_shared(format!("block-hover-{}", b.block.id))
             .w_full()
             .min_h(30. * scale)
             .py(2. * scale)
             .gap(6.)
-            .child(gutter(
-                s,
-                &b.block.id,
-                i,
-                b.edit.focused,
-                line * scale,
-                t,
-                zones,
-            ))
+            .child(gutter(s, &b.block.id, i, b.edit.focused, line * scale, t))
             .children(marker)
-            .child(text_col)
+            .child(text_col);
+        if let Some(rect) = rect {
+            r = r.drawn_rect_into(rect);
+        }
+        r
     };
     if matches!(kind, BlockKind::Code | BlockKind::Callout) {
         body.padding(if peek { 12. } else { 14. })
             .radius(4.)
             .fill(background.unwrap_or(t.sidebar))
-    } else if !peek
-        && let Some(background) = background
-    {
+    } else if !peek && let Some(background) = background {
         body.radius(6.).fill(background)
     } else {
         body
@@ -420,15 +402,7 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
         s.focus_first_page_block(false);
         tx.instant();
     });
-    let zones = super::editor_layout::zones(tab);
-    let mut zone_hasher = std::collections::hash_map::DefaultHasher::new();
-    for zone in zones.iter() {
-        zone.id.hash(&mut zone_hasher);
-        for value in zone.rect {
-            value.to_bits().hash(&mut zone_hasher);
-        }
-    }
-    let zone_version = zone_hasher.finish();
+    let has_comments = super::comments::page_has_active_comments(s, &tab.page.id);
     let marker_width = super::editor_layout::list_marker_width(
         &tab.blocks,
         crate::fonts::scale(tab.page.settings),
@@ -436,52 +410,73 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
     let blocks: Vec<_> = super::editor_layout::with_list_numbers(&tab.blocks)
         .enumerate()
         .map(|(i, (b, number))| {
-            let render_item = || match b.block.kind {
-                BlockKind::ChildPage => page_link(s, tab, b, i, t, &zones),
-                BlockKind::Bookmark => website_link(s, b, i, t, &zones),
-                BlockKind::Image => {
-                    super::image_block::view(s, &b.block, i, t, available_width, &zones)
-                }
-                BlockKind::SimpleTable => row()
-                    .key(format!("block-{}", b.block.id))
-                    .w_full()
-                    .min_w(0.)
-                    .gap(6.)
-                    .child(gutter(s, &b.block.id, i, false, 26., t, &zones))
-                    .child(
-                        col()
-                            .grow(1.)
-                            .min_w(0.)
-                            .child(super::simple_table::view(s, &b.block, false, t)),
+            let render_item = || {
+                let rect = tab.block_rects.slot(&b.block.id);
+                match b.block.kind {
+                    BlockKind::ChildPage => page_link(s, tab, b, i, t, &rect),
+                    BlockKind::Bookmark => website_link(s, b, i, t, &rect),
+                    BlockKind::Image => {
+                        super::image_block::view(s, &b.block, i, t, available_width, &rect)
+                    }
+                    BlockKind::SimpleTable => row()
+                        .key(format!("block-{}", b.block.id))
+                        .drawn_rect_into(&rect)
+                        .w_full()
+                        .min_w(0.)
+                        .gap(6.)
+                        .child(gutter(s, &b.block.id, i, false, 26., t))
+                        .child(
+                            col()
+                                .grow(1.)
+                                .min_w(0.)
+                                .child(super::simple_table::view(s, &b.block, false, t)),
+                        ),
+                    BlockKind::Divider => row()
+                        .key(format!("block-{}", b.block.id))
+                        .drawn_rect_into(&rect)
+                        .w_full()
+                        .h(24.)
+                        .center_y()
+                        .child(el().h(1.).grow(1.).fill(t.line))
+                        .child(gutter(s, &b.block.id, i, b.edit.focused, 26., t)),
+                    _ => render_text_block(
+                        s,
+                        cx,
+                        &tab.page.id,
+                        tab.page.settings,
+                        b,
+                        i,
+                        number,
+                        marker_width,
+                        t,
+                        Some(&rect),
+                        false,
                     ),
-                BlockKind::Divider => row()
-                    .key(format!("block-{}", b.block.id))
-                    .w_full()
-                    .h(24.)
-                    .center_y()
-                    .child(el().h(1.).grow(1.).fill(t.line))
-                    .child(gutter(s, &b.block.id, i, b.edit.focused, 26., t, &zones)),
-                _ => render_text_block(
-                    s,
-                    cx,
-                    &tab.page.id,
-                    tab.page.settings,
-                    b,
-                    i,
-                    number,
-                    marker_width,
-                    t,
-                    &zones,
-                    false,
-                ),
+                }
             };
             let render = || super::editor_layout::decorate(s, &b.block.id, render_item(), t);
-            if b.block.kind == BlockKind::Todo
+            let memoizable = matches!(
+                b.block.kind,
+                BlockKind::Paragraph
+                    | BlockKind::Heading1
+                    | BlockKind::Heading2
+                    | BlockKind::Heading3
+                    | BlockKind::Todo
+                    | BlockKind::BulletedList
+                    | BlockKind::NumberedList
+                    | BlockKind::Quote
+                    | BlockKind::Callout
+                    | BlockKind::Code
+                    | BlockKind::Toggle
+                    | BlockKind::Divider
+            );
+            if memoizable
                 && !b.edit.focused
                 && s.editor_drag.is_none()
                 && s.editor_file_drop.is_none()
                 && s.editor_selection.is_none()
-                && super::comments::markers(s, &tab.page.id, &b.block.id, false, t).is_empty()
+                && (!has_comments
+                    || !super::comments::block_has_active_comments(s, &tab.page.id, &b.block.id))
             {
                 let menu_open = s
                     .block_commands
@@ -491,18 +486,21 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
                 rune::memo(
                     format!("editor-block-slot-{}", b.block.id),
                     (
-                        i,
+                        (i, std::mem::discriminant(&b.block.kind), number),
                         &b.edit,
                         &b.block.config,
-                        b.block.checked,
-                        (zone_version, marker_width.to_bits()),
-                        menu_open,
-                        settings.font as u8,
-                        settings.small_text,
-                        settings.full_width,
-                        t.bg.r.to_bits(),
-                        t.text_scale.to_bits(),
-                        b.edit.focused && t.caret_visible,
+                        (b.block.checked, marker_width.to_bits(), menu_open),
+                        (
+                            settings.font as u8,
+                            settings.small_text,
+                            settings.full_width,
+                        ),
+                        (
+                            t.dark,
+                            t.bg.r.to_bits(),
+                            t.text_scale.to_bits(),
+                            t.scale.to_bits(),
+                        ),
                     ),
                     render,
                 )
@@ -513,7 +511,6 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
         .collect();
     let blocks = super::editor_layout::group(s, tab, blocks, t);
     let selection_page = tab.page.id.clone();
-    let selection_zones = zones.clone();
     let mut content = col()
         .key(format!("document-{}", tab.page.id))
         .w_full()
@@ -537,7 +534,7 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
             stick_bottom: false,
         })
         .on_drag(move |s: &mut State, drag, tx| {
-            s.select_editor_blocks(&selection_page, false, &selection_zones, drag, tx);
+            s.select_editor_blocks(&selection_page, false, drag, tx);
         })
         .child(super::page_cover::view(s, &tab.page, t, "document"))
         .child(
@@ -609,6 +606,7 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
                 .child(
                     row()
                         .key("append-block")
+                        .drawn_rect_into(&tab.block_rects.slot("@end"))
                         .w_full()
                         .h(30.)
                         .center_y()
@@ -632,7 +630,6 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
         col().key(&viewport).grow(1.).min_h(0.).min_w(0.).w_full(),
         &tab.page.id,
         false,
-        zones,
     )
     .child(scroll)
     .children(super::editor_layout::selection_box(
@@ -683,15 +680,7 @@ pub(super) fn todo_checkbox(
         })
 }
 
-pub(super) fn gutter(
-    s: &State,
-    id: &str,
-    index: usize,
-    focused: bool,
-    line: f32,
-    t: Theme,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
-) -> El {
+pub(super) fn gutter(s: &State, id: &str, index: usize, focused: bool, line: f32, t: Theme) -> El {
     let visible = focused
         || s.block_commands
             .as_ref()
@@ -701,7 +690,6 @@ pub(super) fn gutter(
     let add_anchor = add_key.clone();
     let menu_id = id.to_owned();
     let drag_id = id.to_owned();
-    let drag_zones = zones.clone();
     let menu_key = format!("block-menu-{index}");
     let menu_anchor = menu_key.clone();
     row()
@@ -728,7 +716,7 @@ pub(super) fn gutter(
                 .group_opacity(if visible { 1. } else { 0. }, 1.)
                 .preserve_focus_on_press(true)
                 .on_drag(move |s: &mut State, drag, tx| {
-                    s.drag_editor_block(&drag_id, drag, &drag_zones, false);
+                    s.drag_editor_block(&drag_id, drag, false);
                     tx.instant();
                 })
                 .on_press(move |s: &mut State| {
@@ -747,7 +735,7 @@ fn page_link(
     b: &crate::state::EditableBlock,
     index: usize,
     t: Theme,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+    rect: &rune::Live<[f32; 4]>,
 ) -> El {
     let target = b.block.config["page_id"].as_str().unwrap_or("");
     let page = tab.page_links.get(target);
@@ -762,11 +750,12 @@ fn page_link(
         });
     row()
         .key(format!("block-{}", b.block.id))
+        .drawn_rect_into(rect)
         .w_full()
         .min_h(32.)
         .center_y()
         .gap(8.)
-        .child(gutter(s, &b.block.id, index, false, 26., t, zones))
+        .child(gutter(s, &b.block.id, index, false, 26., t))
         .child(
             row()
                 .key(format!("page-link-{}", b.block.id))
@@ -802,7 +791,7 @@ fn website_link(
     b: &crate::state::EditableBlock,
     index: usize,
     t: Theme,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+    rect: &rune::Live<[f32; 4]>,
 ) -> El {
     let url = b
         .block
@@ -818,11 +807,12 @@ fn website_link(
     };
     row()
         .key(format!("block-{}", b.block.id))
+        .drawn_rect_into(rect)
         .w_full()
         .min_h(32.)
         .center_y()
         .gap(8.)
-        .child(gutter(s, &b.block.id, index, false, 26., t, zones))
+        .child(gutter(s, &b.block.id, index, false, 26., t))
         .child(
             row()
                 .key(format!("website-link-{}", b.block.id))

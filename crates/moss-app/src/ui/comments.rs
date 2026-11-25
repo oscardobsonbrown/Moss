@@ -253,7 +253,31 @@ pub fn highlight_key(thread: &str, peek: bool) -> String {
     )
 }
 
+pub fn page_has_active_comments(s: &State, page_id: &str) -> bool {
+    s.comments
+        .threads
+        .get(page_id)
+        .is_some_and(|threads| threads.iter().any(|t| !t.resolved && t.anchor_available))
+}
+
+pub fn block_has_active_comments(s: &State, page_id: &str, block_id: &str) -> bool {
+    s.comments.threads.get(page_id).is_some_and(|threads| {
+        threads.iter().any(|thread| {
+            !thread.resolved
+                && thread.anchor_available
+                && match &thread.anchor {
+                    CommentAnchor::Block { block_id: id }
+                    | CommentAnchor::Text { block_id: id, .. } => id == block_id,
+                    _ => false,
+                }
+        })
+    })
+}
+
 pub fn markers(s: &State, page_id: &str, block_id: &str, peek: bool, t: Theme) -> Vec<El> {
+    if !block_has_active_comments(s, page_id, block_id) {
+        return Vec::new();
+    }
     let text = if peek {
         s.record_peek
             .as_ref()
