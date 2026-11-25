@@ -9,14 +9,15 @@ pub(super) fn view(
     index: usize,
     t: Theme,
     available_width: f32,
-    zones: &std::rc::Rc<Vec<crate::editor_drag::DropZone>>,
+    rect: &rune::Live<[f32; 4]>,
 ) -> El {
     row()
         .key(format!("block-{}", block.id))
+        .drawn_rect_into(rect)
         .w_full()
         .min_w(0.)
         .gap(6.)
-        .child(editor::gutter(s, &block.id, index, false, 26., t, zones))
+        .child(editor::gutter(s, &block.id, index, false, 26., t))
         .child(content(s, block, t, available_width))
 }
 pub(super) fn content(s: &State, block: &Block, t: Theme, available_width: f32) -> El {
@@ -25,7 +26,7 @@ pub(super) fn content(s: &State, block: &Block, t: Theme, available_width: f32) 
         .get("asset")
         .and_then(serde_json::Value::as_str);
     let image = asset.and_then(|id| s.page_cover.images.get(id));
-    let max_width = rune::memo::window_layout_with(&format!("block-{}", block.id), |rect| rect[2])
+    let max_width = rune::memo::layout_with(&format!("block-{}", block.id), |rect| rect[2])
         .unwrap_or_else(|| (available_width.min(860.) - 140.).max(120.))
         .max(1.);
     let page = block.page_id.clone();

@@ -15,137 +15,248 @@ pub struct PageDropZone {
     pub rect: [f32; 4],
 }
 
-fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
-    let id = section.id.clone();
-    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
-    let divider = format!("rail-group-{id}");
-    let drag_id = id.clone();
-    let anchor = format!("section-actions-{id}");
-    let menu_anchor = anchor.clone();
-    let menu_id = id.clone();
-    let rects: Vec<_> = s
+fn section_header_centers(s: &State, exclude: &str) -> Vec<(String, f32)> {
+    let rows = items(s);
+    let visible = &s.sidebar_sections.visible_rows;
+    let range = if visible.is_empty() {
+        0..rows.len()
+    } else {
+        visible.start.min(rows.len())..visible.end.min(rows.len())
+    };
+    let mut rects = Vec::new();
+    for item in rows[range].iter().copied() {
+        if let Item::Header(index) = item {
+            let section = &s.sidebar_sections.sections[index];
+            if section.id != exclude && !section.hidden {
+                let key = format!("section-header-{}", section.id);
+                if let Some(rect) = s.sidebar_sections.row_rects.get(&key) {
+                    rects.push((section.id.clone(), rect[1] + rect[3] / 2.));
+                }
+            }
+        }
+    }
+    rects
+}
+
+pub(super) fn page_drop_zones(s: &State) -> Vec<PageDropZone> {
+    let rows = items(s);
+    let visible = &s.sidebar_sections.visible_rows;
+    let range = if visible.is_empty() {
+        0..rows.len()
+    } else {
+        visible.start.min(rows.len())..visible.end.min(rows.len())
+    };
+    let mut visible_sections = s
         .sidebar_sections
         .sections
         .iter()
-        .filter(|item| item.id != id && !item.hidden)
-        .filter_map(|item| {
-            let target = item.id.clone();
-            rune::memo::window_layout_with(&format!("section-header-{}", item.id), move |rect| {
-                (target.clone(), rect[1] + rect[3] / 2.)
+        .filter(|section| !section.hidden);
+    let first = visible_sections.next();
+    let mut section = if visible_sections.next().is_none() {
+        first.map(|section| section.id.clone())
+    } else {
+        None
+    };
+    let mut zones = Vec::new();
+    for (idx, item) in rows.iter().copied().enumerate() {
+        if idx >= range.end {
+            break;
+        }
+        if let Item::Header(index) = item {
+            section = Some(s.sidebar_sections.sections[index].id.clone());
+        }
+        if idx < range.start {
+            continue;
+        }
+        let (key, page, parent) = match item {
+            Item::Header(index) => (
+                format!("section-header-{}", s.sidebar_sections.sections[index].id),
+                None,
+                None,
+            ),
+            Item::Private(index) => match &s.sidebar_tree.rows[index] {
+                crate::sidebar_tree::SidebarRow::Page { page, .. } => (
+                    format!("page-highlight-{}", page.id),
+                    Some(page.id.clone()),
+                    page.parent_id.clone(),
+                ),
+                _ => continue,
+            },
+            Item::Favorite(index) => {
+                let id = &s.sidebar_favorites.pages[index].id;
+                (format!("favorite-highlight-{id}"), Some(id.clone()), None)
+            }
+            Item::Shortcut(index, page) => {
+                let item = &s.sidebar_sections.sections[index];
+                let id = &s.sidebar_sections.pages[&item.id][page].id;
+                (
+                    format!("{}-highlight-{id}", shortcut_prefix(item)),
+                    Some(id.clone()),
+                    None,
+                )
+            }
+            Item::New => break,
+        };
+        if let Some(section) = section.clone()
+            && let Some(rect) = s.sidebar_sections.row_rects.get(&key)
+        {
+            zones.push(PageDropZone {
+                section,
+                page,
+                parent,
+                rect,
+            });
+        }
+    }
+    zones
+}
+
+fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
+    let compact = s.sidebar_collapsed() && !s.sidebar_reveal.visible;
+    let build = || {
+        let id = section.id.clone();
+        let header_key = format!("section-header-{id}");
+        let header_rect = s.sidebar_sections.row_rects.slot(&header_key);
+        let divider = format!("rail-group-{id}");
+        let drag_id = id.clone();
+        let anchor = format!("section-actions-{id}");
+        let menu_anchor = anchor.clone();
+        let menu_id = id.clone();
+        let target = s.sidebar_sections.drag_target.as_deref() == Some(id.as_str());
+        let page_target = s
+            .sidebar_sections
+            .page_drag
+            .as_ref()
+            .is_some_and(|drag| drag.target.as_deref() == Some(id.as_str()));
+        row()
+            .key(header_key)
+            .drawn_rect_into(&header_rect)
+            .w_full()
+            .h(26.)
+            .pl(12.)
+            .pr(3.)
+            .center_y()
+            .radius(4.)
+            .fill(if page_target {
+                t.hover
+            } else {
+                Color::TRANSPARENT
             })
-        })
-        .collect();
-    let target = s.sidebar_sections.drag_target.as_deref() == Some(id.as_str());
-    let page_target = s
-        .sidebar_sections
-        .page_drag
-        .as_ref()
-        .is_some_and(|drag| drag.target.as_deref() == Some(id.as_str()));
-    row()
-        .key(format!("section-header-{id}"))
-        .w_full()
-        .h(26.)
-        .pl(12.)
-        .pr(3.)
-        .center_y()
-        .radius(4.)
-        .fill(if page_target {
-            t.hover
-        } else {
-            Color::TRANSPARENT
-        })
-        .hover_group()
-        .hover_motion(Anim::INSTANT, Anim::INSTANT)
-        .child(
-            el().key(divider)
-                .size(20., 1.)
-                .absolute(4., 12.5)
-                .fill(t.line)
-                .opacity(if compact { 1. } else { 0. })
-                .opacity_motion(tok::motion::SNAP_EXIT),
-        )
-        .child(
-            row()
-                .grow(1.)
-                .min_w(0.)
-                .h_full()
-                .gap(4.)
-                .center_y()
-                .key(format!("section-toggle-{id}"))
-                .role("button")
-                .label(format!("{} section", section.name))
-                .expanded(!section.collapsed)
+            .hover_group()
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .child(
+                el().key(divider)
+                    .size(20., 1.)
+                    .absolute(4., 12.5)
+                    .fill(t.line)
+                    .opacity(if compact { 1. } else { 0. })
+                    .opacity_motion(tok::motion::SNAP_EXIT),
+            )
+            .child(
+                row()
+                    .grow(1.)
+                    .min_w(0.)
+                    .h_full()
+                    .gap(4.)
+                    .center_y()
+                    .key(format!("section-toggle-{id}"))
+                    .role("button")
+                    .label(format!("{} section", section.name))
+                    .expanded(!section.collapsed)
+                    .focusable(!compact)
+                    .opacity(if compact { 0. } else { 1. })
+                    .opacity_motion(tok::motion::SNAP_EXIT)
+                    .child(
+                        t.label(&section.name, t.faint)
+                            .font(TextStyle::new(14., 500.).family(Family::Sans))
+                            .key(format!("{id}-heading"))
+                            .truncate()
+                            .shrink()
+                            .min_w(0.),
+                    )
+                    .child(
+                        rune::icon(
+                            if section.collapsed {
+                                &super::sidebar_actions::RIGHT
+                            } else {
+                                &super::view_icons::TOOLBAR_CARET
+                            },
+                            12.,
+                        )
+                        .key(format!("section-caret-{id}"))
+                        .color(t.faint)
+                        .group_opacity(if section.collapsed { 1. } else { 0. }, 1.),
+                    )
+                    .child(el().grow(1.))
+                    .on_press_tx(move |s: &mut State, tx| {
+                        s.toggle_sidebar_section(&id);
+                        tx.instant();
+                    })
+                    .on_drag(move |s: &mut State, drag, tx| {
+                        tx.instant();
+                        if drag.phase == Phase::Down {
+                            return;
+                        }
+                        if drag.dy.abs() >= 4. && !drag.cancelled() {
+                            let y = drag.window_point()[1];
+                            let rects = section_header_centers(s, &drag_id);
+                            let before = rects
+                                .iter()
+                                .find(|(_, center)| y < *center)
+                                .map(|(id, _)| id.clone())
+                                .unwrap_or_default();
+                            s.sidebar_sections.dragging = Some(drag_id.clone());
+                            s.sidebar_sections.drag_target = Some(before.clone());
+                            if drag.phase == Phase::Up {
+                                s.reorder_sidebar_section(&drag_id, &before);
+                            }
+                        }
+                        if drag.phase == Phase::Up || drag.cancelled() {
+                            s.sidebar_sections.dragging = None;
+                            s.sidebar_sections.drag_target = None;
+                        }
+                    }),
+            )
+            .child(
+                super::sidebar_actions::button(
+                    s,
+                    anchor,
+                    &format!("{} section options", section.name),
+                    &super::sidebar_actions::MORE,
+                    16.,
+                    t.hover,
+                    t,
+                )
                 .focusable(!compact)
                 .opacity(if compact { 0. } else { 1. })
                 .opacity_motion(tok::motion::SNAP_EXIT)
-                .child(
-                    t.label(&section.name, t.faint)
-                        .font(TextStyle::new(14., 500.).family(Family::Sans))
-                        .key(format!("{id}-heading"))
-                        .truncate()
-                        .shrink()
-                        .min_w(0.),
-                )
-                .child(
-                    rune::icon(
-                        if section.collapsed {
-                            &super::sidebar_actions::RIGHT
-                        } else {
-                            &super::view_icons::TOOLBAR_CARET
-                        },
-                        12.,
+                .on_press(move |s: &mut State| {
+                    s.open_sidebar_section_menu(
+                        SectionMenuMode::Actions(menu_id.clone()),
+                        &menu_anchor,
                     )
-                    .key(format!("section-caret-{id}"))
-                    .color(t.faint)
-                    .group_opacity(if section.collapsed { 1. } else { 0. }, 1.),
-                )
-                .child(el().grow(1.))
-                .on_press_tx(move |s: &mut State, tx| {
-                    s.toggle_sidebar_section(&id);
-                    tx.instant();
-                })
-                .on_drag(move |s: &mut State, drag, tx| {
-                    tx.instant();
-                    if drag.phase == Phase::Down {
-                        return;
-                    }
-                    if drag.dy.abs() >= 4. && !drag.cancelled() {
-                        let y = drag.window_point()[1];
-                        let before = rects
-                            .iter()
-                            .find(|(_, center)| y < *center)
-                            .map(|(id, _)| id.clone())
-                            .unwrap_or_default();
-                        s.sidebar_sections.dragging = Some(drag_id.clone());
-                        s.sidebar_sections.drag_target = Some(before.clone());
-                        if drag.phase == Phase::Up {
-                            s.reorder_sidebar_section(&drag_id, &before);
-                        }
-                    }
-                    if drag.phase == Phase::Up || drag.cancelled() {
-                        s.sidebar_sections.dragging = None;
-                        s.sidebar_sections.drag_target = None;
-                    }
                 }),
-        )
-        .child(
-            super::sidebar_actions::button(
-                s,
-                anchor,
-                &format!("{} section options", section.name),
-                &super::sidebar_actions::MORE,
-                16.,
-                t.hover,
-                t,
             )
-            .focusable(!compact)
-            .opacity(if compact { 0. } else { 1. })
-            .opacity_motion(tok::motion::SNAP_EXIT)
-            .on_press(move |s: &mut State| {
-                s.open_sidebar_section_menu(SectionMenuMode::Actions(menu_id.clone()), &menu_anchor)
-            }),
+            .children(target.then(|| el().absolute(0., 0.).w_full().h(2.).fill(t.blue)))
+    };
+    if s.sidebar_sections.dragging.is_none() && s.sidebar_sections.page_drag.is_none() {
+        rune::memo(
+            format!("section-header-{}", section.id),
+            (
+                &section.name,
+                section.collapsed,
+                compact,
+                s.sidebar_keyboard_controls,
+                t.dark,
+                t.bg.r.to_bits(),
+                t.text_scale.to_bits(),
+                t.scale.to_bits(),
+            ),
+            build,
         )
-        .children(target.then(|| el().absolute(0., 0.).w_full().h(2.).fill(t.blue)))
+    } else {
+        build()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -265,78 +376,24 @@ pub fn page_drag_preview(s: &State, t: Theme) -> Option<El> {
     )
 }
 
-pub fn view(s: &State, t: Theme) -> El {
+pub fn view(s: &State, t: Theme, width: f32) -> El {
     let rows = Rc::new(items(s));
-    let mut visible = s
-        .sidebar_sections
-        .sections
-        .iter()
-        .filter(|section| !section.hidden);
-    let first = visible.next();
-    let mut section = if visible.next().is_none() {
-        first.map(|section| section.id.clone())
-    } else {
-        None
-    };
-    let mut zones = Vec::new();
-    for item in rows.iter().copied() {
-        let (key, page, parent) = match item {
-            Item::Header(index) => {
-                section = Some(s.sidebar_sections.sections[index].id.clone());
-                (
-                    format!("section-header-{}", s.sidebar_sections.sections[index].id),
-                    None,
-                    None,
-                )
-            }
-            Item::Private(index) => match &s.sidebar_tree.rows[index] {
-                crate::sidebar_tree::SidebarRow::Page { page, .. } => (
-                    format!("page-highlight-{}", page.id),
-                    Some(page.id.clone()),
-                    page.parent_id.clone(),
-                ),
-                _ => continue,
-            },
-            Item::Favorite(index) => {
-                let id = &s.sidebar_favorites.pages[index].id;
-                (format!("favorite-highlight-{id}"), Some(id.clone()), None)
-            }
-            Item::Shortcut(index, page) => {
-                let item = &s.sidebar_sections.sections[index];
-                let id = &s.sidebar_sections.pages[&item.id][page].id;
-                (
-                    format!("{}-highlight-{id}", shortcut_prefix(item)),
-                    Some(id.clone()),
-                    None,
-                )
-            }
-            Item::New => break,
-        };
-        if let Some(section) = section.clone() {
-            if let Some(zone) = rune::memo::window_layout_with(&key, move |rect| PageDropZone {
-                section: section.clone(),
-                page: page.clone(),
-                parent: parent.clone(),
-                rect,
-            }) {
-                zones.push(zone);
-            }
-        }
-    }
-    let zones = Rc::new(zones);
-    let viewport = rune::memo::window_layout_with("sidebar-scroll", |rect| rect).unwrap_or([0.; 4]);
     let keys = rows.clone();
     col()
         .key("page-list")
         .w_full()
         .growth(GrowthSpec::default())
+        .on_visible_rows(|s: &mut State, range| {
+            s.sidebar_sections.visible_rows = range;
+            false
+        })
         .virtual_rows::<State>(
             rows.len(),
             30.,
             move |s, i| std::borrow::Cow::Owned(item_key(s, keys[i])),
             move |s, i| match rows[i] {
                 Item::Header(i) => header(s, &s.sidebar_sections.sections[i], t),
-                Item::Private(i) => super::sidebar_tree::row_at(s, i, t, zones.clone(), viewport),
+                Item::Private(i) => super::sidebar_tree::row_at(s, i, width, t),
                 Item::Favorite(i) => super::sidebar_tree::page_row(
                     s,
                     &s.sidebar_favorites.pages[i],
@@ -345,8 +402,7 @@ pub fn view(s: &State, t: Theme) -> El {
                     0,
                     "favorite",
                     "favorites",
-                    zones.clone(),
-                    viewport,
+                    width,
                     t,
                 ),
                 Item::Shortcut(i, page) => {
@@ -359,8 +415,7 @@ pub fn view(s: &State, t: Theme) -> El {
                         0,
                         &shortcut_prefix(section),
                         &section.id,
-                        zones.clone(),
-                        viewport,
+                        width,
                         t,
                     )
                 }

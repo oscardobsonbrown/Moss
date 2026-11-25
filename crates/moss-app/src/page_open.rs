@@ -13,9 +13,10 @@ impl State {
         if let Some(i) = self.tabs.iter().position(|t| t.page.id == id) {
             self.active = i;
             self.filter = TextEdit::new(&self.tabs[i].title_search);
-            self.record_navigation(id);
+            let page = self.tabs[i].page.clone();
+            self.record_navigation_deferred(Some(&page), id);
             self.load_comments(id);
-            self.save_preferences();
+            self.defer_save_preferences();
             return;
         }
         let result = (|| -> Result<Tab, Box<dyn std::error::Error>> {
@@ -46,7 +47,11 @@ impl State {
                 && child_pages
                     .as_ref()
                     .is_some_and(|pages| pages.items.is_empty());
-            let database = self.store.get_database_by_page(id)?;
+            let database = if page.kind == PageKind::Database {
+                self.store.get_database_by_page(id)?
+            } else {
+                None
+            };
             let record_context = if page.kind == PageKind::Record {
                 match self.store.get_record_by_page(id)? {
                     Some(record) => self
@@ -184,24 +189,22 @@ impl State {
                         today.with_day(1).unwrap()
                     }
                 });
+            let page_links =
+                crate::page_blocks::load_links(&self.store, &self.workspace.id, &blocks)?;
             let mut tab = Tab {
                 choosing_type,
                 saved_blocks,
+                block_rects: crate::state::RectSlots::default(),
                 title: TextEdit::new(&page.title),
                 page,
                 blocks: blocks
-                    .iter()
-                    .cloned()
+                    .into_iter()
                     .map(|block| {
                         let edit = crate::rich_text::load(&block);
                         EditableBlock { block, edit }
                     })
                     .collect(),
-                page_links: crate::page_blocks::load_links(
-                    &self.store,
-                    &self.workspace.id,
-                    &blocks,
-                )?,
+                page_links,
                 child_pages,
                 child_page_cursor: None,
                 database,
@@ -270,6 +273,7 @@ impl State {
                         }
                     }
                 }
+                let opened_page = tab.page.clone();
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
@@ -277,12 +281,16 @@ impl State {
                     self.tabs[self.active] = tab;
                 }
                 self.filter = TextEdit::new("");
-                self.record_navigation(id);
+                self.record_navigation_deferred(Some(&opened_page), id);
                 self.load_comments(id);
                 self.refresh_table_summaries();
-                self.save_preferences();
+                self.defer_save_preferences();
             }
             Err(e) => self.error = Some(e.to_string()),
         }
     }
 }
+
+#[cfg(test)]
+#[path = "page_perf_bench.rs"]
+mod page_perf_bench;

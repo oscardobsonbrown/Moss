@@ -204,21 +204,43 @@ pub fn file_drop_target(point: [f32; 2], zones: &[DropZone]) -> Option<Target> {
     })
 }
 impl State {
-    pub fn hover_editor_file_drop(
-        &mut self,
-        page_id: &str,
-        peek: bool,
-        point: Option<[f32; 2]>,
-        zones: &[DropZone],
-    ) {
-        let target = point
-            .and_then(|p| file_drop_target(p, zones))
-            .or_else(|| {
-                zones.iter().find(|z| z.id == "@end").map(|_| Target {
-                    id: "@end".into(),
-                    side: Side::After,
+    pub fn editor_drop_zones(&self, peek: bool) -> Vec<DropZone> {
+        let (blocks, rects) = if peek {
+            let Some(p) = self.record_peek.as_ref() else {
+                return Vec::new();
+            };
+            (&p.blocks, &p.block_rects)
+        } else {
+            let Some(t) = self.tab() else {
+                return Vec::new();
+            };
+            (&t.blocks, &t.block_rects)
+        };
+        let mut zones: Vec<_> = blocks
+            .iter()
+            .filter_map(|b| {
+                rects.get(&b.block.id).map(|rect| DropZone {
+                    id: b.block.id.clone(),
+                    rect,
                 })
+            })
+            .collect();
+        if let Some(rect) = rects.get("@end") {
+            zones.push(DropZone {
+                id: "@end".into(),
+                rect,
             });
+        }
+        zones
+    }
+    pub fn hover_editor_file_drop(&mut self, page_id: &str, peek: bool, point: Option<[f32; 2]>) {
+        let zones = self.editor_drop_zones(peek);
+        let target = point.and_then(|p| file_drop_target(p, &zones)).or_else(|| {
+            zones.iter().find(|z| z.id == "@end").map(|_| Target {
+                id: "@end".into(),
+                side: Side::After,
+            })
+        });
         self.editor_file_drop = Some(FileDrop {
             page_id: page_id.into(),
             peek,
@@ -397,7 +419,7 @@ impl State {
             }
         }
     }
-    pub fn drag_editor_block(&mut self, id: &str, drag: &Drag, zones: &[DropZone], peek: bool) {
+    pub fn drag_editor_block(&mut self, id: &str, drag: &Drag, peek: bool) {
         if drag.phase == Phase::Down {
             self.editor_drag_cancelled = false;
             self.editor_drag_suppress_press = false;
@@ -413,6 +435,7 @@ impl State {
         if drag.dx.abs() < 4. && drag.dy.abs() < 4. && self.editor_drag.is_none() {
             return;
         }
+        let zones = self.editor_drop_zones(peek);
         let (page_id, blocks) = if peek {
             let Some(p) = self.record_peek.as_ref() else {
                 return;
@@ -435,7 +458,7 @@ impl State {
             .unwrap_or([drag.window_point()[0], drag.window_point()[1], 260., 30.]);
         self.editor_drag_suppress_press = true;
         let point = drag.window_point();
-        let target = Some(drop_target(point, zones, id).unwrap_or_else(|| Target {
+        let target = Some(drop_target(point, &zones, id).unwrap_or_else(|| Target {
             id: id.into(),
             side: Side::Before,
         }));
@@ -1355,7 +1378,8 @@ mod ui_tests {
 
     #[test]
     fn record_peek_drag_creates_persistent_columns_and_split_stays_in_column() {
-        let _families = rune::text::with_families(crate::fonts::FAMILIES.0, crate::fonts::FAMILIES.1);
+        let _families =
+            rune::text::with_families(crate::fonts::FAMILIES.0, crate::fonts::FAMILIES.1);
         let path = std::env::temp_dir().join(format!("moss-peek-drag-{}", moss_core::new_id()));
         let mut s = State::open(path.clone(), None).unwrap();
         s.new_page(true, None);

@@ -1,10 +1,10 @@
 use super::theme::Theme;
 use crate::{
-    editor_drag::{self, DropZone, Side},
+    editor_drag::{self, Side},
     state::{EditableBlock, RecordPeek, State, Tab},
 };
 use rune::*;
-use std::{collections::BTreeMap, rc::Rc};
+use std::collections::BTreeMap;
 
 pub fn line_edges(cx: &Cx<State>, key: &str, edit: &TextEdit) -> (bool, bool) {
     if !edit.focused {
@@ -61,7 +61,10 @@ pub fn with_list_numbers(
 }
 
 pub fn list_marker_width(blocks: &[EditableBlock], scale: f32) -> f32 {
-    let last = with_list_numbers(blocks).map(|(_, number)| number).max().unwrap_or(0);
+    let last = with_list_numbers(blocks)
+        .map(|(_, number)| number)
+        .max()
+        .unwrap_or(0);
     let digits_and_period = last.max(1).ilog10() + 2;
     30_f32.max(digits_and_period as f32 * 10. * scale)
 }
@@ -80,32 +83,6 @@ pub fn list_label(
         .size(width, style.line_px())
 }
 
-pub fn zones(tab: &Tab) -> Rc<Vec<DropZone>> {
-    zones_for(&tab.blocks, "block", Some("append-block"))
-}
-pub fn peek_zones(peek: &RecordPeek) -> Rc<Vec<DropZone>> {
-    zones_for(&peek.blocks, "peek-drag-block", Some("peek-append-block"))
-}
-fn zones_for(blocks: &[EditableBlock], prefix: &str, append: Option<&str>) -> Rc<Vec<DropZone>> {
-    let mut zones: Vec<_> = blocks
-        .iter()
-        .filter_map(|b| {
-            rune::memo::window_layout_with(&format!("{prefix}-{}", b.block.id), |r| r).map(|rect| {
-                DropZone {
-                    id: b.block.id.clone(),
-                    rect,
-                }
-            })
-        })
-        .collect();
-    if let Some(rect) = append.and_then(|key| rune::memo::window_layout_with(key, |r| r)) {
-        zones.push(DropZone {
-            id: "@end".into(),
-            rect,
-        });
-    }
-    Rc::new(zones)
-}
 pub fn selection_box(s: &State, page_id: &str, peek: bool, viewport: &str, t: Theme) -> Option<El> {
     let selection = s.editor_selection.as_ref().filter(|selection| {
         selection.page_id == page_id && selection.peek == peek && selection.dragging
@@ -277,16 +254,12 @@ fn group_for(
                     .children(children),
             );
             if let Some(&next) = indexes.get(position + 1) {
-                let left_width = rune::memo::window_layout_with(
-                    &format!("{prefix}-column-{group}-{index}"),
-                    |r| r[2],
-                )
-                .unwrap_or(100.);
-                let right_width = rune::memo::window_layout_with(
-                    &format!("{prefix}-column-{group}-{next}"),
-                    |r| r[2],
-                )
-                .unwrap_or(100.);
+                let left_width =
+                    rune::memo::layout_with(&format!("{prefix}-column-{group}-{index}"), |r| r[2])
+                        .unwrap_or(100.);
+                let right_width =
+                    rune::memo::layout_with(&format!("{prefix}-column-{group}-{next}"), |r| r[2])
+                        .unwrap_or(100.);
                 let id = group.clone();
                 let step_id = group.clone();
                 layout = layout.child(
