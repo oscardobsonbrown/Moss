@@ -85,7 +85,7 @@ pub fn is_supported() -> bool {
 mod platform {
     use super::*;
     use std::ffi::{CStr, CString, c_char, c_void};
-    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
 
@@ -125,16 +125,24 @@ mod platform {
 
     extern "C" fn error_trampoline(ctx: *mut c_void, msg: *const c_char) {
         if !ctx.is_null() {
-            let err = (!msg.is_null())
-                .then(|| unsafe { CStr::from_ptr(msg) }.to_string_lossy().into_owned());
+            let err = (!msg.is_null()).then(|| {
+                unsafe { CStr::from_ptr(msg) }
+                    .to_string_lossy()
+                    .into_owned()
+            });
             (unsafe { &*(ctx as *const Callbacks) }.on_error)(err);
         }
     }
 
+    struct HostPtr(*mut c_void);
+    // Safety: `moss_mln_wake` is thread-safe (`CFRunLoopSourceSignal` + `CFRunLoopWakeUp`),
+    // and the worker clears this pointer under the mutex before `moss_mln_destroy`.
+    unsafe impl Send for HostPtr {}
+
     struct Shared {
         desired: Mutex<(CameraState, u64)>,
         stop: AtomicBool,
-        host: AtomicPtr<c_void>,
+        host: Mutex<HostPtr>,
     }
 
     pub struct MapLibreRenderer {
@@ -151,7 +159,7 @@ mod platform {
             let shared = Arc::new(Shared {
                 desired: Mutex::new((config.initial, 0)),
                 stop: AtomicBool::new(false),
-                host: AtomicPtr::new(std::ptr::null_mut()),
+                host: Mutex::new(HostPtr(std::ptr::null_mut())),
             });
             let s = shared.clone();
             let worker = std::thread::Builder::new()
@@ -189,40 +197,60 @@ mod platform {
                     let mut cur = config.initial;
                     let mut cur_retry = 0u64;
                     let mut host = create(cur);
-                    s.host.store(host, Ordering::Release);
+                    s.host.lock().unwrap().0 = host;
 
                     while !s.stop.load(Ordering::Acquire) {
                         let (want, retry) = *s.desired.lock().unwrap();
                         if (want.scale - cur.scale).abs() > 0.01 {
-                            s.host.store(std::ptr::null_mut(), Ordering::Release);
+                            s.host.lock().unwrap().0 = std::ptr::null_mut();
                             unsafe { moss_mln_destroy(host) };
                             (cur, cur_retry) = (want, retry);
                             host = create(cur);
-                            s.host.store(host, Ordering::Release);
+                            s.host.lock().unwrap().0 = host;
                         } else {
                             if (want.width, want.height) != (cur.width, cur.height) {
                                 (cur.width, cur.height) = (want.width, want.height);
-                                unsafe { moss_mln_resize(host, cur.width.max(1), cur.height.max(1)) };
+                                unsafe {
+                                    moss_mln_resize(host, cur.width.max(1), cur.height.max(1))
+                                };
                             }
                             if want.dark != cur.dark || retry != cur_retry {
                                 (cur.dark, cur_retry) = (want.dark, retry);
-                                unsafe { moss_mln_set_style_json(host, styles[usize::from(cur.dark)].as_ptr()) };
+                                unsafe {
+                                    moss_mln_set_style_json(
+                                        host,
+                                        styles[usize::from(cur.dark)].as_ptr(),
+                                    )
+                                };
                             }
-                            if (want.latitude, want.longitude, want.zoom) != (cur.latitude, cur.longitude, cur.zoom) {
-                                (cur.latitude, cur.longitude, cur.zoom) = (want.latitude, want.longitude, want.zoom);
-                                unsafe { moss_mln_set_camera(host, cur.latitude, cur.longitude, cur.zoom.clamp(0.0, 18.0)) };
+                            if (want.latitude, want.longitude, want.zoom)
+                                != (cur.latitude, cur.longitude, cur.zoom)
+                            {
+                                (cur.latitude, cur.longitude, cur.zoom) =
+                                    (want.latitude, want.longitude, want.zoom);
+                                unsafe {
+                                    moss_mln_set_camera(
+                                        host,
+                                        cur.latitude,
+                                        cur.longitude,
+                                        cur.zoom.clamp(0.0, 18.0),
+                                    )
+                                };
                             }
                         }
                         unsafe { moss_mln_pump(host, 0.025) };
                     }
 
-                    s.host.store(std::ptr::null_mut(), Ordering::Release);
+                    s.host.lock().unwrap().0 = std::ptr::null_mut();
                     unsafe { moss_mln_destroy(host) };
                     drop(cbs);
                 })
                 .ok()?;
 
-            Some(Self { shared, worker: Some(worker) })
+            Some(Self {
+                shared,
+                worker: Some(worker),
+            })
         }
 
         pub fn set_camera(&self, camera: CameraState) {
@@ -235,14 +263,15 @@ mod platform {
         }
 
         pub fn retry(&self) {
-            self.shared.desired.lock().unwrap().1 = self.shared.desired.lock().unwrap().1.wrapping_add(1);
+            self.shared.desired.lock().unwrap().1 =
+                self.shared.desired.lock().unwrap().1.wrapping_add(1);
             self.wake();
         }
 
         fn wake(&self) {
-            let host = self.shared.host.load(Ordering::Acquire);
-            if !host.is_null() {
-                unsafe { moss_mln_wake(host) };
+            let guard = self.shared.host.lock().unwrap();
+            if !guard.0.is_null() {
+                unsafe { moss_mln_wake(guard.0) };
             }
         }
     }

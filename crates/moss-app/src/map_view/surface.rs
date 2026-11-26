@@ -141,7 +141,10 @@ mod tests {
             height: 600.0,
         };
         let cam = camera_from_viewport(vp, true, 2.0);
-        assert_eq!((cam.width, cam.height, cam.scale, cam.zoom, cam.dark), (960, 600, 2.0, 14.0, true));
+        assert_eq!(
+            (cam.width, cam.height, cam.scale, cam.zoom, cam.dark),
+            (960, 600, 2.0, 14.0, true)
+        );
         let min = camera_from_viewport(MapViewport { zoom: 0.0, ..vp }, false, 0.0);
         assert_eq!((min.zoom, min.scale, min.dark), (0.0, 1.0, false));
     }
@@ -174,7 +177,10 @@ mod tests {
         while surface.frame_count() == 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(surface.frame_count() > 0, "must deliver at least one IOSurface frame");
+        assert!(
+            surface.frame_count() > 0,
+            "must deliver at least one IOSurface frame"
+        );
         drop(surface);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,7 +1,16 @@
 use moss_core::{MapBounds, MapPoint, PlaceValue, Record, RecordQuery, Store, ViewKind};
 use rune::{TextEdit, Tx, Waker};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf, sync::mpsc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
 #[path = "map_view/fit.rs"]
 mod fit;
@@ -81,6 +90,9 @@ pub struct MapState {
     wake: Option<Waker>,
     query_tx: Option<mpsc::SyncSender<QueryRequest>>,
     query_rx: Option<mpsc::Receiver<QueryResponse>>,
+    query_worker: Option<std::thread::JoinHandle<()>>,
+    query_stop: Arc<AtomicBool>,
+    query_interrupt: Arc<Mutex<Option<moss_core::InterruptHandle>>>,
     query_pending: Option<QueryRequest>,
     search_rx: Option<mpsc::Receiver<SearchResponse>>,
     search_epoch: u64,
@@ -127,6 +139,9 @@ impl Default for MapState {
             wake: None,
             query_tx: None,
             query_rx: None,
+            query_worker: None,
+            query_stop: Arc::new(AtomicBool::new(false)),
+            query_interrupt: Arc::new(Mutex::new(None)),
             query_pending: None,
             search_rx: None,
             search_epoch: 0,
@@ -190,10 +205,18 @@ impl MapState {
             let (tx, rx) = mpsc::sync_channel::<QueryRequest>(1);
             let (send, receive) = mpsc::channel();
             let wake = self.wake.clone();
+            let stop = self.query_stop.clone();
+            let interrupt = self.query_interrupt.clone();
             let dbpath = path.join("workspace.sqlite3");
-            std::thread::spawn(move || {
+            self.query_worker = Some(std::thread::spawn(move || {
                 let store = Store::open_read_only(dbpath);
+                if let Ok(opened) = &store {
+                    *interrupt.lock().unwrap() = Some(opened.interrupt_handle());
+                }
                 while let Ok(req) = rx.recv() {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
                     let data = store.as_ref().map_err(ToString::to_string);
                     let points = data.clone().and_then(|s| {
                         s.map_points(
@@ -234,13 +257,14 @@ impl MapState {
                         }
                         s.query_records(&req.db, &q).map_err(|e| e.to_string())
                     });
-                    if send
-                        .send(QueryResponse {
-                            epoch: req.epoch,
-                            points,
-                            candidates,
-                        })
-                        .is_err()
+                    if stop.load(Ordering::Acquire)
+                        || send
+                            .send(QueryResponse {
+                                epoch: req.epoch,
+                                points,
+                                candidates,
+                            })
+                            .is_err()
                     {
                         break;
                     }
@@ -248,7 +272,7 @@ impl MapState {
                         w();
                     }
                 }
-            });
+            }));
             self.query_tx = Some(tx);
             self.query_rx = Some(receive);
         }
@@ -320,6 +344,21 @@ impl MapState {
             tx.wake_after(Duration::from_millis(50));
         }
         changed
+    }
+}
+impl Drop for MapState {
+    fn drop(&mut self) {
+        self.query_stop.store(true, Ordering::Release);
+        self.query_tx.take();
+        if let Ok(interrupt) = self.query_interrupt.lock() {
+            if let Some(interrupt) = interrupt.as_ref() {
+                interrupt.interrupt();
+            }
+        }
+        if let Some(worker) = self.query_worker.take() {
+            let _ = worker.join();
+        }
+        self.fit_worker.take();
     }
 }
 

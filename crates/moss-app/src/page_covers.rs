@@ -33,6 +33,7 @@ pub struct CoverState {
     pub gallery_viewport: [f32; 4],
     editor_generation: u64,
     image_tx: Option<mpsc::SyncSender<(String, PathBuf)>>,
+    image_worker: Option<std::thread::JoinHandle<()>>,
     cache: Option<ImageCache>,
     wake: Option<Waker>,
     pending_images: BTreeSet<String>,
@@ -56,12 +57,16 @@ enum BlockImageSource {
 }
 impl CoverState {
     pub fn set_waker(&mut self, wake: Waker) {
+        self.image_tx.take();
+        if let Some(worker) = self.image_worker.take() {
+            let _ = worker.join();
+        }
         self.cache = Some(ImageCache::new(wake.clone()));
         self.wake = Some(wake.clone());
         let (tx, rx) = mpsc::channel();
         let (image_tx, image_rx) = mpsc::sync_channel::<(String, PathBuf)>(2);
         let results = tx.clone();
-        std::thread::spawn(move || {
+        self.image_worker = Some(std::thread::spawn(move || {
             while let Ok((asset, db)) = image_rx.recv() {
                 let result = Store::open_read_only(db)
                     .and_then(|store| store.read_cover_image(&asset))
@@ -71,10 +76,18 @@ impl CoverState {
                 }
                 wake();
             }
-        });
+        }));
         self.image_tx = Some(image_tx);
         self.result_tx = Some(tx);
         self.result_rx = Some(rx);
+    }
+}
+impl Drop for CoverState {
+    fn drop(&mut self) {
+        self.image_tx.take();
+        if let Some(worker) = self.image_worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 impl State {
