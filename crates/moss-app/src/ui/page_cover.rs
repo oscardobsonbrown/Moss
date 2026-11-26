@@ -27,7 +27,11 @@ fn banner_height(surface: &str) -> f32 {
 }
 
 fn fade_geometry(height: f32, dark: bool) -> (f32, usize) {
-    let fade = if dark { height * 0.8 } else { height * (2. / 3.) };
+    let fade = if dark {
+        height * 0.8
+    } else {
+        height * (2. / 3.)
+    };
     let step = if fade % 12. == 0. { 12. } else { 10. };
     (fade, (fade / step) as usize)
 }
@@ -144,7 +148,14 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
                 banner = banner.child(
                     rune::memo(
                         format!("cover-color-memo-{}-{surface}", page.id),
-                        (color.r.to_bits(), color.g.to_bits(), color.b.to_bits(), height.to_bits(), t.dark, t.bg.r.to_bits()),
+                        (
+                            color.r.to_bits(),
+                            color.g.to_bits(),
+                            color.b.to_bits(),
+                            height.to_bits(),
+                            t.dark,
+                            t.bg.r.to_bits(),
+                        ),
                         || {
                             col()
                                 .w_full()
@@ -172,22 +183,38 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
                     rune::memo(
                         format!("cover-grad-memo-{}-{surface}", page.id),
                         (
-                            a.r.to_bits(), a.g.to_bits(), a.b.to_bits(),
-                            b.r.to_bits(), b.g.to_bits(), b.b.to_bits(),
-                            height.to_bits(), t.dark, t.bg.r.to_bits(),
+                            a.r.to_bits(),
+                            a.g.to_bits(),
+                            a.b.to_bits(),
+                            b.r.to_bits(),
+                            b.g.to_bits(),
+                            b.b.to_bits(),
+                            height.to_bits(),
+                            t.dark,
+                            t.bg.r.to_bits(),
                         ),
                         || {
                             let grad_at = |y: f32| {
-                                lerp_color_srgb(a, b, ease_in_out(((y / height) / 0.72).clamp(0., 1.)))
+                                lerp_color_srgb(
+                                    a,
+                                    b,
+                                    ease_in_out(((y / height) / 0.72).clamp(0., 1.)),
+                                )
                             };
                             let top_bands = ((fade_top / 12.).round() as usize).max(1);
                             col()
                                 .w_full()
                                 .h(height)
-                                .child(vertical_bands(fade_top, top_bands, |p| grad_at(p * fade_top)))
+                                .child(vertical_bands(fade_top, top_bands, |p| {
+                                    grad_at(p * fade_top)
+                                }))
                                 .child(
                                     vertical_bands(fade_height, fade_bands, |p| {
-                                        blend_linear(grad_at(fade_top + p * fade_height), t.bg, banner_fade_alpha(t, p))
+                                        blend_linear(
+                                            grad_at(fade_top + p * fade_height),
+                                            t.bg,
+                                            banner_fade_alpha(t, p),
+                                        )
                                     })
                                     .key(fade_key.clone()),
                                 )
@@ -246,7 +273,11 @@ pub fn view(s: &State, page: &Page, t: Theme, surface: &str) -> El {
             rune::memo(
                 fade_key.clone(),
                 (height.to_bits(), t.dark, t.bg.r.to_bits()),
-                || vertical_bands(fade_height, fade_bands, |p| t.bg.alpha(banner_fade_alpha(t, p))),
+                || {
+                    vertical_bands(fade_height, fade_bands, |p| {
+                        t.bg.alpha(banner_fade_alpha(t, p))
+                    })
+                },
             )
             .pin(Some(0.), Some(fade_top), Some(0.), Some(0.))
             .inert(),
@@ -368,7 +399,10 @@ fn gradient_swatch_row(
                 .h(22.)
                 .radius(4.)
                 .fill(color_val)
-                .border(if selected { 2. } else { 1. }, if selected { t.blue } else { t.line })
+                .border(
+                    if selected { 2. } else { 1. },
+                    if selected { t.blue } else { t.line },
+                )
                 .role("button")
                 .label(format!(
                     "{} color {hex}",
@@ -409,7 +443,10 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
                         .h(26.)
                         .radius(5.)
                         .gradient(parse_color(start).unwrap(), parse_color(end).unwrap())
-                        .border(if active { 2. } else { 1. }, if active { t.blue } else { t.line })
+                        .border(
+                            if active { 2. } else { 1. },
+                            if active { t.blue } else { t.line },
+                        )
                         .role("button")
                         .label(format!("{name} gradient"))
                         .help(*name)
@@ -698,7 +735,9 @@ mod tests {
             let t = Theme::new(dark);
             assert_eq!(banner_fade_alpha(t, 0.), 0.);
             assert_eq!(banner_fade_alpha(t, 1.), 1.);
-            let samples: Vec<f32> = (0..=20).map(|i| banner_fade_alpha(t, i as f32 / 20.)).collect();
+            let samples: Vec<f32> = (0..=20)
+                .map(|i| banner_fade_alpha(t, i as f32 / 20.))
+                .collect();
             assert!(samples.windows(2).all(|w| w[0] < w[1]));
             assert!(banner_fade_alpha(t, 0.10) < 0.08);
             assert!(banner_fade_alpha(t, 0.90) > 0.96);
@@ -712,28 +751,60 @@ mod tests {
         let size = (1000u32, 760u32);
         for dark in [false, true] {
             let covers = [
-                ("color", PageCover::Color { color: "#5b6ea8".into() }),
-                ("gradient", PageCover::Gradient { start: "#6b66b8".into(), end: "#eab59b".into() }),
-                ("image", PageCover::Image { asset: "0".repeat(64), position: 0.5 }),
+                (
+                    "color",
+                    PageCover::Color {
+                        color: "#5b6ea8".into(),
+                    },
+                ),
+                (
+                    "gradient",
+                    PageCover::Gradient {
+                        start: "#6b66b8".into(),
+                        end: "#eab59b".into(),
+                    },
+                ),
+                (
+                    "image",
+                    PageCover::Image {
+                        asset: "0".repeat(64),
+                        position: 0.5,
+                    },
+                ),
             ];
             for (kind, cover) in covers {
-                let path = std::env::temp_dir().join(format!("moss-banner-{}", moss_core::new_id()));
+                let path =
+                    std::env::temp_dir().join(format!("moss-banner-{}", moss_core::new_id()));
                 let mut state = State::open(path.clone(), None).unwrap();
                 state.prefs.dark = Some(dark);
                 state.new_page(false, None);
                 if let PageCover::Image { asset, .. } = &cover {
-                    let img = rune::ImageCache::new(std::sync::Arc::new(|| {}))
-                        .rgba(16, 16, [110, 100, 180, 255].repeat(256));
+                    let img = rune::ImageCache::new(std::sync::Arc::new(|| {})).rgba(
+                        16,
+                        16,
+                        [110, 100, 180, 255].repeat(256),
+                    );
                     img.wait().unwrap();
                     state.page_cover.images.insert(asset.clone(), img);
                 }
                 state.tabs[state.active].page.cover = Some(cover);
                 let page_id = state.tabs[state.active].page.id.clone();
-                let mut rt = Runtime::new(state, crate::ui::view, (size.0 as f32, size.1 as f32), Env::new(dark, 1.));
+                let mut rt = Runtime::new(
+                    state,
+                    crate::ui::view,
+                    (size.0 as f32, size.1 as f32),
+                    Env::new(dark, 1.),
+                );
                 rt.frame(0.);
                 rt.frame(1. / 60.);
-                let banner = rt.presented(&format!("cover-banner-{page_id}-document")).unwrap().0;
-                let fade = rt.presented(&format!("cover-banner-fade-{page_id}-document")).unwrap().0;
+                let banner = rt
+                    .presented(&format!("cover-banner-{page_id}-document"))
+                    .unwrap()
+                    .0;
+                let fade = rt
+                    .presented(&format!("cover-banner-fade-{page_id}-document"))
+                    .unwrap()
+                    .0;
                 assert!((banner[3] - banner_height("document")).abs() < 0.5);
                 assert!((fade[1] + fade[3] - (banner[1] + banner[3])).abs() < 0.5);
 
@@ -741,7 +812,13 @@ mod tests {
                 let target = Offscreen::with_format(&gpu.device, size.0, size.1, OFFSCREEN_FORMAT);
                 renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
                 renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, size);
-                renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+                renderer.prepare(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut rt.text.atlas,
+                    &rt.instances,
+                    size,
+                );
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
                 renderer.draw(&mut encoder, &target.view, rt.clear_color());
                 target.copy(&mut encoder);
@@ -749,10 +826,21 @@ mod tests {
                 let rgba = target.read(&gpu.device);
 
                 let x = (banner[0] + banner[2] * 0.5) as u32;
-                let px = |y: u32| -> [u8; 4] { rgba[((y * size.0 + x) * 4) as usize..][..4].try_into().unwrap() };
-                let (top_y, fade_y, bot_y) = (banner[1].round() as u32 + 10, fade[1].round() as u32, (banner[1] + banner[3]).round() as u32 - 1);
+                let px = |y: u32| -> [u8; 4] {
+                    rgba[((y * size.0 + x) * 4) as usize..][..4]
+                        .try_into()
+                        .unwrap()
+                };
+                let (top_y, fade_y, bot_y) = (
+                    banner[1].round() as u32 + 10,
+                    fade[1].round() as u32,
+                    (banner[1] + banner[3]).round() as u32 - 1,
+                );
                 let (top, bot, bg) = (px(top_y), px(bot_y), px(bot_y + 4));
-                assert!((0..3).all(|c| bot[c].abs_diff(bg[c]) <= 1), "dark={dark} {kind}: {bot:?} != {bg:?}");
+                assert!(
+                    (0..3).all(|c| bot[c].abs_diff(bg[c]) <= 1),
+                    "dark={dark} {kind}: {bot:?} != {bg:?}"
+                );
                 assert!((0..3).map(|c| top[c].abs_diff(bg[c]) as i32).sum::<i32>() > 60);
 
                 if kind == "color" {
@@ -762,9 +850,16 @@ mod tests {
                 let mut prev = None::<[i32; 3]>;
                 for y in (fade_y..=bot_y - 4).step_by(4) {
                     let (a, b) = (px(y), px(y + 4));
-                    let d = [b[0] as i32 - a[0] as i32, b[1] as i32 - a[1] as i32, b[2] as i32 - a[2] as i32];
+                    let d = [
+                        b[0] as i32 - a[0] as i32,
+                        b[1] as i32 - a[1] as i32,
+                        b[2] as i32 - a[2] as i32,
+                    ];
                     if let Some(p) = prev {
-                        assert!((0..3).all(|c| (d[c] - p[c]).abs() <= 2), "dark={dark} {kind} kink at y={y}: {p:?} -> {d:?}");
+                        assert!(
+                            (0..3).all(|c| (d[c] - p[c]).abs() <= 2),
+                            "dark={dark} {kind} kink at y={y}: {p:?} -> {d:?}"
+                        );
                     }
                     prev = Some(d);
                 }
@@ -781,17 +876,27 @@ mod tests {
         state.new_page(false, None);
         let page_id = state.tabs[state.active].page.id.clone();
         let asset = "0".repeat(64);
-        state.tabs[state.active].page.cover = Some(PageCover::Image { asset: asset.clone(), position: 0.5 });
+        state.tabs[state.active].page.cover = Some(PageCover::Image {
+            asset: asset.clone(),
+            position: 0.5,
+        });
         let page = state.tabs[state.active].page.clone();
         state.open_page_cover(&page, &format!("page-cover-open-{page_id}-document"));
         state.page_cover.editor.as_mut().unwrap().reposition = true;
-        let img = rune::ImageCache::new(std::sync::Arc::new(|| {})).rgba(400, 400, vec![120; 400 * 400 * 4]);
+        let img = rune::ImageCache::new(std::sync::Arc::new(|| {})).rgba(
+            400,
+            400,
+            vec![120; 400 * 400 * 4],
+        );
         img.wait().unwrap();
         state.page_cover.images.insert(asset, img);
         let mut rt = Runtime::new(state, crate::ui::view, (1000., 800.), Env::default());
         rt.frame(0.);
         rt.frame(1. / 60.);
-        let fade = rt.presented(&format!("cover-banner-fade-{page_id}-document")).unwrap().0;
+        let fade = rt
+            .presented(&format!("cover-banner-fade-{page_id}-document"))
+            .unwrap()
+            .0;
         let (x, y) = (fade[0] + fade[2] * 0.5, fade[1] + fade[3] * 0.5);
         rt.pointer_down(x, y);
         rt.pointer_move(x, y - 40.);
