@@ -392,3 +392,65 @@ fn move_page_between_parents_and_root_is_atomic_and_rejects_cycles() {
     );
     assert_eq!(store.get_page(&child.id).unwrap().unwrap().parent_id, None);
 }
+
+#[test]
+fn parents_with_children_batches_live_non_record_descendants() {
+    let mut store = Store::in_memory().unwrap();
+    let ws = store.create_workspace("Batch", "").unwrap();
+    let other = store.create_workspace("Other", "").unwrap();
+    let with_child = store
+        .create_page(&ws.id, None, "Parent", "", PageKind::Document)
+        .unwrap();
+    let leaf = store
+        .create_page(&ws.id, None, "Leaf", "", PageKind::Document)
+        .unwrap();
+    let trashed_only = store
+        .create_page(&ws.id, None, "Trashed parent", "", PageKind::Document)
+        .unwrap();
+    let foreign = store
+        .create_page(&other.id, None, "Foreign", "", PageKind::Document)
+        .unwrap();
+    store
+        .create_page(
+            &ws.id,
+            Some(&with_child.id),
+            "Child",
+            "",
+            PageKind::Document,
+        )
+        .unwrap();
+    let doomed = store
+        .create_page(
+            &ws.id,
+            Some(&trashed_only.id),
+            "Deleted child",
+            "",
+            PageKind::Document,
+        )
+        .unwrap();
+    store.delete_page(&doomed.id).unwrap();
+    store
+        .create_page(
+            &other.id,
+            Some(&foreign.id),
+            "Foreign child",
+            "",
+            PageKind::Document,
+        )
+        .unwrap();
+    let found = store
+        .parents_with_children(
+            &ws.id,
+            &[
+                with_child.id.clone(),
+                leaf.id.clone(),
+                trashed_only.id.clone(),
+                foreign.id.clone(),
+            ],
+        )
+        .unwrap();
+    assert!(found.contains(&with_child.id));
+    assert!(!found.contains(&leaf.id));
+    assert!(!found.contains(&trashed_only.id));
+    assert!(!found.contains(&foreign.id));
+}

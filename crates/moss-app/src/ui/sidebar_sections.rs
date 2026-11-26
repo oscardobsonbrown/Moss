@@ -83,17 +83,47 @@ pub(super) fn page_drop_zones(s: &State) -> Vec<PageDropZone> {
                 _ => continue,
             },
             Item::Favorite(index) => {
-                let id = &s.sidebar_favorites.pages[index].id;
-                (format!("favorite-highlight-{id}"), Some(id.clone()), None)
-            }
-            Item::Shortcut(index, page) => {
-                let item = &s.sidebar_sections.sections[index];
-                let id = &s.sidebar_sections.pages[&item.id][page].id;
+                let row = &s.sidebar_favorites.rows[index];
+                if row.depth > 0 {
+                    continue;
+                }
+                let id = &row.page.id;
                 (
-                    format!("{}-highlight-{id}", shortcut_prefix(item)),
+                    format!(
+                        "{}-highlight-{id}",
+                        row_prefix("favorite", row.unique_suffix.as_deref())
+                    ),
                     Some(id.clone()),
                     None,
                 )
+            }
+            Item::Shortcut(index, page) => {
+                let item = &s.sidebar_sections.sections[index];
+                if let Some(rows) = s.sidebar_sections.shortcut_rows.get(&item.id)
+                    && item.kind == SidebarSectionKind::Custom
+                {
+                    let row = &rows[page];
+                    if row.depth > 0 {
+                        continue;
+                    }
+                    let id = &row.page.id;
+                    let base = shortcut_prefix(item);
+                    (
+                        format!(
+                            "{}-highlight-{id}",
+                            row_prefix(&base, row.unique_suffix.as_deref())
+                        ),
+                        Some(id.clone()),
+                        None,
+                    )
+                } else {
+                    let id = &s.sidebar_sections.pages[&item.id][page].id;
+                    (
+                        format!("{}-highlight-{id}", shortcut_prefix(item)),
+                        Some(id.clone()),
+                        None,
+                    )
+                }
             }
             Item::New => break,
         };
@@ -159,6 +189,8 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                     .h_full()
                     .gap(4.)
                     .center_y()
+                    .radius(4.)
+                    .press(super::sidebar_actions::row_press(t))
                     .key(format!("section-toggle-{id}"))
                     .role("button")
                     .label(format!("{} section", section.name))
@@ -224,9 +256,10 @@ fn header(s: &State, section: &SidebarSection, t: Theme) -> El {
                     &format!("{} section options", section.name),
                     &super::sidebar_actions::MORE,
                     16.,
-                    t.hover,
+                    super::sidebar_actions::button_hover(t),
                     t,
                 )
+                .help("Section options")
                 .focusable(!compact)
                 .opacity(if compact { 0. } else { 1. })
                 .opacity_motion(tok::motion::SNAP_EXIT)
@@ -291,9 +324,9 @@ fn items(s: &State) -> Vec<Item> {
                 rows.extend((0..s.sidebar_tree.rows.len()).map(Item::Private))
             }
             SidebarSectionKind::Favorites => {
-                rows.extend((0..s.sidebar_favorites.pages.len()).map(Item::Favorite))
+                rows.extend((0..s.sidebar_favorites.rows.len()).map(Item::Favorite))
             }
-            SidebarSectionKind::Recents | SidebarSectionKind::Custom => {
+            SidebarSectionKind::Recents => {
                 let count = s
                     .sidebar_sections
                     .pages
@@ -301,10 +334,33 @@ fn items(s: &State) -> Vec<Item> {
                     .map_or(0, Vec::len);
                 rows.extend((0..count).map(|page| Item::Shortcut(index, page)));
             }
+            SidebarSectionKind::Custom => {
+                let count = s
+                    .sidebar_sections
+                    .shortcut_rows
+                    .get(&section.id)
+                    .map_or_else(
+                        || {
+                            s.sidebar_sections
+                                .pages
+                                .get(&section.id)
+                                .map_or(0, Vec::len)
+                        },
+                        Vec::len,
+                    );
+                rows.extend((0..count).map(|page| Item::Shortcut(index, page)));
+            }
         }
     }
     rows.push(Item::New);
     rows
+}
+
+fn row_prefix(base: &str, unique_suffix: Option<&str>) -> String {
+    match unique_suffix {
+        Some(suffix) => format!("{base}-{suffix}"),
+        None => base.to_owned(),
+    }
 }
 
 fn item_key(s: &State, item: Item) -> String {
@@ -318,14 +374,29 @@ fn item_key(s: &State, item: Item) -> String {
                 format!("paging-{}", parent.as_deref().unwrap_or("root"))
             }
         },
-        Item::Favorite(i) => format!("favorite-{}", s.sidebar_favorites.pages[i].id),
-        Item::Shortcut(i, page) => {
-            let section = &s.sidebar_sections.sections[i];
+        Item::Favorite(i) => {
+            let row = &s.sidebar_favorites.rows[i];
             format!(
                 "{}-{}",
-                shortcut_prefix(section),
-                s.sidebar_sections.pages[&section.id][page].id
+                row_prefix("favorite", row.unique_suffix.as_deref()),
+                row.page.id
             )
+        }
+        Item::Shortcut(i, page) => {
+            let section = &s.sidebar_sections.sections[i];
+            let base = shortcut_prefix(section);
+            if section.kind == SidebarSectionKind::Custom
+                && let Some(rows) = s.sidebar_sections.shortcut_rows.get(&section.id)
+            {
+                let row = &rows[page];
+                format!(
+                    "{}-{}",
+                    row_prefix(&base, row.unique_suffix.as_deref()),
+                    row.page.id
+                )
+            } else {
+                format!("{base}-{}", s.sidebar_sections.pages[&section.id][page].id)
+            }
         }
         Item::New => "sidebar-new-section-slot".into(),
     }
@@ -394,30 +465,53 @@ pub fn view(s: &State, t: Theme, width: f32) -> El {
             move |s, i| match rows[i] {
                 Item::Header(i) => header(s, &s.sidebar_sections.sections[i], t),
                 Item::Private(i) => super::sidebar_tree::row_at(s, i, width, t),
-                Item::Favorite(i) => super::sidebar_tree::page_row(
-                    s,
-                    &s.sidebar_favorites.pages[i],
-                    false,
-                    false,
-                    0,
-                    "favorite",
-                    "favorites",
-                    width,
-                    t,
-                ),
-                Item::Shortcut(i, page) => {
-                    let section = &s.sidebar_sections.sections[i];
+                Item::Favorite(i) => {
+                    let row = &s.sidebar_favorites.rows[i];
+                    let prefix = row_prefix("favorite", row.unique_suffix.as_deref());
                     super::sidebar_tree::page_row(
                         s,
-                        &s.sidebar_sections.pages[&section.id][page],
-                        false,
-                        false,
-                        0,
-                        &shortcut_prefix(section),
-                        &section.id,
+                        &row.page,
+                        row.has_children,
+                        row.expanded,
+                        row.depth,
+                        &prefix,
+                        "favorites",
                         width,
                         t,
                     )
+                }
+                Item::Shortcut(i, page) => {
+                    let section = &s.sidebar_sections.sections[i];
+                    let base = shortcut_prefix(section);
+                    if section.kind == SidebarSectionKind::Custom
+                        && let Some(rows) = s.sidebar_sections.shortcut_rows.get(&section.id)
+                    {
+                        let row = &rows[page];
+                        let prefix = row_prefix(&base, row.unique_suffix.as_deref());
+                        super::sidebar_tree::page_row(
+                            s,
+                            &row.page,
+                            row.has_children,
+                            row.expanded,
+                            row.depth,
+                            &prefix,
+                            &section.id,
+                            width,
+                            t,
+                        )
+                    } else {
+                        super::sidebar_tree::page_row(
+                            s,
+                            &s.sidebar_sections.pages[&section.id][page],
+                            false,
+                            false,
+                            0,
+                            &base,
+                            &section.id,
+                            width,
+                            t,
+                        )
+                    }
                 }
                 Item::New => new_section(s, t),
             },
@@ -437,7 +531,9 @@ fn new_section(s: &State, t: Theme) -> El {
         .gap(7.)
         .center_y()
         .radius(7.)
-        .hover(t.hover)
+        .hover(super::sidebar_actions::row_hover(t))
+        .hover_motion(Anim::INSTANT, Anim::INSTANT)
+        .press(super::sidebar_actions::row_press(t))
         .role("button")
         .label("New section")
         .focusable(!compact)
@@ -458,9 +554,12 @@ fn new_section(s: &State, t: Theme) -> El {
                 .size(20., 20.)
                 .center()
                 .radius(5.)
-                .hover(t.selected)
+                .hover(super::sidebar_actions::button_hover(t))
+                .hover_motion(Anim::INSTANT, Anim::INSTANT)
+                .press(super::sidebar_actions::button_press(t))
                 .role("button")
                 .label("Show or hide sections")
+                .help("Show or hide sections")
                 .focusable(!compact)
                 .child(rune::icon(&super::view_icons::TOOLBAR_SETTINGS, 16.).color(t.faint))
                 .on_press_tx(|s: &mut State, tx| {

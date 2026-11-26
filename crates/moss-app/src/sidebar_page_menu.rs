@@ -83,15 +83,16 @@ impl State {
                 cached.updated_at = page.updated_at.clone();
             }
         }
-        for cached in &mut self.sidebar_favorites.pages {
-            if cached.id == page.id {
-                cached.icon = page.icon.clone();
-                cached.updated_at = page.updated_at.clone();
-            }
-        }
+        self.sidebar_favorites.update_page(&page);
         self.sidebar_tree.update_page(&page);
         self.sidebar_sections.update_page(&page);
         self.update_child_page(&page);
+        if let Some(menu) = &mut self.sidebar_page_menu
+            && menu.page.id == page.id
+        {
+            menu.page.icon = page.icon.clone();
+            menu.page.updated_at = page.updated_at.clone();
+        }
     }
 
     pub fn close_sidebar_page_menu(&mut self) {

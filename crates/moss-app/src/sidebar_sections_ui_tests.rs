@@ -494,31 +494,107 @@ fn disclosure_replaces_the_page_icon_and_section_caret_follows_its_title() {
 }
 
 #[test]
-fn clicking_a_parent_page_opens_it_and_toggles_its_children() {
+fn clicking_a_parent_page_opens_without_toggling_and_disclosure_toggles_children() {
     let (mut state, path) = fixture();
     let parent = new_page(&mut state, None, "Parent");
     let child = new_page(&mut state, Some(&parent.id), "Child");
     let mut rt = make_runtime(state, false, 1.);
     let parent_key = format!("page-open-{}", parent.id);
     let child_key = format!("page-open-{}", child.id);
+    let disclosure_key = format!("page-disclosure-{}", parent.id);
     assert!(rt.find(&child_key).is_none());
     click(&mut rt, &parent_key);
+    settle(&mut rt);
+    assert_eq!(rt.state.tab().unwrap().page.id, parent.id);
+    assert!(
+        rt.find(&child_key).is_none(),
+        "clicking the page row must not toggle children"
+    );
+    click(&mut rt, &disclosure_key);
     settle(&mut rt);
     assert_eq!(rt.state.tab().unwrap().page.id, parent.id);
     assert!(rt.find(&child_key).is_some());
     click(&mut rt, &parent_key);
     settle(&mut rt);
-    assert!(rt.find(&child_key).is_none());
-    click(&mut rt, &format!("page-disclosure-{}", parent.id));
+    assert!(
+        rt.find(&child_key).is_some(),
+        "clicking an expanded parent row must keep children open"
+    );
+    click(&mut rt, &disclosure_key);
     settle(&mut rt);
-    assert_eq!(rt.state.tab().unwrap().page.id, parent.id);
-    assert!(rt.find(&child_key).is_some());
+    assert!(rt.find(&child_key).is_none());
+    click(&mut rt, &disclosure_key);
+    settle(&mut rt);
     click(&mut rt, &child_key);
     settle(&mut rt);
     assert_eq!(rt.state.tab().unwrap().page.id, child.id);
     assert!(rt.find(&child_key).is_some());
     drop(rt);
     std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
+fn favorites_and_custom_sections_expand_and_collapse_subpages() {
+    for dark in [false, true] {
+        let (mut state, path) = fixture();
+        let parent = new_page(&mut state, None, "Personal Development");
+        let child = new_page(&mut state, Some(&parent.id), "Training");
+        let grandchild = new_page(&mut state, Some(&child.id), "Running");
+        state.refresh_pages();
+        assert!(state.toggle_sidebar_favorite(&parent.id));
+        let custom = state.create_sidebar_section("Focus").unwrap();
+        assert!(state.add_page_to_sidebar_section(&custom, &parent.id));
+        let active = state.tab().unwrap().page.id.clone();
+        let mut rt = make_runtime(state, dark, 1.);
+
+        let fav_disclosure = format!("favorite-disclosure-{}", parent.id);
+        let fav_child_open = format!("favorite-open-{}", child.id);
+        let fav_child_disclosure = format!("favorite-disclosure-{}", child.id);
+        let fav_grandchild_open = format!("favorite-open-{}", grandchild.id);
+        assert!(rt.find(&fav_disclosure).is_some());
+        assert!(rt.find(&fav_child_open).is_none());
+
+        click(&mut rt, &fav_disclosure);
+        settle(&mut rt);
+        assert_eq!(
+            rt.state.tab().unwrap().page.id,
+            active,
+            "expanding a favorite must not navigate"
+        );
+        assert!(rt.find(&fav_child_open).is_some());
+        let parent_icon = rt
+            .presented(&format!("favorite-icon-{}", parent.id))
+            .unwrap()
+            .0;
+        let child_icon = rt
+            .presented(&format!("favorite-icon-{}", child.id))
+            .unwrap()
+            .0;
+        assert_eq!(child_icon[0] - parent_icon[0], 16.);
+
+        click(&mut rt, &fav_child_disclosure);
+        settle(&mut rt);
+        assert!(rt.find(&fav_grandchild_open).is_some());
+
+        click(&mut rt, &fav_disclosure);
+        settle(&mut rt);
+        assert!(rt.find(&fav_child_open).is_none());
+        assert!(rt.find(&fav_grandchild_open).is_none());
+
+        let custom_disclosure = format!("section-{custom}-disclosure-{}", parent.id);
+        let custom_child_open = format!("section-{custom}-open-{}", child.id);
+        assert!(rt.find(&custom_disclosure).is_some());
+        assert!(rt.find(&custom_child_open).is_none());
+        click(&mut rt, &custom_disclosure);
+        settle(&mut rt);
+        assert!(rt.find(&custom_child_open).is_some());
+        click(&mut rt, &custom_disclosure);
+        settle(&mut rt);
+        assert!(rt.find(&custom_child_open).is_none());
+
+        drop(rt);
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }
 
 #[test]

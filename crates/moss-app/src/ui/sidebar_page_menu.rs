@@ -10,35 +10,81 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     } else {
         &menu.page.title
     };
-    let mut body = col()
-        .w_full()
-        .gap(0.)
-        .instant_changes()
-        .child(label("Page", t.muted).px(8.).py(4.));
+    let mut body = col().w_full().gap(0.).instant_changes();
     if menu.renaming {
-        body = body
-            .child(
-                super::inputs::invalid(
-                    super::inputs::field(&s.sidebar_page_name, "sidebar-page-name", "Untitled", t),
-                    menu.error.is_some(),
-                    t,
+        let icon_target = id.clone();
+        body = body.child(
+            row()
+                .w_full()
+                .gap(6.)
+                .center_y()
+                .child(
+                    el().key("sidebar-page-rename-icon")
+                        .size(32., 32.)
+                        .center()
+                        .radius(6.)
+                        .fill(t.sidebar)
+                        .border(1., t.line)
+                        .hover(super::sidebar_actions::row_hover(t))
+                        .hover_motion(Anim::INSTANT, Anim::INSTANT)
+                        .press(super::sidebar_actions::row_press(t))
+                        .role("button")
+                        .label("Change icon")
+                        .help("Change icon")
+                        .focusable(true)
+                        .child(if menu.page.icon.is_empty() {
+                            rune::icon(&super::icons::PAGE_BLANK, 16.).color(t.muted)
+                        } else {
+                            super::theme::sized_label(&menu.page.icon, 16., t.text)
+                        })
+                        .on_press(move |s: &mut State| {
+                            s.open_page_icon_picker_keeping_menu(
+                                &icon_target,
+                                "sidebar-page-rename-icon",
+                            )
+                        }),
                 )
-                .label("Page name")
-                .on_edit(|s: &mut State| &mut s.sidebar_page_name)
-                .on_submit(|s: &mut State, tx| {
-                    s.rename_sidebar_page();
-                    tx.instant();
-                }),
-            )
-            .child(
-                item("sidebar-page-rename-save", "Save name", "✓", t.text, t).on_press_tx(
-                    |s: &mut State, tx| {
-                        s.rename_sidebar_page();
-                        tx.instant();
-                    },
+                .child(
+                    el().grow(1.).min_w(0.).child(
+                        super::inputs::invalid(
+                            super::inputs::field(
+                                &s.sidebar_page_name,
+                                "sidebar-page-name",
+                                "Untitled",
+                                t,
+                            ),
+                            menu.error.is_some(),
+                            t,
+                        )
+                        .label("Page name")
+                        .on_edit(|s: &mut State| &mut s.sidebar_page_name)
+                        .on_submit(|s: &mut State, tx| {
+                            s.rename_sidebar_page();
+                            tx.instant();
+                        }),
+                    ),
+                )
+                .child(
+                    el().key("sidebar-page-rename-save")
+                        .size(32., 32.)
+                        .center()
+                        .radius(6.)
+                        .hover(super::sidebar_actions::row_hover(t))
+                        .hover_motion(Anim::INSTANT, Anim::INSTANT)
+                        .press(super::sidebar_actions::row_press(t))
+                        .role("button")
+                        .label("Save name")
+                        .help("Save name")
+                        .focusable(true)
+                        .child(rune::icon(&super::phosphor::CHECK, 16.).color(t.muted))
+                        .on_press_tx(|s: &mut State, tx| {
+                            s.rename_sidebar_page();
+                            tx.instant();
+                        }),
                 ),
-            );
+        );
     } else {
+        body = body.child(label("Page", t.muted).px(8.).py(4.));
         let target = id.clone();
         body = body.child(
             item("sidebar-page-open", "Open", "↗", t.text, t).on_press_tx(
@@ -149,16 +195,20 @@ pub fn popup(s: &State, t: Theme) -> Option<El> {
     );
     let popup = col()
         .key("sidebar-page-menu")
-        .w(232.)
+        .w(if menu.renaming { 300. } else { 232. })
         .max_h(500.)
         .min_h(0.)
-        .padding(4.)
+        .padding(if menu.renaming { 6. } else { 4. })
         .fill(t.menu)
         .border(1., t.line)
         .radius(8.)
         .shadow(4., 16., Color::BLACK.alpha(0.18))
-        .role("menu")
-        .label(format!("Page actions for {title}"))
+        .role(if menu.renaming { "dialog" } else { "menu" })
+        .label(if menu.renaming {
+            format!("Rename {title}")
+        } else {
+            format!("Page actions for {title}")
+        })
         .focus_group()
         .focus_return(
             menu.anchor
@@ -197,8 +247,9 @@ fn item(key: &str, name: &str, icon: &str, ink: Color, t: Theme) -> El {
         .gap(8.)
         .center_y()
         .radius(4.)
-        .hover(t.hover)
-        .press(t.selected)
+        .hover(super::sidebar_actions::row_hover(t))
+        .hover_motion(Anim::INSTANT, Anim::INSTANT)
+        .press(super::sidebar_actions::row_press(t))
         .role("menuitem")
         .label(name)
         .focusable(true)

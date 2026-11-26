@@ -1,5 +1,6 @@
+use crate::sidebar_favorites::{SidebarShortcutRow, build_shortcut_rows, refresh_shortcut_tree};
 use crate::state::{Preferences, State};
-use moss_core::{Page, new_id};
+use moss_core::{Page, PageChild, PagePosition, new_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::{cell::Cell, rc::Rc};
@@ -7,6 +8,7 @@ use std::{cell::Cell, rc::Rc};
 const MAX_SECTIONS: usize = 32;
 const MAX_CUSTOM_PAGES: usize = 100;
 const MAX_RECENTS: usize = 4;
+const CHILD_PAGE_SIZE: u32 = 50;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,12 +31,33 @@ pub struct SidebarSection {
     pub hidden: bool,
 }
 
+#[derive(Clone, Default)]
+pub struct PressSlots {
+    slots: Rc<std::cell::RefCell<std::collections::HashMap<String, rune::Live<f32>>>>,
+}
+
+impl PressSlots {
+    pub fn slot(&self, key: &str) -> rune::Live<f32> {
+        let mut map = self.slots.borrow_mut();
+        if let Some(live) = map.get(key) {
+            return live.clone();
+        }
+        let live = rune::Live::new(0.);
+        map.insert(key.to_owned(), live.clone());
+        live
+    }
+}
+
 pub struct SidebarSections {
     pub sections: Vec<SidebarSection>,
     pub pages: BTreeMap<String, Vec<Page>>,
+    pub shortcut_rows: BTreeMap<String, Vec<SidebarShortcutRow>>,
+    pub shortcut_has_children: BTreeMap<String, BTreeSet<String>>,
+    pub shortcut_expanded: BTreeMap<String, BTreeMap<String, Vec<PageChild>>>,
     pub dragging: Option<String>,
     pub drag_target: Option<String>,
     pub page_drag: Option<SidebarPageDrag>,
+    pub press_slots: PressSlots,
     pub suppress_page_press: bool,
     pub page_drag_cancelled: bool,
     pub scroll: Rc<Cell<rune::ScrollPos>>,
@@ -49,9 +72,13 @@ impl Default for SidebarSections {
         Self {
             sections: Vec::new(),
             pages: BTreeMap::new(),
+            shortcut_rows: BTreeMap::new(),
+            shortcut_has_children: BTreeMap::new(),
+            shortcut_expanded: BTreeMap::new(),
             dragging: None,
             drag_target: None,
             page_drag: None,
+            press_slots: PressSlots::default(),
             suppress_page_press: false,
             page_drag_cancelled: false,
             scroll: Rc::new(Cell::new(rune::ScrollPos::default())),
@@ -80,20 +107,73 @@ pub struct SidebarPageDrag {
 
 impl SidebarSections {
     pub fn update_page(&mut self, page: &Page) {
-        for pages in self.pages.values_mut() {
+        let mut dirty_sections = BTreeSet::new();
+        for (section_id, pages) in &mut self.pages {
             if let Some(old) = pages.iter_mut().find(|old| old.id == page.id) {
                 *old = page.clone();
+                dirty_sections.insert(section_id.clone());
             }
+        }
+        for (section_id, expanded) in &mut self.shortcut_expanded {
+            for children in expanded.values_mut() {
+                for child in children {
+                    if child.page.id == page.id {
+                        child.page = page.clone();
+                        dirty_sections.insert(section_id.clone());
+                    }
+                }
+            }
+        }
+        for section_id in dirty_sections {
+            self.rebuild_shortcut_section(&section_id);
         }
     }
     pub fn update_record_title(&mut self, record: &moss_core::Record) {
         if let Some(page_id) = &record.page_id {
-            for pages in self.pages.values_mut() {
+            let mut dirty_sections = BTreeSet::new();
+            for (section_id, pages) in &mut self.pages {
                 if let Some(page) = pages.iter_mut().find(|page| page.id == *page_id) {
                     page.title = record.title.clone();
+                    dirty_sections.insert(section_id.clone());
                 }
             }
+            for (section_id, expanded) in &mut self.shortcut_expanded {
+                for children in expanded.values_mut() {
+                    for child in children {
+                        if child.page.id == *page_id {
+                            child.page.title = record.title.clone();
+                            dirty_sections.insert(section_id.clone());
+                        }
+                    }
+                }
+            }
+            for section_id in dirty_sections {
+                self.rebuild_shortcut_section(&section_id);
+            }
         }
+    }
+    fn rebuild_shortcut_section(&mut self, section_id: &str) {
+        if !self
+            .sections
+            .iter()
+            .any(|s| s.id == section_id && s.kind == SidebarSectionKind::Custom)
+        {
+            return;
+        }
+        let Some(roots) = self.pages.get(section_id) else {
+            return;
+        };
+        let empty_set = BTreeSet::new();
+        let empty_map = BTreeMap::new();
+        let has_children = self
+            .shortcut_has_children
+            .get(section_id)
+            .unwrap_or(&empty_set);
+        let expanded = self.shortcut_expanded.get(section_id).unwrap_or(&empty_map);
+        self.shortcut_rows.insert(
+            section_id.to_owned(),
+            build_shortcut_rows(roots, has_children, expanded),
+        );
     }
 }
 
@@ -197,11 +277,32 @@ impl State {
         recent: &[String],
     ) -> Result<SidebarSections, String> {
         let mut pages = BTreeMap::new();
+        let mut shortcut_rows = BTreeMap::new();
+        let mut shortcut_has_children = BTreeMap::new();
+        let mut shortcut_expanded = BTreeMap::new();
         for section in &sections {
             let list = match section.kind {
                 SidebarSectionKind::Recents => Some(self.section_pages(recent, MAX_RECENTS)?),
                 SidebarSectionKind::Custom => {
-                    Some(self.section_pages(&section.page_ids, MAX_CUSTOM_PAGES)?)
+                    let roots = self.section_pages(&section.page_ids, MAX_CUSTOM_PAGES)?;
+                    let mut has_children = BTreeSet::new();
+                    let mut expanded = self
+                        .sidebar_sections
+                        .shortcut_expanded
+                        .get(&section.id)
+                        .cloned()
+                        .unwrap_or_default();
+                    let rows = refresh_shortcut_tree(
+                        &roots,
+                        &mut has_children,
+                        &mut expanded,
+                        &self.store,
+                        &self.workspace.id,
+                    );
+                    shortcut_rows.insert(section.id.clone(), rows);
+                    shortcut_has_children.insert(section.id.clone(), has_children);
+                    shortcut_expanded.insert(section.id.clone(), expanded);
+                    Some(roots)
                 }
                 _ => None,
             };
@@ -212,8 +313,46 @@ impl State {
         Ok(SidebarSections {
             sections,
             pages,
+            shortcut_rows,
+            shortcut_has_children,
+            shortcut_expanded,
             ..Default::default()
         })
+    }
+
+    pub fn toggle_sidebar_shortcut_page(&mut self, section_id: &str, page_id: &str) {
+        let expanded = self
+            .sidebar_sections
+            .shortcut_expanded
+            .entry(section_id.to_owned())
+            .or_default();
+        if expanded.remove(page_id).is_some() {
+            self.sidebar_sections.rebuild_shortcut_section(section_id);
+            return;
+        }
+        match self.store.page_children(
+            &self.workspace.id,
+            Some(page_id),
+            PagePosition::Start,
+            CHILD_PAGE_SIZE,
+        ) {
+            Ok(group) => {
+                if !group.items.is_empty() {
+                    self.sidebar_sections
+                        .shortcut_has_children
+                        .entry(section_id.to_owned())
+                        .or_default()
+                        .insert(page_id.to_owned());
+                    self.sidebar_sections
+                        .shortcut_expanded
+                        .entry(section_id.to_owned())
+                        .or_default()
+                        .insert(page_id.to_owned(), group.items);
+                    self.sidebar_sections.rebuild_shortcut_section(section_id);
+                }
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
     }
 
     pub fn refresh_sidebar_sections(&mut self) -> bool {
@@ -243,6 +382,7 @@ impl State {
                 cache.dragging = self.sidebar_sections.dragging.take();
                 cache.drag_target = self.sidebar_sections.drag_target.take();
                 cache.page_drag = self.sidebar_sections.page_drag.take();
+                cache.press_slots = self.sidebar_sections.press_slots.clone();
                 cache.suppress_page_press = self.sidebar_sections.suppress_page_press;
                 cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
                 cache.scroll = self.sidebar_sections.scroll.clone();
@@ -329,6 +469,7 @@ impl State {
         cache.dragging = self.sidebar_sections.dragging.take();
         cache.drag_target = self.sidebar_sections.drag_target.take();
         cache.page_drag = self.sidebar_sections.page_drag.take();
+        cache.press_slots = self.sidebar_sections.press_slots.clone();
         cache.suppress_page_press = self.sidebar_sections.suppress_page_press;
         cache.page_drag_cancelled = self.sidebar_sections.page_drag_cancelled;
         cache.scroll = self.sidebar_sections.scroll.clone();
@@ -338,7 +479,8 @@ impl State {
         cache.visible_rows = self.sidebar_sections.visible_rows.clone();
         self.sidebar_sections = cache;
         if let Some(pages) = favorite_pages {
-            self.sidebar_favorites.pages = pages;
+            self.sidebar_favorites
+                .set_pages(pages, &self.store, &self.workspace.id);
         }
         self.close_missing_sidebar_section_menu();
         self.error = None;

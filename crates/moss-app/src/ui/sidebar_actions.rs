@@ -19,6 +19,54 @@ icons! {
     RIGHT => "caret-right",
 }
 
+pub fn row_hover(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.055)
+    } else {
+        Color::BLACK.alpha(0.04)
+    }
+}
+
+pub fn row_press(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.075)
+    } else {
+        Color::BLACK.alpha(0.065)
+    }
+}
+
+pub fn button_hover(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.08)
+    } else {
+        Color::BLACK.alpha(0.06)
+    }
+}
+
+pub fn button_press(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.11)
+    } else {
+        Color::BLACK.alpha(0.095)
+    }
+}
+
+pub fn active_ink(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.92)
+    } else {
+        t.text
+    }
+}
+
+pub fn inactive_ink(t: Theme) -> Color {
+    if t.dark {
+        Color::WHITE.alpha(0.68)
+    } else {
+        t.muted
+    }
+}
+
 pub fn button(
     s: &State,
     key: String,
@@ -31,6 +79,8 @@ pub fn button(
     // Keep the hit target outside the hidden paint so fast clicks still work.
     el().key(key.clone())
         .size(20., 20.)
+        .radius(5.)
+        .press(button_press(t))
         .role("button")
         .label(name)
         .focusable(true)
@@ -41,6 +91,7 @@ pub fn button(
                 .radius(5.)
                 .group_opacity(if s.sidebar_keyboard_controls { 1. } else { 0. }, 1.)
                 .hover(fill)
+                .hover_motion(Anim::INSTANT, Anim::INSTANT)
                 .hover_group()
                 .child(
                     rune::icon(icon, size)
