@@ -65,11 +65,13 @@ pub(super) fn load_tile(
     tile: &TilePosition,
 ) -> Result<Vec<u8>, String> {
     if template == DEFAULT_PROVIDER {
-        return Err(if cfg!(test) || std::env::var("MOSS_MAP_NETWORK").as_deref() == Ok("off") {
-            "Map tiles are disabled in tests or offline.".into()
-        } else {
-            "Map rendering requires macOS Metal or MOSS_MAP_TILE_URL.".into()
-        });
+        return Err(
+            if cfg!(test) || std::env::var("MOSS_MAP_NETWORK").as_deref() == Ok("off") {
+                "Map tiles are disabled in tests or offline.".into()
+            } else {
+                "Map rendering requires macOS Metal or MOSS_MAP_TILE_URL.".into()
+            },
+        );
     }
     let path = tile_path(dir, template, tile);
     let cached = read_tile(&path).ok();

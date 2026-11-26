@@ -226,3 +226,53 @@ fn new_subpage_uses_menu_target_as_parent_and_opens_new_tab() {
     assert!(f.rt.state.tabs.iter().any(|tab| tab.page.id == f.active));
     close(f);
 }
+
+#[test]
+fn rename_popover_icon_button_opens_picker_without_closing_rename() {
+    let mut f = fixture();
+    context(&mut f.rt, &f.parent);
+    click(&mut f.rt, "sidebar-page-rename");
+    settle(&mut f.rt);
+    assert!(f.rt.find("sidebar-page-rename-icon").is_some());
+    assert!(f.rt.find("sidebar-page-name").is_some());
+    assert!(f.rt.find("sidebar-page-rename-save").is_some());
+
+    // Clicking the icon button opens the icon picker anchored below it while keeping Rename open.
+    click(&mut f.rt, "sidebar-page-rename-icon");
+    settle(&mut f.rt);
+    assert!(f.rt.state.sidebar_page_menu.is_some());
+    assert!(f.rt.state.sidebar_page_menu.as_ref().unwrap().renaming);
+    let picker = f.rt.state.page_icon_picker.as_ref().expect("icon picker");
+    assert_eq!(picker.page_id, f.parent);
+    assert_eq!(picker.anchor, "sidebar-page-rename-icon");
+
+    // Picking an emoji updates the page icon and keeps the Rename popover open.
+    click(&mut f.rt, "page-icon-search");
+    press(&mut f.rt, Key::Text("rocket".into()));
+    click(&mut f.rt, "page-icon-option-0");
+    settle(&mut f.rt);
+    assert!(f.rt.state.page_icon_picker.is_none());
+    assert!(f.rt.state.sidebar_page_menu.as_ref().unwrap().renaming);
+    assert_eq!(
+        f.rt.state.sidebar_page_menu.as_ref().unwrap().page.icon,
+        "🚀"
+    );
+    assert_eq!(
+        f.rt.state.store.get_page(&f.parent).unwrap().unwrap().icon,
+        "🚀"
+    );
+
+    // Submitting the rename input saves the updated name and closes the popover.
+    click(&mut f.rt, "sidebar-page-name");
+    press(&mut f.rt, Key::Command('a'));
+    press(&mut f.rt, Key::Text("Command Centre".into()));
+    press(&mut f.rt, Key::Enter);
+    settle(&mut f.rt);
+    assert!(f.rt.state.sidebar_page_menu.is_none());
+    assert_eq!(
+        f.rt.state.store.get_page(&f.parent).unwrap().unwrap().title,
+        "Command Centre"
+    );
+    assert_eq!(f.rt.state.tab().unwrap().page.id, f.active);
+    close(f);
+}

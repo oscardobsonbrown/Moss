@@ -27,6 +27,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 extern "C" {
@@ -42,9 +43,11 @@ struct QuietLogObserver final : public mln::Log::Observer {
     }
 };
 
-__attribute__((constructor, used))
-static void installQuietLogObserver() {
-    mln::Log::setObserver(std::make_unique<QuietLogObserver>());
+static void ensureQuietLogObserver() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        mln::Log::setObserver(std::make_unique<QuietLogObserver>());
+    });
 }
 
 static void noopSourcePerform(void*) {}
@@ -191,6 +194,10 @@ public:
         renderPassDescriptor.reset();
     }
 
+    void beginShutdown() {
+        shuttingDown.store(true, std::memory_order_release);
+    }
+
     void drainGpu() {
         for (int i = 0; i < kRingSize; ++i) dispatch_semaphore_wait(ringSem, DISPATCH_TIME_FOREVER);
         for (int i = 0; i < kRingSize; ++i) dispatch_semaphore_signal(ringSem);
@@ -269,12 +276,16 @@ struct MlnMetalHost {
     }
 
     ~MlnMetalHost() {
-        if (directRes) directRes->drainGpu();
+        if (directRes) {
+            directRes->beginShutdown();
+            directRes->drainGpu();
+        }
         map.reset();
         frontend.reset();
         directRes = nullptr;
         observer.reset();
         runLoop.reset();
+        mln::Scheduler::SetCurrent(nullptr);
         if (wakeSource) {
             if (cfRunLoop) CFRunLoopRemoveSource(cfRunLoop, wakeSource, kCFRunLoopDefaultMode);
             CFRunLoopSourceInvalidate(wakeSource);
@@ -301,6 +312,7 @@ void* moss_mln_create(uint32_t logical_w,
                       MlnErrorCallback on_error,
                       void* user_ctx) {
     @autoreleasepool {
+        ensureQuietLogObserver();
         auto* host = new MlnMetalHost();
         host->cfRunLoop = (CFRunLoopRef)CFRetain(CFRunLoopGetCurrent());
         CFRunLoopSourceContext srcCtx = {.perform = noopSourcePerform};

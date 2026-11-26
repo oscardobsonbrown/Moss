@@ -12,6 +12,19 @@ pub struct PageIconPicker {
 }
 impl State {
     pub fn open_page_icon_picker(&mut self, page_id: &str, anchor: &str) {
+        self.open_page_icon_picker_with_options(page_id, anchor, false);
+    }
+
+    pub fn open_page_icon_picker_keeping_menu(&mut self, page_id: &str, anchor: &str) {
+        self.open_page_icon_picker_with_options(page_id, anchor, true);
+    }
+
+    fn open_page_icon_picker_with_options(
+        &mut self,
+        page_id: &str,
+        anchor: &str,
+        keep_sidebar_menu: bool,
+    ) {
         if self
             .page_icon_picker
             .as_ref()
@@ -36,7 +49,9 @@ impl State {
         };
         self.page_icon_search = TextEdit::new("");
         self.page_icon_search.focused = true;
-        self.sidebar_page_menu = None;
+        if !keep_sidebar_menu {
+            self.sidebar_page_menu = None;
+        }
         self.page_icon_picker = Some(PageIconPicker {
             page_id: page.id,
             expected_icon: page.icon,

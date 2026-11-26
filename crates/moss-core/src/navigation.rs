@@ -188,6 +188,43 @@ impl Store {
         tx.commit()
     }
 
+    /// Return the subset of `parent_ids` that currently have at least one live non-record child.
+    pub fn parents_with_children(
+        &self,
+        workspace_id: &str,
+        parent_ids: &[String],
+    ) -> Result<std::collections::BTreeSet<String>> {
+        let mut found = std::collections::BTreeSet::new();
+        if parent_ids.is_empty() {
+            return Ok(found);
+        }
+        // Keep parameter lists bounded well below SQLite's variable limit.
+        for chunk in parent_ids.chunks(200) {
+            let placeholders = (0..chunk.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT DISTINCT parent_id FROM pages
+                 WHERE workspace_id=?1 AND deleted_at IS NULL
+                   AND json_extract(data,'$.kind') <> 'record'
+                   AND parent_id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare_cached(&sql)?;
+            let mut values: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() + 1);
+            values.push(&workspace_id);
+            for id in chunk {
+                values.push(id);
+            }
+            for row in stmt.query_map(rusqlite::params_from_iter(values), |row| {
+                row.get::<_, String>(0)
+            })? {
+                found.insert(row?);
+            }
+        }
+        Ok(found)
+    }
+
     /// Read one bounded sibling page. Pass `previous` to Before and `next` to After.
     pub fn page_children(
         &self,
