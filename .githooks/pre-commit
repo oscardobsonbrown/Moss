@@ -9,7 +9,7 @@ if [ -n "$staged_rs" ]; then
     fi
     printf '%s\n' "$staged_rs" | while IFS= read -r file; do
         [ -f "$file" ] || continue
-        rustfmt --edition 2024 --check "$file"
+        rustfmt --edition 2024 --emit stdout < "$file" | diff -u "$file" -
     done
 fi
 

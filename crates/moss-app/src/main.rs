@@ -7,8 +7,8 @@ mod calendar_view;
 mod caret;
 mod chart_view;
 mod child_pages;
-mod computed_refresh;
 mod comments;
+mod computed_refresh;
 mod dashboard_view;
 mod database_properties;
 mod database_views;
@@ -37,13 +37,13 @@ mod records;
 mod relation_titles;
 mod rich_text;
 mod settings;
+mod shared_refresh;
 mod sidebar_favorites;
 mod sidebar_page_menu;
 mod sidebar_reveal;
 mod sidebar_section_menu;
 mod sidebar_sections;
 mod sidebar_tree;
-mod shared_refresh;
 mod simple_table;
 mod state;
 mod table_columns;
@@ -225,7 +225,16 @@ fn poll(s: &mut State, time: f64, tx: &mut Tx) -> bool {
     let archives = archive_transfer::poll(s, time, tx);
     let place = place_property::poll(s, tx);
     let appearance = page_appearance::poll(s, time, tx);
-    updater || history || records || sidebar || sidebar_drag || views || covers || archives || appearance || place
+    updater
+        || history
+        || records
+        || sidebar
+        || sidebar_drag
+        || views
+        || covers
+        || archives
+        || appearance
+        || place
 }
 fn spec() -> AppSpec<State> {
     AppSpec {
@@ -252,9 +261,22 @@ fn save_before_close(s: &mut State, _: &mut Tx) {
     s.save_preferences();
 }
 
+fn running_in_app_bundle() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(bundle) = exe.ancestors().nth(3) else {
+        return false;
+    };
+    bundle.extension().and_then(|ext| ext.to_str()) == Some("app")
+        && bundle.join("Contents/Info.plist").is_file()
+}
+
 fn main() {
-    if let Err(error) = rune::set_app_icon(include_bytes!("../assets/Moss.png").to_vec()) {
-        eprintln!("Moss could not load its app icon: {error}");
+    if !running_in_app_bundle() {
+        if let Err(error) = rune::set_app_icon(include_bytes!("../assets/Moss.png").to_vec()) {
+            eprintln!("Moss could not load its app icon: {error}");
+        }
     }
     rune::prewarm_gpu();
     let path = State::data_path();
@@ -339,7 +361,10 @@ fn main() {
             Ok(service) => *local_service.lock().unwrap() = Some(service),
             Err(error) => {
                 eprintln!("Could not start local agent access: {error}");
-                app.handle().update(move |s, _| { s.set_mcp_enabled(false); s.error = Some(format!("Could not start local agent access: {error}")); });
+                app.handle().update(move |s, _| {
+                    s.set_mcp_enabled(false);
+                    s.error = Some(format!("Could not start local agent access: {error}"));
+                });
             }
         }
     }
