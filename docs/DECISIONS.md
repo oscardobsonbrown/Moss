@@ -107,8 +107,9 @@ Date: 2026-11-07. Source: user interview.
 | D100 | Add functional Board card movement, subgroups, group controls, card actions and saved layout settings. Use bounded background reads and visible UI windows. | User requested repair of the incomplete Board interactions; remaining limits are recorded in BOARD-INTERACTIONS.md. |
 | D101 | Theme the default OSM map with colors from the supplied Snazzy Maps Apple Map Style. Use native rendering of OpenFreeMap vector features and retain the map controls. | User supplied the reference; its Google Maps style array cannot style existing OSM PNG tiles. Geometry and label placement are an explicit difference. |
 | D102 | Use a 40 pt top bar and a 44 pt collapsed sidebar. Keep native titlebar setup and sidebar hover bounds aligned with their respective dimensions. | User refined the top and left dimensions separately; supersedes the 56 pt rail width in D93. |
-| D103 | Use Moss for the app, project and crate names, data folder, configuration and file formats. Use a black block icon with a Sentient-style M based on the supplied reference. | Explicit user direction. |
+| D103 | Use Moss for the app, project and crate names, data folder, configuration and file formats. Use a black block icon with a Sentient-style M based on the supplied reference. | Explicit user direction; icon shape later superseded by D105. |
 | D104 | Add collaboration, including local agent access, presence, comments and page history. Show people as circles and agents as hexagons. Use yellow highlights and underlines for commented text, with markers in the right gutter. Do not add suggestion mode. | Explicit user direction; supersedes the page-history exclusions in D28 and D29. The current implementation and its limits are in IMPLEMENTATION.md. |
+| D105 | Replace the app icon with a white macOS squircle page-curl icon using the Sentient Bold M, shipping both a compiled macOS 26+ `Assets.car` icon (from `Moss.icon`) and standard macOS `.icns`/PNG fallbacks, based on the supplied Dribbble reference. | Explicit user direction; supersedes the block icon in D103. |
 
 
 

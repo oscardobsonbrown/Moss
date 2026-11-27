@@ -22,6 +22,7 @@ cp "target/$profile/moss" "$app/Contents/MacOS/Moss"
 cp "target/$profile/moss-mcp" "$app/Contents/MacOS/moss-mcp"
 cp "target/$profile/moss-update-helper" "$app/Contents/MacOS/moss-update-helper"
 cp crates/moss-app/assets/Moss.icns "$app/Contents/Resources/Moss.icns"
+cp crates/moss-app/assets/Assets.car "$app/Contents/Resources/Assets.car"
 cp crates/moss-app/assets/fonts/OFL.txt "$app/Contents/Resources/Geist-OFL.txt"
 cp crates/moss-app/assets/fonts/LICENSE.txt "$app/Contents/Resources/Geist-LICENSE.txt"
 cp crates/moss-app/assets/phosphor/LICENSE "$app/Contents/Resources/Phosphor-MIT.txt"
@@ -35,6 +36,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Moss</string>
 <key>CFBundleDisplayName</key><string>Moss</string>
 <key>CFBundleIconFile</key><string>Moss</string>
+<key>CFBundleIconName</key><string>Moss</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
