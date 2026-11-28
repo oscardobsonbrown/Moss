@@ -47,26 +47,188 @@ pub fn end_drop_guide(s: &State, page_id: &str, peek: bool, t: Theme) -> Option<
     })
 }
 
+pub const MAX_LIST_DEPTH: u32 = 8;
+
+pub fn is_list_kind(kind: moss_core::BlockKind) -> bool {
+    matches!(
+        kind,
+        moss_core::BlockKind::BulletedList
+            | moss_core::BlockKind::NumberedList
+            | moss_core::BlockKind::Todo
+    )
+}
+
+pub fn list_indent(kind: moss_core::BlockKind, depth: u32, scale: f32) -> f32 {
+    if is_list_kind(kind) {
+        depth.min(MAX_LIST_DEPTH) as f32 * 24. * scale
+    } else {
+        0.
+    }
+}
+
 pub fn with_list_numbers(
     blocks: &[EditableBlock],
 ) -> impl Iterator<Item = (&EditableBlock, usize)> {
-    blocks.iter().scan(0, |number, block| {
-        if block.block.kind == moss_core::BlockKind::NumberedList {
-            *number += 1;
-        } else {
-            *number = 0;
+    blocks.iter().scan(Vec::<usize>::new(), |counts, block| {
+        let depth = block.block.depth.min(MAX_LIST_DEPTH) as usize;
+        match block.block.kind {
+            moss_core::BlockKind::NumberedList => {
+                if counts.len() <= depth {
+                    counts.resize(depth + 1, 0);
+                } else {
+                    counts.truncate(depth + 1);
+                }
+                counts[depth] += 1;
+                Some((block, counts[depth]))
+            }
+            moss_core::BlockKind::BulletedList | moss_core::BlockKind::Todo if depth > 0 => {
+                counts.truncate(depth);
+                Some((block, 0))
+            }
+            _ => {
+                counts.clear();
+                Some((block, 0))
+            }
         }
-        Some((block, *number))
     })
 }
 
-pub fn list_marker_width(blocks: &[EditableBlock], scale: f32) -> f32 {
-    let last = with_list_numbers(blocks)
-        .map(|(_, number)| number)
-        .max()
-        .unwrap_or(0);
-    let digits_and_period = last.max(1).ilog10() + 2;
-    30_f32.max(digits_and_period as f32 * 10. * scale)
+fn lower_alpha(mut number: usize) -> String {
+    if number == 0 {
+        return "a".into();
+    }
+    let mut chars = Vec::new();
+    while number > 0 {
+        number -= 1;
+        chars.push((b'a' + (number % 26) as u8) as char);
+        number /= 26;
+    }
+    chars.reverse();
+    chars.into_iter().collect()
+}
+
+fn lower_roman(mut number: usize) -> String {
+    if number == 0 {
+        return "i".into();
+    }
+    const TABLE: &[(usize, &str)] = &[
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut out = String::new();
+    for &(value, symbol) in TABLE {
+        while number >= value {
+            out.push_str(symbol);
+            number -= value;
+        }
+    }
+    out
+}
+
+pub fn list_number_label(number: usize, depth: u32) -> String {
+    let number = number.max(1);
+    match depth % 3 {
+        0 => format!("{number}."),
+        1 => format!("{}.", lower_alpha(number)),
+        _ => format!("{}.", lower_roman(number)),
+    }
+}
+
+fn numbered_label_width(label: &str, scale: f32) -> f32 {
+    let base = 20. * scale;
+    let estimated: f32 = label
+        .chars()
+        .map(|ch| match ch {
+            'i' | 'l' | '.' => 4.2,
+            'm' | 'w' => 11.5,
+            _ => 8.5,
+        })
+        .sum();
+    base.max(((estimated + 3.) * scale).ceil())
+}
+
+pub fn list_items(blocks: &[EditableBlock], scale: f32) -> Vec<(usize, f32)> {
+    let base = 20. * scale;
+    let mut items: Vec<(usize, f32)> = with_list_numbers(blocks)
+        .map(|(block, number)| {
+            if block.block.kind == moss_core::BlockKind::NumberedList {
+                let label = list_number_label(number, block.block.depth);
+                (number, numbered_label_width(&label, scale))
+            } else {
+                (0, base)
+            }
+        })
+        .collect();
+    // Keep sibling numbered items at the same depth aligned within each contiguous list.
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    let flush = |indices: &mut Vec<usize>, items: &mut [(usize, f32)]| {
+        if indices.len() > 1 {
+            let max_w = indices.iter().map(|&idx| items[idx].1).fold(base, f32::max);
+            for &idx in indices.iter() {
+                items[idx].1 = max_w;
+            }
+        }
+        indices.clear();
+    };
+    for (i, block) in blocks.iter().enumerate() {
+        let depth = block.block.depth.min(MAX_LIST_DEPTH) as usize;
+        match block.block.kind {
+            moss_core::BlockKind::NumberedList => {
+                for deeper in runs.iter_mut().skip(depth + 1) {
+                    flush(deeper, &mut items);
+                }
+                if runs.len() <= depth {
+                    runs.resize_with(depth + 1, Vec::new);
+                } else {
+                    runs.truncate(depth + 1);
+                }
+                runs[depth].push(i);
+            }
+            moss_core::BlockKind::BulletedList | moss_core::BlockKind::Todo if depth > 0 => {
+                for deeper in runs.iter_mut().skip(depth) {
+                    flush(deeper, &mut items);
+                }
+                runs.truncate(depth);
+            }
+            _ => {
+                for run in runs.iter_mut() {
+                    flush(run, &mut items);
+                }
+                runs.clear();
+            }
+        }
+    }
+    for run in runs.iter_mut() {
+        flush(run, &mut items);
+    }
+    items
+}
+
+pub fn list_bullet(id: &str, depth: u32, width: f32, line: f32, scale: f32, color: Color) -> El {
+    let glyph = match depth % 3 {
+        0 => el().size(5.5 * scale, 5.5 * scale).radius(999.).fill(color),
+        1 => el()
+            .size(5.5 * scale, 5.5 * scale)
+            .radius(999.)
+            .border(1.25 * scale, color),
+        _ => el().size(5. * scale, 5. * scale).fill(color),
+    };
+    row()
+        .key(format!("list-marker-{id}"))
+        .size(width, line)
+        .center()
+        .child(glyph)
 }
 
 pub fn list_label(
@@ -76,11 +238,11 @@ pub fn list_label(
     width: f32,
     color: Color,
 ) -> El {
-    text(label)
+    row()
         .key(format!("list-marker-{id}"))
-        .font(style)
-        .color(color)
         .size(width, style.line_px())
+        .center()
+        .child(text(label).font(style).color(color))
 }
 
 pub fn selection_box(s: &State, page_id: &str, peek: bool, viewport: &str, t: Theme) -> Option<El> {

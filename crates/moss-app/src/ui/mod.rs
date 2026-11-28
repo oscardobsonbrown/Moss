@@ -7,8 +7,8 @@ mod board_settings;
 mod calendar;
 mod cell_recovery;
 mod chart;
-pub(crate) mod comments;
 mod child_pages;
+pub(crate) mod comments;
 mod dashboard;
 mod database;
 mod database_new;
@@ -16,7 +16,7 @@ mod database_properties;
 mod database_toolbar;
 mod editor;
 mod editor_colors;
-mod editor_layout;
+pub(crate) mod editor_layout;
 mod gallery;
 mod history;
 mod icons;
@@ -83,22 +83,38 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let available_width = (window_width - sidebar_width).max(0.);
     let center_peek_comments = s.record_peek.as_ref().is_some_and(|peek| {
         peek.mode == crate::state::PeekMode::Center
-            && s.comments.page_id.as_ref().is_some_and(|id| &peek.page.id == id)
+            && s.comments
+                .page_id
+                .as_ref()
+                .is_some_and(|id| &peek.page.id == id)
     });
     let center_peek_history = s.record_peek.as_ref().is_some_and(|peek| {
-        peek.mode == crate::state::PeekMode::Center && s.history.open
+        peek.mode == crate::state::PeekMode::Center
+            && s.history.open
             && s.history.page_id.as_ref() == Some(&peek.page.id)
     });
-    let history_visible = s.history.open && !center_peek_history && s.history.page_id.as_ref().is_some_and(|id| {
-        s.tab().is_some_and(|tab| &tab.page.id == id)
-            || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
-    });
-    let comments_width = if (!center_peek_comments && s.comments.open
+    let history_visible = s.history.open
+        && !center_peek_history
+        && s.history.page_id.as_ref().is_some_and(|id| {
+            s.tab().is_some_and(|tab| &tab.page.id == id)
+                || s.record_peek
+                    .as_ref()
+                    .is_some_and(|peek| &peek.page.id == id)
+        });
+    let comments_width = if (!center_peek_comments
+        && s.comments.open
         && s.comments.page_id.as_ref().is_some_and(|id| {
             s.tab().is_some_and(|tab| &tab.page.id == id)
-                || s.record_peek.as_ref().is_some_and(|peek| &peek.page.id == id)
-        })) || history_visible
-    { 300_f32.min((available_width * 0.4).max(0.)) } else { 0. };
+                || s.record_peek
+                    .as_ref()
+                    .is_some_and(|peek| &peek.page.id == id)
+        }))
+        || history_visible
+    {
+        300_f32.min((available_width * 0.4).max(0.))
+    } else {
+        0.
+    };
     let peek_width = if has_side_peek {
         (available_width / 2.).min(420.)
     } else {
@@ -120,77 +136,91 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
             s.sidebar_reveal_pointer(point.x, point.y);
         });
     }
-    root
-        .on_paste_content(|s: &mut State, content, tx| {
-            if s.modal.is_some() || s.block_commands.is_some() {
-                return;
-            }
-            let peek = s.record_peek.is_some();
-            if !peek && s.tab().is_none_or(|t| t.choosing_type || t.database.is_some()) {
-                return;
-            }
-            let anchor = s
-                .editor_selection
-                .as_ref()
-                .filter(|sel| sel.peek == peek)
-                .and_then(|sel| sel.ids.last().cloned());
-            if s.paste_editor_image_content(anchor.as_deref(), peek, content) {
-                s.editor_selection = None;
-                tx.instant();
-            }
-        })
-        .on_key(|s: &mut State, event, tx| {
-            if event.key == Key::Tab {
-                s.sidebar_keyboard_controls = true;
-            }
-            if event.key == Key::Tab && s.sidebar_collapsed() && s.sidebar_reveal.visible {
-                s.open_sidebar_reveal_for_keyboard();
-            }
+    root.on_paste_content(|s: &mut State, content, tx| {
+        if s.modal.is_some() || s.block_commands.is_some() {
+            return;
+        }
+        let peek = s.record_peek.is_some();
+        if !peek
+            && s.tab()
+                .is_none_or(|t| t.choosing_type || t.database.is_some())
+        {
+            return;
+        }
+        let anchor = s
+            .editor_selection
+            .as_ref()
+            .filter(|sel| sel.peek == peek)
+            .and_then(|sel| sel.ids.last().cloned());
+        if s.paste_editor_image_content(anchor.as_deref(), peek, content) {
+            s.editor_selection = None;
             tx.instant();
-            false
-        })
-        .child(shell::titlebar(s, cx, t, sidebar_width))
-        .child(
-            row()
-                .w_full()
-                .grow(1.)
-                .min_h(0.)
-                .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
-                .child(shell::content(s, cx, t, (available_width - peek_width - comments_width).max(0.)))
-                .children(record_peek::side(s, cx, t, peek_width))
-                .children((!center_peek_comments).then(|| comments::panel(s, t, comments_width)).flatten())
-                .children((!center_peek_history).then(|| history::panel(s, t, comments_width)).flatten()),
-        )
-        .children(
-            (!s.sidebar_collapsed())
-                .then(|| shell::sidebar_resize(s, t, sidebar_width, resize_width)),
-        )
-        // Sticky and frozen Table cells are raised. Raise the later root
-        // overlays too, so both paint and pointer input follow overlay order.
-        .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
-        .children(record_peek::center(s, cx, t).map(El::raise))
-        .children(text_toolbar::view(s, cx, t).map(El::raise))
-        .children(database_new::menu(s, t).map(El::raise))
-        .children(database::undated_overlay(s, t).map(El::raise))
-        .children(gallery::settings(s, t).map(El::raise))
-        .children(property_controls::cell_picker_popup(s, t).map(El::raise))
-        .children(property_visibility::overlay(s, t).map(El::raise))
-        .children(overlays::overlay(s, t).map(El::raise))
-        .children(metadata_menu::popup(s, t).map(El::raise))
-        .children(database_properties::popup(s, t).map(El::raise))
-        .children(sidebar_page_menu::popup(s, t).map(El::raise))
-        .children(sidebar_section_menu::popup(s, t).map(El::raise))
-        .children(view_management::popup(s, t).map(El::raise))
-        .children(board_menu::popup(s, t).map(El::raise))
-        .children(board_card::drag_preview(s, t))
-        .children(calendar::drag_preview(s, t))
-        .children(sidebar_sections::page_drag_preview(s, t))
-        .children(page_icon_picker::popup(s, t).map(El::raise))
-        .children(page_cover::popup(s, t).map(El::raise))
-        .children(map_clusters::popup(s, t).map(El::raise))
-        .children(map_controls::popup(s, t).map(El::raise))
-        .children(block_commands::popup(s, t).map(El::raise))
-        .children(software_update::toast(s, t).map(El::raise))
+        }
+    })
+    .on_key(|s: &mut State, event, tx| {
+        if event.key == Key::Tab {
+            s.sidebar_keyboard_controls = true;
+        }
+        if event.key == Key::Tab && s.sidebar_collapsed() && s.sidebar_reveal.visible {
+            s.open_sidebar_reveal_for_keyboard();
+        }
+        tx.instant();
+        false
+    })
+    .child(shell::titlebar(s, cx, t, sidebar_width))
+    .child(
+        row()
+            .w_full()
+            .grow(1.)
+            .min_h(0.)
+            .child(el().w(sidebar_width).min_w(sidebar_width).h_full())
+            .child(shell::content(
+                s,
+                cx,
+                t,
+                (available_width - peek_width - comments_width).max(0.),
+            ))
+            .children(record_peek::side(s, cx, t, peek_width))
+            .children(
+                (!center_peek_comments)
+                    .then(|| comments::panel(s, t, comments_width))
+                    .flatten(),
+            )
+            .children(
+                (!center_peek_history)
+                    .then(|| history::panel(s, t, comments_width))
+                    .flatten(),
+            ),
+    )
+    .children(
+        (!s.sidebar_collapsed()).then(|| shell::sidebar_resize(s, t, sidebar_width, resize_width)),
+    )
+    // Sticky and frozen Table cells are raised. Raise the later root
+    // overlays too, so both paint and pointer input follow overlay order.
+    .child(sidebar_surface::view(s, t, expanded_sidebar_width).raise())
+    .children(record_peek::center(s, cx, t).map(El::raise))
+    .children(text_toolbar::view(s, cx, t).map(El::raise))
+    .children(database_new::menu(s, t).map(El::raise))
+    .children(database::undated_overlay(s, t).map(El::raise))
+    .children(gallery::settings(s, t).map(El::raise))
+    .children(property_controls::cell_picker_popup(s, t).map(El::raise))
+    .children(property_visibility::overlay(s, t).map(El::raise))
+    .children(overlays::overlay(s, t).map(El::raise))
+    .children(metadata_menu::popup(s, t).map(El::raise))
+    .children(database_properties::popup(s, t).map(El::raise))
+    .children(sidebar_page_menu::popup(s, t).map(El::raise))
+    .children(sidebar_section_menu::popup(s, t).map(El::raise))
+    .children(view_management::popup(s, t).map(El::raise))
+    .children(board_menu::popup(s, t).map(El::raise))
+    .children(board_card::drag_preview(s, t))
+    .children(calendar::drag_preview(s, t))
+    .children(sidebar_sections::page_drag_preview(s, t))
+    .children(page_icon_picker::popup(s, t).map(El::raise))
+    .children(page_cover::popup(s, t).map(El::raise))
+    .children(map_clusters::popup(s, t).map(El::raise))
+    .children(map_controls::popup(s, t).map(El::raise))
+    .children(block_commands::popup(s, t).map(El::raise))
+    .children(software_update::toast(s, t).map(El::raise))
 }
 
 mod sidebar_page_menu;

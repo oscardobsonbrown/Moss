@@ -128,7 +128,7 @@ fn page_content_edges_remain_aligned_across_window_and_font_modes() {
                                 "paragraph/heading: {input:?} {title:?}"
                             );
                         }
-                        for (id, expected_inset) in ids[4..9].iter().zip([36., 36., 36., 48., 14.])
+                        for (id, expected_inset) in ids[4..9].iter().zip([26., 26., 26., 48., 14.])
                         {
                             let input = info(&rt, &format!("block-input-{id}")).rect;
                             assert!(
@@ -382,6 +382,152 @@ fn record_metadata_icons_and_values_align_in_both_peek_modes() {
             }
             previous = Some(row[1]);
         }
+        drop(rt);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[test]
+fn nested_bulleted_and_numbered_lists_align_and_format_markers_by_depth() {
+    for dark in [false, true] {
+        for scale in [1., 2.] {
+            let (mut state, path) = fixture();
+            state.new_page(false, None);
+            let active = state.active;
+            let page_id = state.tabs[active].page.id.clone();
+            let specs = [
+                (BlockKind::Heading2, 0, "Bulleted List:"),
+                (BlockKind::BulletedList, 0, "Item"),
+                (BlockKind::BulletedList, 1, "Item 2"),
+                (BlockKind::BulletedList, 2, "Item 3"),
+                (BlockKind::Heading2, 0, "Numbered List:"),
+                (BlockKind::NumberedList, 0, "Item 1"),
+                (BlockKind::NumberedList, 1, "Item a"),
+                (BlockKind::NumberedList, 2, "Item b"),
+                (BlockKind::NumberedList, 2, "Item c"),
+                (BlockKind::NumberedList, 1, "Item d"),
+                (BlockKind::NumberedList, 0, "Item 2"),
+            ];
+            let blocks: Vec<_> = specs
+                .into_iter()
+                .enumerate()
+                .map(|(index, (kind, depth, label))| {
+                    let mut block = moss_core::Block::paragraph(&page_id, label, index as i64);
+                    block.kind = kind;
+                    block.depth = depth;
+                    let edit = TextEdit::new(&block.text);
+                    state::EditableBlock { block, edit }
+                })
+                .collect();
+            let ids: Vec<_> = blocks.iter().map(|b| b.block.id.clone()).collect();
+            state.tabs[active].blocks = blocks;
+            let rt = runtime(state, 850., dark, scale);
+            let heading = info(&rt, &format!("block-input-{}", ids[0])).rect;
+            for (depth, (bullet_idx, number_idx)) in
+                [(1, 5), (2, 6), (3, 7)].into_iter().enumerate()
+            {
+                let expected_inset = 26. + depth as f32 * 24.;
+                let bullet_input = info(&rt, &format!("block-input-{}", ids[bullet_idx])).rect;
+                let number_input = info(&rt, &format!("block-input-{}", ids[number_idx])).rect;
+                assert!(
+                    (bullet_input[0] - heading[0] - expected_inset).abs() <= 0.6,
+                    "bullet depth {depth} inset: {bullet_input:?} {heading:?}"
+                );
+                assert!(
+                    (number_input[0] - bullet_input[0]).abs() <= 0.6,
+                    "numbered depth {depth} must match bullet text edge: {number_input:?} {bullet_input:?}"
+                );
+                let bullet_marker = info(&rt, &format!("list-marker-{}", ids[bullet_idx])).rect;
+                let number_marker = info(&rt, &format!("list-marker-{}", ids[number_idx])).rect;
+                assert!(
+                    (bullet_marker[0] - number_marker[0]).abs() <= 0.6
+                        && (bullet_marker[2] - number_marker[2]).abs() <= 0.6,
+                    "marker lanes must match at depth {depth}: {bullet_marker:?} {number_marker:?}"
+                );
+                assert!(
+                    (bullet_marker[1] + bullet_marker[3] / 2. - bullet_input[1] - 13.).abs() <= 0.6,
+                    "bullet marker must stay centered on first line: {bullet_marker:?} {bullet_input:?}"
+                );
+                assert!(
+                    (number_marker[1] + number_marker[3] / 2. - number_input[1] - 13.).abs() <= 0.6,
+                    "number marker must stay centered on first line: {number_marker:?} {number_input:?}"
+                );
+            }
+            let texts: Vec<_> = rt.elements().into_iter().filter_map(|el| el.text).collect();
+            for expected in ["1.", "a.", "i.", "ii.", "b.", "2."] {
+                assert!(
+                    texts.iter().any(|t| t == expected),
+                    "missing numbered marker {expected} in {texts:?}"
+                );
+            }
+            drop(rt);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "renders list visual review PNGs to /tmp/moss-list-review"]
+fn render_list_review_snapshots() {
+    use rune::render::{Offscreen, Renderer, write_png};
+    let out = std::path::Path::new("/tmp/moss-list-review");
+    std::fs::create_dir_all(out).unwrap();
+    let gpu = rune::render::Gpu::headless();
+    let mut renderer = Renderer::new(&gpu.device, rune::render::OFFSCREEN_FORMAT);
+    for (name, dark) in [("lists-light", false), ("lists-dark", true)] {
+        let (mut state, path) = fixture();
+        state.new_page(false, None);
+        let active = state.active;
+        let page_id = state.tabs[active].page.id.clone();
+        state.tabs[active].title = TextEdit::new("Lists");
+        state.tabs[active].page.title = "Lists".into();
+        state.tabs[active].title.focused = false;
+        let specs = [
+            (BlockKind::Heading2, 0, "Bulleted List:"),
+            (BlockKind::BulletedList, 0, "Item"),
+            (BlockKind::BulletedList, 1, "Item 2"),
+            (BlockKind::BulletedList, 2, "Item 3"),
+            (BlockKind::Paragraph, 0, ""),
+            (BlockKind::Heading2, 0, "Numbered List:"),
+            (BlockKind::NumberedList, 0, "Item 1"),
+            (BlockKind::NumberedList, 1, "Item a"),
+            (BlockKind::NumberedList, 2, "Item b"),
+        ];
+        let blocks: Vec<_> = specs
+            .into_iter()
+            .enumerate()
+            .map(|(index, (kind, depth, label))| {
+                let mut block = moss_core::Block::paragraph(&page_id, label, index as i64);
+                block.kind = kind;
+                block.depth = depth;
+                let edit = TextEdit::new(&block.text);
+                state::EditableBlock { block, edit }
+            })
+            .collect();
+        state.tabs[active].blocks = blocks;
+        let mut rt = runtime(state, 900., dark, 2.);
+        rt.pointer_move(890., 1390.);
+        rt.frame(0.);
+        let target = Offscreen::new(&gpu.device, 1800, 2800);
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        renderer.prepare(
+            &gpu.device,
+            &gpu.queue,
+            &mut rt.text.atlas,
+            &rt.instances,
+            (1800, 2800),
+        );
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut encoder, &target.view, rt.clear_color());
+        target.copy(&mut encoder);
+        gpu.queue.submit(Some(encoder.finish()));
+        write_png(
+            &out.join(format!("{name}.png")),
+            1800,
+            2800,
+            &target.read(&gpu.device),
+        )
+        .unwrap();
         drop(rt);
         std::fs::remove_dir_all(path).unwrap();
     }

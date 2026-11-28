@@ -181,9 +181,9 @@ fn panel(s: &State, cx: &Cx<State>, t: Theme) -> El {
         .child(el().w_full().h(1.).fill(t.line))
         .child(el().h(22.));
     let selection_page = page_id.clone();
-    let marker_width = super::editor_layout::list_marker_width(&peek.blocks, scale);
+    let list_meta = super::editor_layout::list_items(&peek.blocks, scale);
     let mut block_views = Vec::with_capacity(peek.blocks.len());
-    for (i, (block, number)) in super::editor_layout::with_list_numbers(&peek.blocks).enumerate() {
+    for (i, (block, (number, marker_width))) in peek.blocks.iter().zip(list_meta).enumerate() {
         let view = (|| {
             let kind = block.block.kind;
             if kind == BlockKind::Image {
