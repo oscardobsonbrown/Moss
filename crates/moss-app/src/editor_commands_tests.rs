@@ -495,6 +495,70 @@ fn backspace_on_empty_structured_block_converts_without_deleting() {
 }
 
 #[test]
+fn list_indent_outdent_enter_and_backspace_manage_nested_depth() {
+    let (mut s, path) = fixture();
+    let page = s.tab().unwrap().page.id.clone();
+    {
+        let block = &mut s.tabs[s.active].blocks[0];
+        block.block.kind = BlockKind::BulletedList;
+        block.edit.replace_text("Item");
+        block.edit.set_caret(4);
+    }
+    let first_id = s.tab().unwrap().blocks[0].block.id.clone();
+    assert!(!s.editor_indent_list(&first_id));
+    assert_eq!(s.tab().unwrap().blocks[0].block.depth, 0);
+
+    assert!(s.editor_enter(&first_id));
+    let second_id = s.tab().unwrap().blocks[1].block.id.clone();
+    assert!(s.editor_indent_list(&second_id));
+    assert_eq!(s.tab().unwrap().blocks[1].block.depth, 1);
+    assert!(!s.editor_indent_list(&second_id));
+
+    s.tabs[s.active].blocks[1].edit.replace_text("Item 2");
+    s.tabs[s.active].blocks[1].edit.set_caret(6);
+    assert!(s.editor_enter(&second_id));
+    let third_id = s.tab().unwrap().blocks[2].block.id.clone();
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 1);
+    assert!(s.editor_indent_list(&third_id));
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 2);
+
+    // Outdenting a parent shifts its nested child together.
+    assert!(s.editor_outdent_list(&second_id));
+    assert_eq!(s.tab().unwrap().blocks[1].block.depth, 0);
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 1);
+    assert!(s.editor_indent_list(&second_id));
+    assert_eq!(s.tab().unwrap().blocks[1].block.depth, 1);
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 2);
+
+    // Verify depth persists to SQLite.
+    let saved = s.store.get_blocks(&page).unwrap();
+    assert_eq!(
+        saved.iter().map(|b| b.depth).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    // Enter on an empty nested list item outdents step-by-step before exiting the list.
+    assert!(s.editor_enter(&third_id));
+    assert_eq!(
+        s.tab().unwrap().blocks[2].block.kind,
+        BlockKind::BulletedList
+    );
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 1);
+    assert!(s.editor_backspace_empty(&third_id));
+    assert_eq!(
+        s.tab().unwrap().blocks[2].block.kind,
+        BlockKind::BulletedList
+    );
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 0);
+    assert!(s.editor_backspace_empty(&third_id));
+    assert_eq!(s.tab().unwrap().blocks[2].block.kind, BlockKind::Paragraph);
+    assert_eq!(s.tab().unwrap().blocks[2].block.depth, 0);
+
+    drop(s);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn backspace_after_divider_removes_divider_and_keeps_editable_paragraph() {
     let (mut s, path) = fixture();
     let tab = &mut s.tabs[s.active];

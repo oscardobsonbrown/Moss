@@ -106,10 +106,20 @@ impl State {
     )> {
         if peek {
             let p = self.record_peek.as_mut()?;
-            Some((p.page.id.clone(), &mut p.title, &mut p.blocks, &mut p.page_links))
+            Some((
+                p.page.id.clone(),
+                &mut p.title,
+                &mut p.blocks,
+                &mut p.page_links,
+            ))
         } else {
             let t = self.tabs.get_mut(self.active)?;
-            Some((t.page.id.clone(), &mut t.title, &mut t.blocks, &mut t.page_links))
+            Some((
+                t.page.id.clone(),
+                &mut t.title,
+                &mut t.blocks,
+                &mut t.page_links,
+            ))
         }
     }
 
@@ -118,7 +128,8 @@ impl State {
     }
 
     pub(crate) fn editor_blocks_mut(&mut self, peek: bool) -> Option<&mut Vec<EditableBlock>> {
-        self.editor_surface_mut(peek).map(|(_, _, blocks, _)| blocks)
+        self.editor_surface_mut(peek)
+            .map(|(_, _, blocks, _)| blocks)
     }
 
     pub(crate) fn editor_blocks_mut_for_page(
@@ -147,7 +158,13 @@ impl State {
         }
     }
 
-    fn select_single_block(&mut self, page_id: String, peek: bool, id: String, tx: Option<&mut Tx>) {
+    fn select_single_block(
+        &mut self,
+        page_id: String,
+        peek: bool,
+        id: String,
+        tx: Option<&mut Tx>,
+    ) {
         self.editor_selection = Some(crate::editor_selection::Selection {
             page_id,
             peek,
@@ -198,7 +215,9 @@ impl State {
             let id = block.block.id.clone();
             let is_text = is_text_block(block.block.kind);
             if is_text {
-                let pos = caret.unwrap_or(block.edit.text.len()).min(block.edit.text.len());
+                let pos = caret
+                    .unwrap_or(block.edit.text.len())
+                    .min(block.edit.text.len());
                 block.edit.set_caret(pos);
                 block.edit.focused = true;
             }
@@ -280,20 +299,30 @@ impl State {
             BlockKind::BulletedList | BlockKind::NumberedList | BlockKind::Todo
         ) {
             block.kind = blocks[after].block.kind;
+            block.depth = blocks[after].block.depth;
         }
-        blocks.insert(after + 1, EditableBlock { block, edit: suffix });
+        blocks.insert(
+            after + 1,
+            EditableBlock {
+                block,
+                edit: suffix,
+            },
+        );
         self.save_editor_blocks(peek);
     }
 
     pub fn toggle_todo(&mut self, block_id: &str, peek: bool) {
         let was_dirty = self.editor_blocks_dirty(peek);
-        let Some((page_id, checked)) = self.editor_surface_mut(peek).and_then(|(page_id, _, blocks, _)| {
-            let block = blocks
-                .iter_mut()
-                .find(|b| b.block.id == block_id && b.block.kind == BlockKind::Todo)?;
-            block.block.checked = !block.block.checked;
-            Some((page_id, block.block.checked))
-        }) else {
+        let Some((page_id, checked)) =
+            self.editor_surface_mut(peek)
+                .and_then(|(page_id, _, blocks, _)| {
+                    let block = blocks
+                        .iter_mut()
+                        .find(|b| b.block.id == block_id && b.block.kind == BlockKind::Todo)?;
+                    block.block.checked = !block.block.checked;
+                    Some((page_id, block.block.checked))
+                })
+        else {
             return;
         };
         if was_dirty {
@@ -344,12 +373,7 @@ impl State {
             && self.editor_backspace_in(block_id, false, None)
     }
 
-    pub fn editor_backspace_in(
-        &mut self,
-        block_id: &str,
-        peek: bool,
-        tx: Option<&mut Tx>,
-    ) -> bool {
+    pub fn editor_backspace_in(&mut self, block_id: &str, peek: bool, tx: Option<&mut Tx>) -> bool {
         let Some((page_id, _, blocks, _)) = self.editor_surface_mut(peek) else {
             return false;
         };
@@ -366,8 +390,16 @@ impl State {
             {
                 return false;
             }
+            if crate::ui::editor_layout::is_list_kind(blocks[index].block.kind)
+                && blocks[index].block.depth > 0
+            {
+                blocks[index].block.depth -= 1;
+                self.save_editor_blocks(peek);
+                return true;
+            }
             blocks[index].block.kind = BlockKind::Paragraph;
             blocks[index].block.checked = false;
+            blocks[index].block.depth = 0;
             self.save_editor_blocks(peek);
             return true;
         }
@@ -619,12 +651,87 @@ impl State {
             BlockKind::BulletedList | BlockKind::NumberedList | BlockKind::Todo
         ) && block.edit.text.is_empty()
         {
-            block.block.kind = BlockKind::Paragraph;
-            block.block.checked = false;
+            if block.block.depth > 0 {
+                block.block.depth -= 1;
+            } else {
+                block.block.kind = BlockKind::Paragraph;
+                block.block.checked = false;
+            }
             self.save_editor_blocks(peek);
         } else {
             self.add_block_in(index, peek);
         }
+        true
+    }
+
+    #[cfg(test)]
+    pub fn editor_indent_list(&mut self, block_id: &str) -> bool {
+        self.editor_indent_list_in(block_id, false)
+    }
+
+    #[cfg(test)]
+    pub fn editor_outdent_list(&mut self, block_id: &str) -> bool {
+        self.editor_outdent_list_in(block_id, false)
+    }
+
+    pub fn editor_indent_list_in(&mut self, block_id: &str, peek: bool) -> bool {
+        let Some(blocks) = self.editor_blocks_mut(peek) else {
+            return false;
+        };
+        let Some(index) = blocks.iter().position(|b| b.block.id == block_id) else {
+            return false;
+        };
+        if !crate::ui::editor_layout::is_list_kind(blocks[index].block.kind) {
+            return false;
+        }
+        let max_depth =
+            if index > 0 && crate::ui::editor_layout::is_list_kind(blocks[index - 1].block.kind) {
+                (blocks[index - 1].block.depth + 1).min(crate::ui::editor_layout::MAX_LIST_DEPTH)
+            } else {
+                0
+            };
+        let old_depth = blocks[index].block.depth;
+        if old_depth >= max_depth {
+            return false;
+        }
+        blocks[index].block.depth = old_depth + 1;
+        for child in blocks.iter_mut().skip(index + 1) {
+            if !crate::ui::editor_layout::is_list_kind(child.block.kind)
+                || child.block.depth <= old_depth
+            {
+                break;
+            }
+            child.block.depth =
+                (child.block.depth + 1).min(crate::ui::editor_layout::MAX_LIST_DEPTH);
+        }
+        self.save_editor_blocks(peek);
+        true
+    }
+
+    pub fn editor_outdent_list_in(&mut self, block_id: &str, peek: bool) -> bool {
+        let Some(blocks) = self.editor_blocks_mut(peek) else {
+            return false;
+        };
+        let Some(index) = blocks.iter().position(|b| b.block.id == block_id) else {
+            return false;
+        };
+        if !crate::ui::editor_layout::is_list_kind(blocks[index].block.kind) {
+            return false;
+        }
+        let old_depth = blocks[index].block.depth;
+        if old_depth == 0 {
+            return false;
+        }
+        blocks[index].block.depth = old_depth - 1;
+        for child in blocks.iter_mut().skip(index + 1) {
+            if !crate::ui::editor_layout::is_list_kind(child.block.kind)
+                || child.block.depth <= old_depth
+            {
+                break;
+            }
+            child.block.depth = child.block.depth.saturating_sub(1);
+        }
+        self.save_editor_blocks(peek);
         true
     }
 

@@ -214,6 +214,15 @@ pub(super) fn render_text_block(
                 return true;
             }
             let plain = !event.mods.cmd && !event.mods.alt && !event.mods.ctrl;
+            if event.key == Key::Tab && plain && super::editor_layout::is_list_kind(kind) {
+                if event.mods.shift {
+                    s.editor_outdent_list_in(&key_id, peek);
+                } else {
+                    s.editor_indent_list_in(&key_id, peek);
+                }
+                tx.instant();
+                return true;
+            }
             if event.key == Key::Backspace
                 && plain
                 && s.editor_backspace_in(&key_id, peek, Some(tx))
@@ -264,16 +273,17 @@ pub(super) fn render_text_block(
             [marker_width, style.line_px()],
             t,
         )),
-        BlockKind::BulletedList => Some(super::editor_layout::list_label(
+        BlockKind::BulletedList => Some(super::editor_layout::list_bullet(
             &b.block.id,
-            "•",
-            style,
+            b.block.depth,
             marker_width,
+            style.line_px(),
+            scale,
             list_color,
         )),
         BlockKind::NumberedList => Some(super::editor_layout::list_label(
             &b.block.id,
-            format!("{number}."),
+            super::editor_layout::list_number_label(number, b.block.depth),
             style,
             marker_width,
             list_color,
@@ -343,10 +353,15 @@ pub(super) fn render_text_block(
                 .group_opacity(if b.edit.focused { 1. } else { 0. }, 1.)
                 .a11y_hidden()
         }));
+    let indent = super::editor_layout::list_indent(kind, b.block.depth, scale);
+    let is_list = super::editor_layout::is_list_kind(kind);
+    let pad_y = if is_list { 0. } else { 2. * scale };
+    let min_h = if is_list { 26. * scale } else { 30. * scale };
     let body = if peek {
         row()
             .w_full()
-            .py(2. * scale)
+            .pl(indent)
+            .py(pad_y)
             .gap(6.)
             .children(marker)
             .child(text_col)
@@ -355,8 +370,9 @@ pub(super) fn render_text_block(
             .key(format!("block-{}", b.block.id))
             .hover_group_shared(format!("block-hover-{}", b.block.id))
             .w_full()
-            .min_h(30. * scale)
-            .py(2. * scale)
+            .min_h(min_h)
+            .pl(indent)
+            .py(pad_y)
             .gap(6.)
             .child(gutter(s, &b.block.id, i, b.edit.focused, line * scale, t))
             .children(marker)
@@ -403,13 +419,14 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
         tx.instant();
     });
     let has_comments = super::comments::page_has_active_comments(s, &tab.page.id);
-    let marker_width = super::editor_layout::list_marker_width(
-        &tab.blocks,
-        crate::fonts::scale(tab.page.settings),
-    );
-    let blocks: Vec<_> = super::editor_layout::with_list_numbers(&tab.blocks)
+    let list_meta =
+        super::editor_layout::list_items(&tab.blocks, crate::fonts::scale(tab.page.settings));
+    let blocks: Vec<_> = tab
+        .blocks
+        .iter()
+        .zip(list_meta)
         .enumerate()
-        .map(|(i, (b, number))| {
+        .map(|(i, (b, (number, marker_width)))| {
             let render_item = || {
                 let rect = tab.block_rects.slot(&b.block.id);
                 match b.block.kind {
@@ -486,7 +503,12 @@ pub fn view(s: &State, cx: &Cx<State>, t: Theme, available_width: f32) -> El {
                 rune::memo(
                     format!("editor-block-slot-{}", b.block.id),
                     (
-                        (i, std::mem::discriminant(&b.block.kind), number),
+                        (
+                            i,
+                            std::mem::discriminant(&b.block.kind),
+                            number,
+                            b.block.depth,
+                        ),
                         &b.edit,
                         &b.block.config,
                         (b.block.checked, marker_width.to_bits(), menu_open),

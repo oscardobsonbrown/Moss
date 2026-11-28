@@ -48,14 +48,26 @@ pub const COMMANDS: [(BlockKind, &str, &str); 15] = [
 pub const DIVIDER: (BlockKind, &str, &str) = (BlockKind::Divider, "Divider", "line separator");
 
 fn is_text_type(kind: BlockKind) -> bool {
-    matches!(kind, BlockKind::Paragraph | BlockKind::Heading1 | BlockKind::Heading2
-        | BlockKind::Heading3 | BlockKind::Todo | BlockKind::BulletedList
-        | BlockKind::NumberedList | BlockKind::Quote
-        | BlockKind::Callout | BlockKind::Code)
+    matches!(
+        kind,
+        BlockKind::Paragraph
+            | BlockKind::Heading1
+            | BlockKind::Heading2
+            | BlockKind::Heading3
+            | BlockKind::Todo
+            | BlockKind::BulletedList
+            | BlockKind::NumberedList
+            | BlockKind::Quote
+            | BlockKind::Callout
+            | BlockKind::Code
+    )
 }
 
 fn set_kind(block: &mut EditableBlock, kind: BlockKind) {
     block.block.checked &= block.block.kind == BlockKind::Todo && kind == BlockKind::Todo;
+    if !crate::ui::editor_layout::is_list_kind(kind) {
+        block.block.depth = 0;
+    }
     block.block.kind = kind;
     block.edit.focused = true;
 }
@@ -78,15 +90,29 @@ impl State {
         channel: crate::text_colors::Channel,
         color: Option<crate::text_colors::Palette>,
     ) {
-        let Some(menu) = &self.block_commands else { return };
-        let BlockCommandMode::Color { selection } = menu.mode else { return };
-        if menu.error.is_some() { return; }
-        let blocks = if menu.peek {
-            self.record_peek.as_mut().filter(|p| p.page.id == menu.page_id).map(|p| &mut p.blocks)
-        } else {
-            self.tabs.get_mut(self.active).filter(|p| p.page.id == menu.page_id).map(|p| &mut p.blocks)
+        let Some(menu) = &self.block_commands else {
+            return;
         };
-        let Some(block) = blocks.and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == menu.block_id)) else {
+        let BlockCommandMode::Color { selection } = menu.mode else {
+            return;
+        };
+        if menu.error.is_some() {
+            return;
+        }
+        let blocks = if menu.peek {
+            self.record_peek
+                .as_mut()
+                .filter(|p| p.page.id == menu.page_id)
+                .map(|p| &mut p.blocks)
+        } else {
+            self.tabs
+                .get_mut(self.active)
+                .filter(|p| p.page.id == menu.page_id)
+                .map(|p| &mut p.blocks)
+        };
+        let Some(block) =
+            blocks.and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == menu.block_id))
+        else {
             return;
         };
         if let Some((start, end)) = selection {
@@ -125,7 +151,11 @@ impl State {
         mode: BlockCommandMode,
         peek: bool,
     ) {
-        if self.block_commands.as_ref().is_some_and(|m| m.error.is_some()) {
+        if self
+            .block_commands
+            .as_ref()
+            .is_some_and(|m| m.error.is_some())
+        {
             return;
         }
         let Some((page_id, _, blocks, _)) = self.editor_surface(peek) else {
@@ -188,9 +218,7 @@ impl State {
                 .editor_blocks_mut_for_page(&page, peek)
                 .and_then(|blocks| blocks.iter_mut().find(|b| b.block.id == block))
             else {
-                if !peek
-                    && let Some(menu) = &mut self.block_commands
-                {
+                if !peek && let Some(menu) = &mut self.block_commands {
                     menu.error = Some("The block is no longer available.".into());
                 }
                 return;
@@ -225,16 +253,22 @@ impl State {
                 return;
             }
             if menu.peek {
-                let Some(peek) = self.record_peek.as_mut().filter(|p| p.page.id == menu.page_id) else {
+                let Some(peek) = self
+                    .record_peek
+                    .as_mut()
+                    .filter(|p| p.page.id == menu.page_id)
+                else {
                     return;
                 };
-                let Some(block) = peek.blocks.iter_mut().find(|b| b.block.id == menu.block_id) else {
+                let Some(block) = peek.blocks.iter_mut().find(|b| b.block.id == menu.block_id)
+                else {
                     return;
                 };
                 set_kind(block, kind);
                 self.save_peek_blocks();
                 if self.record_peek.as_ref().is_some_and(|p| p.dirty_blocks) {
-                    self.block_commands.as_mut().unwrap().error = Some("Block change is not saved. Retry to keep it.".into());
+                    self.block_commands.as_mut().unwrap().error =
+                        Some("Block change is not saved. Retry to keep it.".into());
                 } else {
                     self.block_commands = None;
                     self.block_command_search.focused = false;
@@ -291,8 +325,8 @@ impl State {
             }
             return;
         }
-        let reuse_empty = blocks[index].block.kind == BlockKind::Paragraph
-            && blocks[index].edit.text.is_empty();
+        let reuse_empty =
+            blocks[index].block.kind == BlockKind::Paragraph && blocks[index].edit.text.is_empty();
         // A Divider, SimpleTable, or Image has no text input. Keep nonempty content visible
         // by inserting after it, even when the user chose Change.
         let insert = (mode == BlockCommandMode::InsertAfter && !reuse_empty)
@@ -400,10 +434,9 @@ impl State {
         };
         let (page_id, block_id, peek) = (menu.page_id.clone(), menu.block_id.clone(), menu.peek);
         if let Some(blocks) = self.editor_blocks_mut_for_page(&page_id, peek) {
-            if !blocks
-                .iter()
-                .any(|block| block.edit.focused && crate::editor_commands::is_text_block(block.block.kind))
-            {
+            if !blocks.iter().any(|block| {
+                block.edit.focused && crate::editor_commands::is_text_block(block.block.kind)
+            }) {
                 let index = blocks
                     .iter()
                     .position(|block| {
@@ -411,9 +444,9 @@ impl State {
                             && crate::editor_commands::is_text_block(block.block.kind)
                     })
                     .or_else(|| {
-                        blocks
-                            .iter()
-                            .position(|block| crate::editor_commands::is_text_block(block.block.kind))
+                        blocks.iter().position(|block| {
+                            crate::editor_commands::is_text_block(block.block.kind)
+                        })
                     });
                 if let Some(index) = index {
                     blocks[index].edit.focused = true;
